@@ -1,6 +1,8 @@
 # Programming_Interview_Study_Plan
 This is the Programming Interview Study Plan by Siraj Raval on Youtube. It's [this](https://youtu.be/sMkMr2455mk) video.
 
+For GPU / ML systems roles, follow the [GPU Programming Study Plan](./GPU_Programming_Study_Plan.md) (built from the [GPU MODE lectures](https://github.com/gpu-mode/lectures)) as part of Step 4.
+
 ## Step 1 - Create a list of roles/companies that excite you
 
 - Use [Linkedin Job Search](https://linkedin.com) to find jobs
@@ -15,14 +17,21 @@ This is the Programming Interview Study Plan by Siraj Raval on Youtube. It's [th
 
 - Take this [intro](https://www.udacity.com/course/data-structures-and-algorithms-in-python--ud513) course by Udacity
 
-## Step 4 - Design Your Portfolio
+## Step 4 - Learn GPU Programming
+
+- Work through the [GPU Programming Study Plan](./GPU_Programming_Study_Plan.md), which follows the [GPU MODE lectures](https://github.com/gpu-mode/lectures)
+- Read [Programming Massively Parallel Processors](https://a.co/d/2S2fVzt) alongside the lectures
+- Join the [GPU MODE Discord](https://discord.gg/gpumode)
+
+## Step 5 - Design Your Portfolio
 
 - Watch [this](https://www.youtube.com/watch?v=Loav1kbA640) intro video to GitHub
 - Create & upload 3 python web apps to your GitHub portfolio (document the installation steps well in the README)
+- Add 3 GPU kernels (e.g. reduction, fused softmax, tiled matmul) with benchmarks against PyTorch (see Step 12 of the [GPU Programming Study Plan](./GPU_Programming_Study_Plan.md))
 - Design your [resume](https://www.youtube.com/watch?v=nMK94JlKRb4). 
 - Leverage your [Social Media](https://www.youtube.com/watch?v=PulyGf6trOk). 
 
-## Step 5 - Practice Data Structures & Algorithms
+## Step 6 - Practice Data Structures & Algorithms
 - Solve 100 Easy, 50 Medium, and 2 Hard [Leetcode](http://leetcode.com) problems. Give yourself 45 minutes max per problem.
 
 ###### How to Solve problems
@@ -37,21 +46,21 @@ This is the Programming Interview Study Plan by Siraj Raval on Youtube. It's [th
 9. Write Function Definitions
 10. Write function implementations
 
-## Step 6 - Practice System Design Questions
+## Step 7 - Practice System Design Questions
 
 - Finish all the flashcards [here](https://github.com/donnemartin/system-design-primer#master-slave-replication) 
 
-## Step 7 - Practice Mock Interviews
+## Step 8 - Practice Mock Interviews
 
 - Practice using [interviewing.io](http://interviewing.io) or [pramp](https://www.pramp.com/) 
 
-## Step 8 - Start applying for jobs
+## Step 9 - Start applying for jobs
 
 - Cold apply
 - Grab linkedin emails using [Getprospect](http://getprospect.io)
 
-## Step 9 - Start Interviewing
+## Step 10 - Start Interviewing
 - Phone Screen, Technical Screen, Onsite interviews, Offer/rejection
 - Don't get demoralized by rejections, see [this](http://rejected.us) 
 
-# Step 10 - Select the best offer
+## Step 11 - Select the best offer
