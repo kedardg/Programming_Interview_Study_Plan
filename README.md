@@ -1,7 +1,7 @@
 # Programming_Interview_Study_Plan
 This is the Programming Interview Study Plan by Siraj Raval on Youtube. It's [this](https://youtu.be/sMkMr2455mk) video.
 
-For GPU / ML systems roles, follow the [GPU Programming Study Plan](./GPU_Programming_Study_Plan.md) (built from the [GPU MODE lectures](https://github.com/gpu-mode/lectures)) as part of Step 4.
+For GPU / ML systems roles, follow the [GPU Programming Study Plan](./GPU_Programming_Study_Plan.md) (built from the [GPU MODE lectures](https://github.com/gpu-mode/lectures)) and the [AI Performance Engineering Study Plan](./AI_Performance_Engineering_Study_Plan.md) (built from [Wafer's resource list](https://github.com/wafer-ai/gpu-perf-engineering-resources)) as part of Step 4.
 
 ## Step 1 - Create a list of roles/companies that excite you
 
@@ -19,7 +19,9 @@ For GPU / ML systems roles, follow the [GPU Programming Study Plan](./GPU_Progra
 
 ## Step 4 - Learn GPU Programming
 
+- Build the minimum mental model first (Step 1 of the [AI Performance Engineering Study Plan](./AI_Performance_Engineering_Study_Plan.md))
 - Work through the [GPU Programming Study Plan](./GPU_Programming_Study_Plan.md), which follows the [GPU MODE lectures](https://github.com/gpu-mode/lectures)
+- Read the matching papers and docs from the [AI Performance Engineering Study Plan](./AI_Performance_Engineering_Study_Plan.md) as you go
 - Read [Programming Massively Parallel Processors](https://a.co/d/2S2fVzt) alongside the lectures
 - Join the [GPU MODE Discord](https://discord.gg/gpumode)
 
@@ -49,6 +51,7 @@ For GPU / ML systems roles, follow the [GPU Programming Study Plan](./GPU_Progra
 ## Step 7 - Practice System Design Questions
 
 - Finish all the flashcards [here](https://github.com/donnemartin/system-design-primer#master-slave-replication) 
+- For ML systems roles, practice designing LLM serving systems using Steps 5-6 of the [AI Performance Engineering Study Plan](./AI_Performance_Engineering_Study_Plan.md)
 
 ## Step 8 - Practice Mock Interviews
 

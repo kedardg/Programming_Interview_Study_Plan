@@ -7,6 +7,7 @@ This is a GPU Programming Study Plan built from the [GPU MODE lectures](https://
 - Join the [GPU MODE Discord](https://discord.gg/gpumode) to ask questions and find study partners
 - Get the PMPP book: [Programming Massively Parallel Processors: A Hands-on Approach](https://a.co/d/2S2fVzt)
 - Clone the [lectures repo](https://github.com/gpu-mode/lectures) so you have all the notebooks and code locally
+- Do Step 1 of the [AI Performance Engineering Study Plan](./AI_Performance_Engineering_Study_Plan.md) for the papers and official docs to read alongside the lectures
 
 ###### How to Study Each Lecture
 1. Read the matching PMPP chapter (if there is one)
