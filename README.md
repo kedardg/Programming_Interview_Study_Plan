@@ -5,8 +5,10 @@ This is a single learning plan that combines:
 - The [Blind 75](https://www.teamblind.com/post/New-Year-Gift---Curated-List-of-Top-100-LeetCode-Questions-to-Save-Your-Time-OaM1orEU) LeetCode problems
 - The [GPU MODE lectures](https://github.com/gpu-mode/lectures) (on [this](https://www.youtube.com/@GPUMODE) YouTube channel)
 - Wafer's [GPU performance engineering resource list](https://github.com/wafer-ai/gpu-perf-engineering-resources)
+- The [System Design Interview notes](https://github.com/liquidslr/system-design-notes)
+- [Robot Learning: A Tutorial](https://arxiv.org/abs/2510.12403)
 
-Steps 1-4 build your coding foundations, Steps 5-18 cover GPU programming and AI performance engineering, and Steps 19-24 get you the job. In the GPU steps, **Watch** lists the GPU MODE lectures and **Read** lists the papers and official docs that go with them.
+Steps 1-4 build your coding foundations, Steps 5-18 cover GPU programming and AI performance engineering, Step 19 covers robot learning, and Steps 20-25 get you the job. In the GPU steps, **Watch** lists the GPU MODE lectures and **Read** lists the papers and official docs that go with them.
 
 ## Step 1 - Create a list of roles/companies that excite you
 
@@ -458,7 +460,13 @@ Verified on **2026-08-23** in Wafer's list. These change quickly, so check for n
 - Try problems from [KernelBench](https://proceedings.mlr.press/v267/ouyang25a.html) to practice turning PyTorch operators into faster kernels
 - Share your work and get feedback on the [GPU MODE Discord](https://discord.gg/gpumode)
 
-## Step 19 - Design Your Portfolio
+## Step 19 - Learn Robot Learning
+
+- Read [Robot Learning: A Tutorial](https://arxiv.org/abs/2510.12403). It goes from reinforcement learning and behavioral cloning to generalist robot policies that follow language instructions across tasks and robots
+- Work through the free, hands-on version of the [Robot Learning Tutorial](https://huggingface.co/spaces/lerobot/robot-learning-tutorial)
+- Run its examples with [LeRobot](https://github.com/huggingface/lerobot), and train at least one policy yourself
+
+## Step 20 - Design Your Portfolio
 
 - Watch [this](https://www.youtube.com/watch?v=Loav1kbA640) intro video to GitHub
 - Create & upload 3 python web apps to your GitHub portfolio (document the installation steps well in the README)
@@ -466,23 +474,95 @@ Verified on **2026-08-23** in Wafer's list. These change quickly, so check for n
 - Design your [resume](https://www.youtube.com/watch?v=nMK94JlKRb4). 
 - Leverage your [Social Media](https://www.youtube.com/watch?v=PulyGf6trOk). 
 
-## Step 20 - Practice System Design Questions
+## Step 21 - Practice System Design Questions
 
 - Finish all the flashcards [here](https://github.com/donnemartin/system-design-primer#master-slave-replication) 
+- Read the [System Design Interview notes](https://github.com/liquidslr/system-design-notes) one chapter at a time. They are based on the [System Design Interview books (Vol 1 and Vol 2)](https://www.goodreads.com/book/show/54109255-system-design-interview-an-insider-s-guide) and are also on [pagefy](https://pagefy.io/system-design/system-design-interview-by-alex-xu).
+- For each design problem, design it yourself first using the 4 steps below, then compare with the notes
 - For ML systems roles, practice designing LLM serving systems using Steps 14-15
 
-## Step 21 - Practice Mock Interviews
+###### How to Answer a System Design Question
+1. Understand the problem and establish design scope
+2. Propose a high-level design and get buy-in
+3. Design deep dive
+4. Wrap up
+
+###### System Design Fundamentals
+1. [Scale From Zero To Millions Of Users](https://github.com/liquidslr/system-design-notes/tree/main/01.%20Scaling)
+2. [Back-of-the-envelope Estimation](https://github.com/liquidslr/system-design-notes/tree/main/02.%20Back%20Of%20the%20Envelope%20Estimation)
+3. [A Framework For System Design Interviews](https://github.com/liquidslr/system-design-notes/tree/main/03.%20System%20Design%20Framework)
+
+###### Vol 1 Design Problems
+4. [Design A Rate Limiter](https://github.com/liquidslr/system-design-notes/tree/main/04.%20Rate%20Limiter)
+   - [Circuit Breaker Algorithm](https://martinfowler.com/bliki/CircuitBreaker.html)
+   - [Uber Rate Limiter](https://github.com/uber-go/ratelimit/blob/master/ratelimit.go)
+5. [Design Consistent Hashing](https://github.com/liquidslr/system-design-notes/tree/main/05.%20Consistent%20Hashing)
+   - [Consistent Hashing](https://tom-e-white.com/2007/11/consistent-hashing.html)
+   - [CS168: Introduction and Consistent Hashing](http://theory.stanford.edu/~tim/s16/l/l1.pdf)
+   - [Apache Cassandra](http://www.cs.cornell.edu/Projects/ladis2009/papers/Lakshman-ladis2009.PDF)
+   - [Scaling Discord](https://blog.discord.com/scaling-elixir-f9b8e1e7c29b)
+   - [Google Maglev](https://static.googleusercontent.com/media/research.google.com/en//pubs/archive/44824.pdf)
+6. [Design A Key-Value Store](https://github.com/liquidslr/system-design-notes/tree/main/06.%20Key-Value%20Store)
+   - [Amazon Dynamo](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+   - [Cassandra Architecture](https://docs.datastax.com/en/archived/cassandra/3.0/cassandra/architecture/archIntro.html)
+   - [Google BigTable Architecture](https://static.googleusercontent.com/media/research.google.com/en//archive/bigtable-osdi06.pdf)
+   - [Amazon Dynamo DB Internals](https://www.allthingsdistributed.com/2007/10/amazons_dynamo.html)
+   - [Design Patterns in Amazon Dynamo DB](https://www.youtube.com/watch?v=HaEPXoXVf2k)
+   - [Internals of Amazon Dynamo DB](https://www.youtube.com/watch?v=yvBR71D0nAQ)
+7. [Design A Unique ID Generator In Distributed Systems](https://github.com/liquidslr/system-design-notes/tree/main/07.%20Unique-Id%20Generator)
+   - [Ticket Servers: Distributed Unique Primary Keys on the Cheap](https://code.flickr.net/2010/02/08/ticket-servers-distributed-unique-primary-keys-on-the-cheap)
+   - [Snowflake](https://blog.twitter.com/engineering/en_us/a/2010/announcing-snowflake.html)
+8. [Design A URL Shortener](https://github.com/liquidslr/system-design-notes/tree/main/08.%20URL%20Shortener)
+9. [Design A Web Crawler](https://github.com/liquidslr/system-design-notes/tree/main/09.%20Web%20Crawler)
+   - [Web Crawling](http://infolab.stanford.edu/~olston/publications/crawling_survey.pdf)
+   - [Google Dynamic Rendering](https://developers.google.com/search/docs/guides/dynamic-rendering)
+10. [Design A Notification System](https://github.com/liquidslr/system-design-notes/tree/main/10.%20Notification%20System)
+11. [Design A News Feed System](https://github.com/liquidslr/system-design-notes/tree/main/11.%20News%20Feed%20System)
+12. [Design A Chat System](https://github.com/liquidslr/system-design-notes/tree/main/12.%20Chat%20System)
+    - [How Discord stores billions of messages](https://discord.com/blog/how-discord-stores-billions-of-messages)
+    - [Flannel: An Application-Level Edge Cache to Make Slack Scale](https://slack.engineering/flannel-an-application-level-edge-cache-to-make-slack-scale/)
+13. [Design A Search Autocomplete System](https://github.com/liquidslr/system-design-notes/tree/main/13.%20Search%20Autocomplete)
+    - [How We Built Prefixy](https://medium.com/@prefixyteam/how-we-built-prefixy-a-scalable-prefix-search-service-for-powering-autocomplete-c20f98e2eff1)
+    - [Prefix Hash Tree](https://people.eecs.berkeley.edu/~sylvia/papers/pht.pdf)
+14. [Design YouTube](https://github.com/liquidslr/system-design-notes/tree/main/14.%20Youtube)
+    - [YouTube Architecture](http://highscalability.com/youtube-architecture)
+    - [YouTube scalability 2012](https://www.youtube.com/watch?v=w5WVu624fY8)
+    - [Transcoding Videos at Scale](https://www.egnyte.com/blog/2018/12/transcoding-how-we-serve-videos-at-scale/)
+    - [Facebook Video Broadcasting](https://engineering.fb.com/ios/under-the-hood-broadcasting-live-video-to-millions/)
+    - [Netflix Video Encoding at Scale](https://netflixtechblog.com/high-quality-video-encoding-at-scale-d159db052746)
+    - [Netflix Shot based encoding](https://netflixtechblog.com/optimized-shot-based-encodes-now-streaming-4b9464204830)
+15. [Design Google Drive](https://github.com/liquidslr/system-design-notes/tree/main/15.%20Google%20Drive)
+    - [Differential Synchronization](https://neil.fraser.name/writing/sync/)
+    - [Differential Synchronization Video](https://www.youtube.com/watch?v=S2Hp_1jqpY8)
+    - [How We’ve Scaled Dropbox](https://www.youtube.com/watch?v=PE4gwstWhmc&feature=youtu.be)
+
+###### Vol 2 Design Problems
+16. [Proximity Service](https://github.com/liquidslr/system-design-notes/tree/main/16.%20Proximity%20Service)
+17. [Nearby Friends](https://github.com/liquidslr/system-design-notes/tree/main/17.%20Nearby%20Friends)
+18. [Design Google Maps](https://github.com/liquidslr/system-design-notes/tree/main/18.%20Google%20Maps)
+19. [Distributed Message Queue](https://github.com/liquidslr/system-design-notes/tree/main/19.%20Distributed%20Message%20Queue)
+20. [Metrics Monitoring and Alerting System](https://github.com/liquidslr/system-design-notes/tree/main/20.%20Metrics%20Monitoring%20and%20Alerting%20System)
+21. [Ad Click Event Aggregation](https://github.com/liquidslr/system-design-notes/tree/main/21.%20Ad%20Click%20Event%20Aggregation)
+22. [Hotel Reservation System](https://github.com/liquidslr/system-design-notes/tree/main/22.%20Hotel%20Reservation%20System)
+23. [Distributed Email Service](https://github.com/liquidslr/system-design-notes/tree/main/23.%20Distributed%20Email%20Service)
+24. [S3-like Object Storage](https://github.com/liquidslr/system-design-notes/tree/main/24.%20S3-like%20Object%20Storage)
+25. [Real-time Gaming Leaderboard](https://github.com/liquidslr/system-design-notes/tree/main/25.%20Real-time%20Gaming%20Leaderboard)
+26. [Payment System](https://github.com/liquidslr/system-design-notes/tree/main/26.%20Payment%20System)
+27. [Digital Wallet](https://github.com/liquidslr/system-design-notes/tree/main/27.%20%20Digital%20Wallet)
+28. [Stock Exchange](https://github.com/liquidslr/system-design-notes/tree/main/28.%20Stock%20Exchange)
+
+## Step 22 - Practice Mock Interviews
 
 - Practice using [interviewing.io](http://interviewing.io) or [pramp](https://www.pramp.com/) 
 
-## Step 22 - Start applying for jobs
+## Step 23 - Start applying for jobs
 
 - Cold apply
 - Grab linkedin emails using [Getprospect](http://getprospect.io)
 
-## Step 23 - Start Interviewing
+## Step 24 - Start Interviewing
 
 - Phone Screen, Technical Screen, Onsite interviews, Offer/rejection
 - Don't get demoralized by rejections, see [this](http://rejected.us) 
 
-## Step 24 - Select the best offer
+## Step 25 - Select the best offer
