@@ -5,10 +5,62 @@ This is a single learning plan that combines:
 - The [Blind 75](https://www.teamblind.com/post/New-Year-Gift---Curated-List-of-Top-100-LeetCode-Questions-to-Save-Your-Time-OaM1orEU) LeetCode problems
 - The [GPU MODE lectures](https://github.com/gpu-mode/lectures) (on [this](https://www.youtube.com/@GPUMODE) YouTube channel)
 - Wafer's [GPU performance engineering resource list](https://github.com/wafer-ai/gpu-perf-engineering-resources)
+- Coding tutorials from [Aditya Verma's YouTube channel](https://www.youtube.com/@theadityaverma)
 - The [System Design Interview notes](https://github.com/liquidslr/system-design-notes)
 - [Robot Learning: A Tutorial](https://arxiv.org/abs/2510.12403)
 
 Steps 1-4 build your coding foundations, Steps 5-18 cover GPU programming and AI performance engineering, Step 19 covers robot learning, and Steps 20-25 get you the job. In the GPU steps, **Watch** lists the GPU MODE lectures and **Read** lists the papers and official docs that go with them.
+
+The [3-Month Schedule](#3-month-schedule) below turns the plan into a week-by-week routine. For a web version with every item linked and progress tracking, open [index.html](./index.html) in a browser.
+
+## 3-Month Schedule
+
+For 1 hour each weekday and 4 hours each weekend day: about 169 hours over 13 weeks, set up for an RTX 5080. It covers the core of each track and keeps the rest of the plan as reference. Every week touches every track, and no weekday repeats the day before it. In the table, `#` numbers are Blind 75 problems (Step 4), `L` numbers are GPU MODE lectures and `Ch` numbers are system design chapters (Step 21).
+
+###### Weekly Rhythm
+- Mon: LeetCode, 1 problem
+- Tue: GPU kernels, watch a lecture
+- Wed: LeetCode, 1 problem from a different topic than Monday
+- Thu: LLM systems, read one paper for its main idea
+- Fri: System design, read one chapter's notes
+- Sat (4h): 1.5h kernel build, then 1h LeetCode as a break, then 1.5h more building
+- Sun (4h): one hour each of LeetCode, system design (design Friday's chapter yourself, then check the notes), LeetCode, and the wildcard
+
+###### Weeks 1-11
+| Week | LeetCode (about 5h) | Kernels: Tue lecture, then Sat build | LLM systems (Thu) | System design (Fri, Sun) | Wildcard (Sun) |
+|---|---|---|---|---|---|
+| 1 | #1–5 Array, #12–14 Binary | L1, then set up your 5080 (see the notes below), [PMPP](https://a.co/d/2S2fVzt) ch 1–2, the L3 notebook and a vector add | [How to Scale Your Model: Inference](https://jax-ml.github.io/scaling-book/inference/) | Ch 1 | [Robot Learning tutorial](https://arxiv.org/abs/2510.12403) |
+| 2 | #6–8 Array, #40–42 Linked List, #15 Binary | L2, then [PMPP](https://a.co/d/2S2fVzt) ch 3–4, L4 and a naive CUDA matmul | [Transformer Inference Arithmetic](https://kipply.github.io/blog/transformer-inference-arithmetic/) | Ch 2–3 | Any lecture you like |
+| 3 | #9–10 Array, #53, 55, 56 String, #11 Binary | L5, then [PMPP](https://a.co/d/2S2fVzt) ch 5–6, L8, and profile your matmul with [Nsight Compute](https://docs.nvidia.com/nsight-compute/ProfilingGuide/) | [Roofline paper](https://users.cs.duke.edu/~lkw34/papers/roofline-cacm2008.pdf) | Ch 4 | [Robot Learning tutorial](https://arxiv.org/abs/2510.12403) |
+| 4 | #50–51 String, #43–45 Linked List | L9, then [PMPP](https://a.co/d/2S2fVzt) ch 10, a [reduction](https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf) and a [transpose](https://developer.nvidia.com/blog/efficient-matrix-transpose-cuda-cc/) | [Attention Is All You Need](https://arxiv.org/abs/1706.03762) | Ch 5 | Your pick |
+| 5 | #52, 54 String, #60–62 Tree, #35 Interval | L20, then [PMPP](https://a.co/d/2S2fVzt) ch 11, scan and [online softmax](https://arxiv.org/abs/1805.02867) kernels checked against PyTorch | [PagedAttention and vLLM](https://arxiv.org/html/2309.06180) | Ch 8 | [Robot Learning tutorial](https://arxiv.org/abs/2510.12403) |
+| 6 | #57–58 String, #64 Tree, #36–37 Interval | L14, then fused softmax in Triton and the [Liger RMSNorm notebook](https://colab.research.google.com/drive/1CQYhul7MVG5F0gmqTBbx1O1HgolPgF0M?usp=sharing) | [Orca](https://www.usenix.org/conference/osdi22/presentation/yu) | Ch 6 | Your pick |
+| 7 | #46–47 Matrix, #63, 66, 67 Tree | Read the [matmul worklog](https://siboehm.com/articles/22/CUDA-MMM), then build its kernels and record your numbers | [Sarathi-Serve](https://www.usenix.org/system/files/osdi24-agrawal.pdf) | Ch 11 | [Robot Learning tutorial](https://arxiv.org/abs/2510.12403) |
+| 8 | #48–49 Matrix, #65, 68, 69 Tree | L23, then finish the matmul with tensor cores and the [CuTe GEMM tutorial](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/cute/0x_gemm_tutorial.html) | [Speculative decoding paper](https://proceedings.mlr.press/v202/leviathan23a.html) | Ch 7, 10 | FP8 and FP4 GEMMs from [CUTLASS example 79](https://github.com/NVIDIA/cutlass/tree/main/examples/79_blackwell_geforce_gemm) |
+| 9 | #74 Heap, #70–71 Tree, #27, 30 Graph | L12, then L18 and a simple flash-attention forward pass in Triton | [FlashAttention paper](https://arxiv.org/abs/2205.14135) | Ch 12 | Run a [LeRobot](https://github.com/huggingface/lerobot) example |
+| 10 | #75 Heap, #72–73 Tree, #28–29 Graph | L7, then L22, and serve a small model with [vLLM](https://github.com/vllm-project/vllm), measuring TTFT and TPOT | [AWQ](https://proceedings.mlsys.org/paper_files/paper/2024/file/42a452cbafa9dd64e9ba4aa95cc1ef21-Paper-Conference.pdf) or [GPTQ](https://arxiv.org/abs/2210.17323) | Ch 14 | Your pick |
+| 11 | #31 Graph, #16–18 DP, re-solve one old problem | L17 (read it: running it needs 2+ GPUs), then write up "design an LLM serving system" | [DistServe](https://arxiv.org/html/2401.09670) | Ch 19 | [Robot Learning tutorial](https://arxiv.org/abs/2510.12403) |
+
+###### Weeks 12-13: Interview Mode
+- Mon / Wed, Saturday's hour and Sunday's 2h: LeetCode. Week 12 is #19–23 DP. Week 13 is #24–26 DP, then re-solving the problems you missed.
+- Tue / Thu: coding mock interviews on [interviewing.io](http://interviewing.io) or [pramp](https://www.pramp.com/) (Step 22)
+- Fri: review your system design notes
+- Sat (3h): week 12, publish your 3 kernels (reduction, softmax, matmul) with benchmarks; week 13, resume and social media (Step 20)
+- Sun (2h): week 12, a mock system design interview; week 13, build your company list and Trello board (Step 1), then start applying (Step 23)
+
+###### Rules
+- Swap freely: any cell can trade places with a later week, except in the kernels column, which builds on itself.
+- Stuck on LeetCode: keep the 45-minute cap, then watch the matching tutorial on [Aditya Verma's channel](https://www.youtube.com/@theadityaverma) before you re-try. Stuck on a kernel for more than 30 minutes: skip to the next part, ask on the [GPU MODE Discord](https://discord.gg/gpumode), and come back next Saturday.
+- Premium problems (#32–34, #38–39, #59) are optional. Do them in re-solve time if you have LeetCode Premium.
+- Left for after the 3 months: most lectures and readings in Steps 13-17, the other Vol 2 system design chapters, and the 100 / 50 / 2 LeetCode target.
+
+###### RTX 5080 Notes
+- Use Linux, or WSL2 on Windows. Triton and vLLM don't officially support native Windows.
+- Install a recent NVIDIA driver, the [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) 12.8 or newer, and [PyTorch](https://pytorch.org/get-started/locally/) 2.7 or newer built for CUDA 12.8. Older builds fail with "no kernel image" errors.
+- Let Nsight Compute read the GPU performance counters: on Linux, run it with sudo or set `NVreg_RestrictProfilingToAdminUsers=0`; on Windows, allow access in the NVIDIA Control Panel.
+- The 5080 is consumer Blackwell (sm_120). Its tensor cores use warp-level `mma.sync`, extended to FP8, FP6 and FP4. Hopper's `wgmma` and datacenter Blackwell's `tcgen05` and tensor memory don't run on it, so read that material as theory.
+- It has 16 GB of memory: serve small models, or 4-bit 7-8B models.
+- Multi-GPU code (NCCL, Step 15) needs 2 or more GPUs. Read it, or rent a multi-GPU machine for an hour.
 
 ## Step 1 - Create a list of roles/companies that excite you
 
@@ -23,12 +75,14 @@ Steps 1-4 build your coding foundations, Steps 5-18 cover GPU programming and AI
 ## Step 3 - Learn Data Structures & Algorithms
 
 - Take this [intro](https://www.udacity.com/course/data-structures-and-algorithms-in-python--ud513) course by Udacity
+- For coding tutorials, watch [this playlist](https://www.youtube.com/playlist?list=PL_z_8CaSLPWd5NmkiQL8XCYW1Ck3HqwWz) and the rest of [Aditya Verma's channel](https://www.youtube.com/@theadityaverma)
 
 ## Step 4 - Practice Data Structures & Algorithms
 
 - Solve the Blind 75 problems below first. Give yourself 45 minutes max per problem.
 - Then keep going until you have solved 100 Easy, 50 Medium, and 2 Hard [Leetcode](http://leetcode.com) problems.
 - Track your progress with the [Blind 75 LeetCode list](https://leetcode.com/list/xi4ci4ig/). Problems marked (Premium) need LeetCode Premium.
+- When a pattern is new to you, watch the matching tutorial on [Aditya Verma's channel](https://www.youtube.com/@theadityaverma) before you start
 
 ###### How to Solve problems
 1. Brute force solution
