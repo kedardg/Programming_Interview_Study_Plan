@@ -525,6 +525,7 @@ Verified on **2026-08-23** in Wafer's list. These change quickly, so check for n
 - Follow the [CUDA matmul worklog](https://siboehm.com/articles/22/CUDA-MMM) one kernel at a time and record your own numbers
 - Check every kernel against the PyTorch version for correctness, then benchmark it against PyTorch
 - Profile every kernel with [Nsight Compute](https://docs.nvidia.com/nsight-compute/ProfilingGuide/) and check it with [Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/)
+- Port one kernel you already wrote (online softmax or RoPE is a good fit) to [NKI](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/programming_model.html) and run it with `nki.simulate_kernel`, which needs no Trainium hardware; then compare your tiling and engine mapping against the matching [NKI Library](https://github.com/aws-neuron/nki-library) reference kernel
 - Try problems from [KernelBench](https://proceedings.mlr.press/v267/ouyang25a.html) to practice turning PyTorch operators into faster kernels
 - Share your work and get feedback on the [GPU MODE Discord](https://discord.gg/gpumode)
 
