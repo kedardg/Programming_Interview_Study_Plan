@@ -390,6 +390,11 @@ Read these in order if you are new to the field.
 - [vLLM](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), and [TensorRT-LLM](https://github.com/NVIDIA/TensorRT-LLM) - The main production engine implementations.
 
 ###### Read - KV cache systems
+
+First be able to size a cache by hand: KV bytes = 2 × layers × KV heads × head dim × cached tokens × batch × bytes per element. MHA, GQA, MQA, and MLA differ only in how many KV heads (or latent dimensions) survive that formula, which is why the attention variant decides how many concurrent users fit on a GPU.
+
+- [Understanding KV Cache](https://melchi.me/posts/kv-cache/) - Why decode caches keys and values, the sizing formula, and a worked 70B MHA example that reaches about 1.25 TiB of cache for 16 users at 32K tokens, against about 140 GB for the BF16 weights.
+- [KV Cache Calculator](https://melchi.me/tools/kv-cache-calculator/) - Check your hand-computed numbers, then vary the model, attention variant, precision, batch size, and context length until the trade-offs are intuitive.
 - [Grouped-Query Attention](https://arxiv.org/abs/2305.13245) - Fewer key-value heads and a smaller KV cache.
 - [DeepSeek-V2](https://arxiv.org/abs/2405.04434) - Multi-head latent attention and compressed KV state.
 - [KIVI](https://proceedings.mlr.press/v235/liu24bz.html) - KV quantization with separate treatment for keys and values.
@@ -406,6 +411,13 @@ Read these in order if you are new to the field.
 - [Guiding LLMs the Right Way](https://proceedings.mlr.press/v235/beurer-kellner24a.html) - Constrained decoding without changing the intended token distribution.
 - [XGrammar](https://proceedings.mlsys.org/paper_files/paper/2025/file/5c20ca4b0b20b0bd2f1d839dc605e70f-Paper-Conference.pdf) - A fast grammar engine for structured generation.
 - [Fairness in Serving Large Language Models](https://arxiv.org/html/2401.00588) - Fair scheduling when request sizes are different and unknown.
+
+###### Read - Fine-tuning and post-training stacks
+- [Axolotl](https://github.com/axolotl-ai-cloud/axolotl) - A YAML-driven post-training framework. Its feature list - sample packing, FlashAttention, Liger kernels, FSDP2, tensor and sequence/context parallelism, QLoRA, FP8, and MoE expert parallelism - is a map of how the kernel and parallelism ideas from Steps 10-15 are applied on the training side.
+- [LoRA](https://arxiv.org/abs/2106.09685) - Low-rank adapters instead of updating all weights.
+- [QLoRA](https://arxiv.org/abs/2305.14314) - Adapters trained over a 4-bit quantized base model.
+- [DPO](https://arxiv.org/abs/2305.18290) - Preference tuning without a separate reward model.
+- Try it: QLoRA fine-tune a 4-bit 7-8B model on your 5080 from one of Axolotl's example configs (`axolotl fetch examples`), then serve the merged checkpoint with vLLM and measure TTFT and TPOT.
 
 ## Step 15 - Learn Multi-GPU & Distributed Inference
 
@@ -487,6 +499,8 @@ Read each architecture with its ISA or tuning guide. Vendor peak numbers are not
 - [Trainium and Inferentia2 architecture](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/guides/architecture/trainium_inferentia2_arch.html) - NeuronCore v2 compute and memory architecture.
 - [Trainium3 architecture](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/guides/architecture/trainium3_arch.html) - The current NeuronCore architecture.
 - [NKI performance guide](https://awsdocs-neuron.readthedocs-hosted.com/en/v2.24.0/general/nki/nki_perf_guide.html) - Kernel optimization for Trainium and Inferentia.
+- [NKI Library](https://github.com/aws-neuron/nki-library) - Reference kernels for NeuronCore: context-encoding and token-generation attention, MLP and MoE, QKV and output projections with fused normalization, RoPE, and FP8/MX quantization, plus NeuroTile, a tile-iterator layer over HBM, SBUF, and PSUM. Read these as the Trainium counterpart of the CUDA kernels in Steps 11-12.
+- [How Deepgram Optimized Voice AI at Scale with AWS Trainium](https://aws.amazon.com/blogs/machine-learning/how-deepgram-optimized-voice-ai-at-scale-with-aws-trainium/) - A production port of a speech-to-text model to Trainium2: encoder and decoder compiled separately for static shapes with no CPU fallbacks, eight model replicas per instance, and custom NKI kernels focused on the few layers that are called repeatedly and drive latency. Reported 11-70% more audio processed per dollar for offline batch work.
 
 ## Step 17 - Follow the Frontier
 
