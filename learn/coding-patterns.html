@@ -12,7 +12,9 @@ pre.formula .c { color: var(--text-dim); }
 </style>
 </head>
 <body>
-<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links"><a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html" class="here">Coding Patterns</a><a href="flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html" class="here">Coding Patterns</a><a href="flashcards.html">Flashcards</a>
+  </div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
 <main>
 <h1>Coding Interview Patterns: the Blind 75 by Technique</h1>
 <p class="dim">The 75 problems in Steps 3–4 of the study plan are not 75 separate facts. They are about fifteen patterns, each worn in a few disguises. This chapter teaches the patterns, animates the ones that are hard to see in your head, gives you real Python solutions you can run, and ends with a map from every one of the 75 (numbered as in the <a href="../index.html">plan</a>) to its pattern and the one sentence that unlocks it.</p>
@@ -347,8 +349,9 @@ def reorder_list(head):
     second, slow.next = reverse_list(slow.next), None
     first = head
     while second:
-        first.next, second.next, first, second = second, first.next, first.next, second   <span class="c"># simultaneous assignment evaluates RHS first</span>
-    <span class="c"># clearer: tmp1, tmp2 = first.next, second.next; first.next = second; second.next = tmp1; first, second = tmp1, tmp2</span></pre>
+        nxt1, nxt2 = first.next, second.next      <span class="c"># save both continuations before rewiring</span>
+        first.next, second.next = second, nxt1    <span class="c"># first -&gt; second -&gt; (old first.next)</span>
+        first, second = nxt1, nxt2                <span class="c"># advance along the original lists</span></pre>
 
 <h2 id="trees">7. Trees, BSTs &amp; tries</h2>
 <p>Every tree problem is one of three traversals plus a question of <em>what information flows up</em> (post-order: compute from children) or <em>down</em> (pre-order: pass bounds/paths). BFS with a queue gives level structure; DFS gives paths. BSTs add the ordering invariant: in-order traversal is sorted, and bounds propagate downward. A trie is a tree keyed by characters — the structure that makes prefix queries O(length).</p>
