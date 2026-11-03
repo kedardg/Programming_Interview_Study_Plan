@@ -19,6 +19,7 @@
 <h1>LLM Inference Systems</h1>
 <p class="dim">How a trained transformer actually serves requests: prefill and decode, the KV cache, continuous batching, PagedAttention, scheduling, and speculative decoding. This chapter is the systems counterpart of Steps 14–15 in the study plan.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (11:17)</h3><audio controls preload="none" src="audio/inference.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/inference.txt">Read the transcript</a>.</p></div>
 <h2 id="two-phases">1. One request, two very different phases</h2>
 <p>When a request arrives at an inference engine, the model processes it in two phases that stress the hardware in opposite ways.</p>
 <p><strong>Prefill</strong> runs the whole prompt through the model at once. Every layer sees all prompt tokens together, so the matrix multiplies are large and the GPU's tensor cores stay busy: prefill is <em>compute-bound</em>. Its cost grows roughly linearly with prompt length (quadratically in the attention term), and it produces one thing the rest of the request depends on: the first output token, plus the keys and values of every prompt token, saved for later.</p>

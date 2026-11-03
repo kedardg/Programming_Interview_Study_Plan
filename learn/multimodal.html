@@ -14,6 +14,7 @@
 <h1>Multimodal LLMs: How Models See, Hear, Watch and Touch the World</h1>
 <p class="dim">A language model only ever consumes a sequence of vectors. Every modality — pixels, waveforms, video, point clouds, sensor streams — enters by being turned into such a sequence and spliced into the same residual stream that carries text. This chapter is about the encoders, tokenizers, and fusion wiring that do the splicing, with the concepts <em>and</em> the code for each modality, and what it costs to serve the result. It assumes the <a href="transformers.html">transformer block</a>, <a href="attention.html">attention</a>, and <a href="architectures.html">architecture</a> chapters.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (18:45)</h3><audio controls preload="none" src="audio/multimodal.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/multimodal.txt">Read the transcript</a>.</p></div>
 <h2 id="unify">1. The unifying idea: everything is embeddings in the residual stream</h2>
 <p>Peel the multimodality off any model that "sees" and what remains is unchanged: tokens → embeddings → repeated mixer/MLP blocks → LM head. Multimodal capability is added by choosing <strong>where</strong> non-text information enters that pipeline and <strong>in what form</strong>. Three families cover essentially every deployed system:</p>
 <ol>

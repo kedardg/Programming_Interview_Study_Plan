@@ -19,6 +19,7 @@
 <h1>Quantization, Sparsity &amp; Numerics</h1>
 <p class="dim">Every tensor in a model is a pile of numbers in some binary format, and the format decides memory, bandwidth, and silicon cost. This chapter covers how floating-point formats actually work, the math of quantization, the algorithms used in practice (GPTQ, AWQ, FP8, NVFP4), KV-cache quantization, quantization-aware training, and structured sparsity. It is the numerics counterpart of Step 13 in the study plan.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (10:12)</h3><audio controls preload="none" src="audio/quantization.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/quantization.txt">Read the transcript</a>.</p></div>
 <h2 id="formats">1. Number formats: where the bits go</h2>
 <p>A floating-point number spends its bits on three jobs: one <strong>sign</strong> bit, some <strong>exponent</strong> bits, and some <strong>mantissa</strong> (fraction) bits. The split is the whole personality of a format:</p>
 <ul>

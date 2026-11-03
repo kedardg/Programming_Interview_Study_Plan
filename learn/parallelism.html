@@ -19,6 +19,7 @@
 <h1>Multi-GPU &amp; Distributed Inference/Training</h1>
 <p class="dim">One GPU is never enough: models outgrow its memory and latency targets outgrow its bandwidth. This chapter covers the collective operations everything is built on, then the four axes of parallelism — tensor, pipeline, data/FSDP, expert — plus sequence parallelism, and how they compose for training and for serving. It is the systems counterpart of Step 15 in the study plan.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (9:37)</h3><audio controls preload="none" src="audio/parallelism.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/parallelism.txt">Read the transcript</a>.</p></div>
 <h2 id="why">1. Why one GPU isn't enough</h2>
 <p>Two separate walls force distribution:</p>
 <ul>

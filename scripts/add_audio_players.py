@@ -43,14 +43,14 @@ for mp3 in sorted(AUDIO.glob("*.mp3")):
 # hub section
 hub = LEARN / "index.html"
 s = hub.read_text()
-SEC_RE = re.compile(r'<h2>Audio course</h2>.*?(?=<h2>)', re.S)
+SEC_RE = re.compile(r'<h2(?: id="audio")?>Audio course</h2>.*?(?=<h2>)', re.S)
 titles = {}
 for name, _ in rows:
     t = re.search(r"<title>(.*?)</title>", (LEARN / f"{name}.html").read_text())
     titles[name] = t.group(1) if t else name
 items = "".join(f'<li><a href="{n}.html">{titles[n]}</a> — {d} · <a href="audio/{n}.mp3">mp3</a></li>' for n, d in rows)
 total = sum(int(d.split(":")[0]) for _, d in rows)
-section = (f'<h2>Audio course</h2>\n<p class="dim">Every chapter narrated ({len(rows)} episodes, about {total} minutes) by a rotating cast of Kokoro voices, '
+section = (f'<h2 id="audio">Audio course</h2>\n<p class="dim">Every chapter narrated ({len(rows)} episodes, about {total} minutes) by a rotating cast of Kokoro voices, '
            f'generated offline with <code>scripts/build_audio.py</code>. Each episode ends by telling you which animation to open and what to read next. '
            f'Play from the chapter page, or grab the mp3s from <code>learn/audio/</code> for your phone.</p>\n<ul>{items}</ul>\n\n')
 if SEC_RE.search(s):

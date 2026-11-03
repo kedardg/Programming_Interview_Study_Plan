@@ -19,6 +19,7 @@
 <h1>Attention, FlashAttention &amp; Long Context</h1>
 <p class="dim">The mechanism itself, computed by hand; multi-head and its cache-saving variants; RoPE; and the kernel that made long context affordable — FlashAttention's tiling and online softmax, animated tile by tile. This is the deep dive behind Step 12 of the study plan.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (16:58)</h3><audio controls preload="none" src="audio/attention.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/attention.txt">Read the transcript</a>.</p></div>
 <h2 id="first-principles">1. Attention from first principles</h2>
 <p>Attention is a soft dictionary lookup. Each position emits a <strong>query</strong> ("what am I looking for?"), and offers a <strong>key</strong> ("what do I contain, as an address?") and a <strong>value</strong> ("what do I contribute, as content?"). A query is compared against every key by dot product — the natural "how aligned are we?" measure from the <a href="math.html">math chapter</a> — the comparisons become weights via softmax, and the output is the weight-blended average of the values. Nothing is retrieved exactly; everything is retrieved a little, in proportion to relevance.</p>
 <div class="formula">Attention(Q, K, V) = softmax( QKᵀ / √d_k ) V<br><br>shapes:  Q: n×d_k   K: n×d_k   V: n×d_v   QKᵀ: n×n   output: n×d_v<br>(n = sequence length; d_k = d_v = head dim, typically 64–128)</div>

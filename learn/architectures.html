@@ -19,6 +19,7 @@
 <h1>LLM Architecture Evolution</h1>
 <p class="dim">Every architectural development since GPT-2 that survived contact with scale: what changed, why it won, and what it costs at inference time. This chapter assumes the <a href="transformers.html">transformer block</a> and <a href="attention.html">attention variants</a>; here we track how the whole organism evolved.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (16:47)</h3><audio controls preload="none" src="audio/architectures.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/architectures.txt">Read the transcript</a>.</p></div>
 <h2 id="lineage">1. The dense lineage: GPT-2 → Llama 3 as a sequence of small wins</h2>
 <p>Strip away scale, and the modern dense LLM differs from GPT-2 (2019) by half a dozen targeted substitutions. None is dramatic alone; together they are the difference between a model that trains unstably at 1B and one that trains cleanly at 400B. The honest way to read this table is as a list of <em>fixes</em>, each motivated by a failure at larger scale:</p>
 <table class="cmp">

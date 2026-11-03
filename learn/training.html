@@ -19,6 +19,7 @@
 <h1>LLM Training, Fine-tuning &amp; Post-training</h1>
 <p class="dim">How a pile of text becomes a chat model: the pretraining→SFT→preference→RL pipeline, the memory anatomy of a training step, LoRA and QLoRA, DPO and GRPO, and Axolotl as the practical map. This is the training-side counterpart of the Inference chapter, and the systems ideas cross-link to <a href="parallelism.html">Parallelism</a>.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (9:43)</h3><audio controls preload="none" src="audio/training.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/training.txt">Read the transcript</a>.</p></div>
 <h2 id="pipeline">1. The pipeline: four kinds of learning, one model</h2>
 <p>Modern LLMs are not trained once — they pass through stages, each with its own data, objective, and scale. The stages are wildly asymmetric: pretraining consumes &gt;99% of the compute and sets almost all of the model's knowledge; everything after it is <em>steering</em>, cheap by comparison but decisive for behavior.</p>
 

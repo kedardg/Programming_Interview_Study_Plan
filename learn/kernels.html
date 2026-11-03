@@ -19,6 +19,7 @@
 <h1>Writing Kernels: CUDA, Triton &amp; the Matmul Ladder</h1>
 <p class="dim">The replacement notebook for the plan's kernel exercises (Steps 9, 11, 18): vector add, reduction, transpose, online softmax, and the full matmul optimization ladder — each with annotated code and an animation of what the memory system is doing. Read <a href="gpu.html">GPU</a> first; the vocabulary (warps, coalescing, shared memory, roofline) is assumed.</p>
 
+<div class="card audio-card"><h3>🎧 Listen to this chapter (10:51)</h3><audio controls preload="none" src="audio/kernels.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/kernels.txt">Read the transcript</a>.</p></div>
 <h2 id="anatomy">1. Anatomy of a kernel: vector add in CUDA and Triton</h2>
 <p>Every CUDA kernel answers one question: <em>given my thread's coordinates, which piece of the data is mine?</em> Here is the complete vector add, the "hello world" from GPU MODE L3:</p>
 <div class="formula">__global__ void add(const float* x, const float* y, float* out, int n) {
