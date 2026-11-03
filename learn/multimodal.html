@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multimodal LLMs</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links"><a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html" class="here">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<main>
+<h1>Multimodal LLMs: How Models See, Hear, Watch and Touch the World</h1>
+<p class="dim">A language model only ever consumes a sequence of vectors. Every modality — pixels, waveforms, video, point clouds, sensor streams — enters by being turned into such a sequence and spliced into the same residual stream that carries text. This chapter is about the encoders, tokenizers, and fusion wiring that do the splicing, with the concepts <em>and</em> the code for each modality, and what it costs to serve the result. It assumes the <a href="transformers.html">transformer block</a>, <a href="attention.html">attention</a>, and <a href="architectures.html">architecture</a> chapters.</p>
+
+<h2 id="unify">1. The unifying idea: everything is embeddings in the residual stream</h2>
+<p>Peel the multimodality off any model that "sees" and what remains is unchanged: tokens → embeddings → repeated mixer/MLP blocks → LM head. Multimodal capability is added by choosing <strong>where</strong> non-text information enters that pipeline and <strong>in what form</strong>. Three families cover essentially every deployed system:</p>
+<ol>
+<li><strong>Encoder + projector (the LLaVA pattern).</strong> A pretrained modality encoder (a ViT for images, a Whisper-style encoder for audio) produces a grid of feature vectors; a small <em>projector</em> (an MLP) maps each one into the LLM's embedding dimension; the resulting "soft tokens" are concatenated with the text embeddings and the LLM runs unchanged. The LLM never sees pixels — it sees vectors that <em>look like</em> word embeddings and happen to carry visual content. Cheap to train (hours on a few GPUs for alignment), modular (swap encoders), and the dominant open-weight pattern: LLaVA, Qwen-VL, Pixtral, InternVL, SmolVLM, Voxtral for audio.</li>
+<li><strong>Cross-attention / resampler (Flamingo, Perceiver, Llama 3.2 Vision).</strong> Visual features stay in a side stream; the LLM's layers gain inserted cross-attention blocks whose queries are text and whose keys/values are visual features. Often a <em>Perceiver resampler</em> first compresses thousands of encoder outputs to a fixed 64–256 latent tokens via learned queries. The base LLM's text behavior is untouched (gated cross-attention initializes at zero), and the sequence length does not grow with image count — but you pay for new parameters in every layer.</li>
+<li><strong>Early fusion / native tokens (Chameleon, Gemini-class, GPT-4o-class, Gemma 3n).</strong> Images and audio are tokenized into <em>discrete</em> tokens by a learned codec (a VQ image tokenizer, a neural audio codec) and the single transformer is pretrained on mixed sequences from the start. One vocabulary, one model, any-to-any generation — at the cost of training from scratch on enormous interleaved corpora, and of a much harder optimization (modality competition for the shared capacity).</li>
+</ol>
+<table class="cmp">
+<tr><th>Family</th><th>Where modality enters</th><th>Training cost</th><th>Modularity</th><th>Serving cost</th><th>Generation of non-text?</th></tr>
+<tr><td>Encoder + projector</td><td>Input embeddings (prepended soft tokens)</td><td>Low: align projector, then instruction-tune</td><td>High: swap encoder/LLM</td><td>Sequence grows by one token per patch: prefill-heavy</td><td>No (needs a separate decoder)</td></tr>
+<tr><td>Cross-attention / resampler</td><td>Inside every (or every k-th) layer</td><td>Medium: new cross-attn params per layer</td><td>Medium: LLM weights stay frozen</td><td>Fixed extra K/V per layer; sequence doesn't grow</td><td>No</td></tr>
+<tr><td>Early fusion</td><td>Vocabulary (discrete tokens from the start)</td><td>Very high: full pretraining on interleaved data</td><td>Low: one monolith</td><td>Long mixed sequences; native streaming possible</td><td>Yes (emit image/audio tokens → codec decoder)</td></tr>
+</table>
+
+<div class="card">
+<h3>Animation: the three ways a picture enters a language model</h3>
+<canvas id="fuseViz" class="viz" width="900" height="320"></canvas>
+<div class="controls">
+  <label class="ctl">Family
+    <select id="fuseSel">
+      <option value="proj" selected>Encoder + projector (LLaVA)</option>
+      <option value="xattn">Cross-attention + resampler (Flamingo)</option>
+      <option value="early">Early fusion / native tokens (Chameleon)</option>
+    </select>
+  </label>
+  <button class="btn" id="fusePlay">▶ Animate flow</button>
+</div>
+<p class="caption">Blue = text tokens, orange = visual. In the projector family the visual vectors simply become extra positions in the input sequence. In the cross-attention family they stay outside and are read through added attention blocks. In early fusion there is no separate path at all: a codec turns the image into vocabulary tokens before the model ever runs.</p>
+</div>
+
+<h2 id="vision">2. Vision</h2>
+<h3>2.1 Patchify: how an image becomes a sequence</h3>
+<p>A Vision Transformer (ViT) does to an image what a tokenizer does to text, except the "tokens" are geometric. Cut the image into a grid of <em>P×P</em> pixel patches (P = 14 or 16 is standard), flatten each patch into a vector of 3·P² numbers, multiply by one learned projection matrix, add a positional embedding, and you have a sequence the transformer can process. A 224×224 image with 16×16 patches yields (224/16)² = <strong>196 tokens</strong>. The arithmetic is the whole story of vision-LLM cost: tokens scale with <em>area</em>, so doubling resolution quadruples the sequence.</p>
+<p>That quadratic growth is why every modern VLM carries a <em>token-reduction</em> strategy on top of the encoder:</p>
+<ul>
+<li><strong>Any-resolution tiling</strong> (LLaVA-NeXT, InternVL): split a large image into 336- or 448-pixel tiles, encode each, plus one downsampled global thumbnail. Preserves fine detail (OCR, charts) at the cost of thousands of tokens.</li>
+<li><strong>Pixel unshuffle / spatial merging</strong> (InternVL, Qwen2-VL): concatenate every 2×2 block of neighboring patch features into one vector and project it — a 4× token reduction before the LLM.</li>
+<li><strong>Learned compression</strong> (Perceiver resampler, Q-Former in BLIP-2): a fixed number of learned queries cross-attend to all patch features; 576 patches become 64 tokens regardless of resolution.</li>
+<li><strong>Native dynamic resolution</strong> (Qwen2-VL): keep the image's own aspect ratio, vary token count per image, and use 2D rotary positions (next section) so the LLM knows where each patch sat.</li>
+</ul>
+
+<div class="card">
+<h3>Animation: patchify and the token count explosion</h3>
+<canvas id="patchViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <label class="ctl">Image size <input type="range" id="patchRes" min="224" max="1344" step="112" value="448"> <span id="patchResLabel">448 px</span></label>
+  <label class="ctl">Patch size <select id="patchP"><option>14</option><option selected>16</option><option>32</option></select></label>
+  <label class="ctl"><input type="checkbox" id="patchMerge"> 2×2 spatial merge</label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="patchTok">–</div><div class="l">visual tokens</div></div>
+  <div class="box"><div class="v" id="patchKV">–</div><div class="l">KV added (Llama-3-8B, BF16)</div></div>
+  <div class="box"><div class="v" id="patchPrefill">–</div><div class="l">≈ prefill FLOPs (8B)</div></div>
+</div>
+<p class="caption">Each cell is one patch → one token. Slide the resolution: 224 px is 196 tokens; 1344 px with 16-pixel patches is 7,056 tokens — more than most entire text prompts — which is why a VLM request is a <a href="inference.html#two-phases">prefill-dominated</a> request and why 2×2 merging is standard. The KV and FLOP figures use the formulas from the <a href="inference.html#kv-cache">inference chapter</a> (2·layers·kv_heads·head_dim·bytes per token; 2·N FLOPs per token).</p>
+</div>
+
+<div class="formula"># Minimal ViT patch embedding (what every vision encoder starts with)
+import torch, torch.nn as nn
+
+class PatchEmbed(nn.Module):
+    def __init__(self, img=224, patch=16, in_ch=3, dim=768):
+        super().__init__()
+        self.n = (img // patch) ** 2                       # 196 tokens for 224/16
+        # A conv with kernel=stride=patch IS the "flatten + linear" of each patch
+        self.proj = nn.Conv2d(in_ch, dim, kernel_size=patch, stride=patch)
+        self.pos = nn.Parameter(torch.zeros(1, self.n, dim))  # learned 1D pos (ViT) or use 2D-RoPE
+
+    def forward(self, x):                      # x: (B, 3, 224, 224)
+        x = self.proj(x)                       # (B, dim, 14, 14)
+        x = x.flatten(2).transpose(1, 2)       # (B, 196, dim)  ← a sequence, like text
+        return x + self.pos
+
+# LLaVA-style projector: encoder features → LLM embedding space
+class Projector(nn.Module):
+    def __init__(self, enc_dim=1024, llm_dim=4096):
+        super().__init__()
+        self.mlp = nn.Sequential(nn.Linear(enc_dim, llm_dim), nn.GELU(), nn.Linear(llm_dim, llm_dim))
+    def forward(self, feats):                  # (B, 576, 1024) from a CLIP/SigLIP ViT-L/14 @ 336px
+        return self.mlp(feats)                 # (B, 576, 4096): 576 "soft tokens"
+
+# Splice image tokens into the text sequence at an &lt;image&gt; placeholder
+def merge(text_ids, image_feats, embed, image_token_id):
+    # text_ids: (T,), image_feats: (576, llm_dim), embed: nn.Embedding of the LLM
+    text_emb = embed(text_ids)                 # (T, llm_dim)
+    pos = (text_ids == image_token_id).nonzero()[0, 0]
+    seq = torch.cat([text_emb[:pos], image_feats, text_emb[pos + 1:]], dim=0)
+    return seq                                 # (T - 1 + 576, llm_dim) → straight into the LLM blocks</div>
+<p>Three things to notice in the code. The conv-with-stride is literally patchify; nothing exotic. The projector output has the LLM's hidden size and <em>no other constraint</em> — the LLM has to learn that these vectors mean "pixels", which is what stage-1 alignment training does. And <code>merge</code> is plain concatenation: the LLM's forward pass does not know which positions came from an image, which is why the serving engine must track that mapping to build the right attention mask, positional ids, and prefix-cache keys (vLLM's multimodal path does exactly this).</p>
+
+<h3>2.2 Where the encoder's knowledge comes from: contrastive pretraining</h3>
+<p>The ViT inside almost every VLM is not trained on ImageNet labels; it is <strong>CLIP</strong> or <strong>SigLIP</strong> — trained on hundreds of millions of (image, caption) pairs to produce embeddings where matching pairs are close and non-matching pairs are far. The objective is the <em>InfoNCE</em> loss: for a batch of N pairs, compute the N×N matrix of cosine similarities between every image and every caption, and treat each row (and each column) as an N-way classification whose correct answer is the diagonal. SigLIP replaces the softmax over the batch with an independent sigmoid per pair, which scales to larger batches and removes the need for a global normalization across devices. The result is an encoder whose features are already <em>semantically aligned with language</em> — which is why a two-layer MLP is enough to connect it to an LLM.</p>
+
+<div class="card">
+<h3>Animation: InfoNCE pulls the diagonal up</h3>
+<canvas id="clipViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="clipPlay">▶ Train</button>
+  <button class="btn secondary" id="clipReset">Reset</button>
+  <span class="dim" id="clipStat"></span>
+</div>
+<p class="caption">An 8×8 image–caption similarity matrix. Training raises matching pairs (diagonal) and pushes down everything else; the loss shown is the symmetric cross-entropy over rows and columns. After convergence, an image's nearest caption is its own — and, crucially, the embedding space has become a shared language-visual space.</p>
+</div>
+
+<h2 id="audio">3. Audio</h2>
+<p>Sound is a 1-D signal sampled 16,000–48,000 times per second — far too many numbers to feed a transformer raw. Every audio pipeline first moves to a <strong>time–frequency representation</strong>: slide a short window (25 ms, hop 10 ms) across the waveform, take the FFT of each window (STFT), keep the magnitudes, and bin frequencies on the <em>mel</em> scale (perceptually spaced, ~80–128 bins). A minute of audio becomes a 6000×80 "image" — which is exactly how the models treat it.</p>
+
+<div class="card">
+<h3>Animation: waveform → STFT frames → mel spectrogram</h3>
+<canvas id="melViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="melPlay">▶ Play</button>
+  <button class="btn secondary" id="melReset">Reset</button>
+</div>
+<p class="caption">Top: a synthetic waveform (a chirp plus a low tone). A 25 ms window (highlighted) slides by 10 ms hops; each position produces one spectral column, drawn at the bottom with low frequencies at the bottom and mel-warped bins. Note the rising chirp becomes a diagonal streak and the steady tone a horizontal line — the encoder sees <em>this</em>, not the waveform.</p>
+</div>
+
+<p>From the spectrogram there are two routes into an LLM, and the choice decides whether the model can only <em>listen</em> or also <em>speak</em>:</p>
+<h3>3.1 Continuous encoders (understanding)</h3>
+<p>A Whisper-style encoder — two strided convolutions that downsample 2× in time, then a transformer stack — turns the mel frames into ~50 feature vectors per second. That is still a lot of tokens for an LLM (a 30-second clip is 1500), so a further downsampling (stack k adjacent frames, or a Q-Former/resampler) brings it to ~5–12 tokens per second before a projector maps them into the LLM. Qwen-Audio, Voxtral, and SALMONN follow this recipe; it is the audio twin of LLaVA, and training proceeds identically (align the projector, then instruction-tune on transcripts and spoken-QA data). Because the encoder is Whisper-like, these models inherit strong speech recognition for free.</p>
+<p>This is also the architecture of production speech-to-text systems like the Deepgram pipeline in the <a href="hardware.html">hardware chapter</a>: an encoder over fixed-length mel windows and an autoregressive text decoder. Their Trainium port's key move — compiling encoder and decoder <em>separately for static shapes</em> — only works because the mel front end fixes the input shape (pad or chunk audio to a known length), which is a general lesson for serving audio: control the shape at the spectrogram boundary.</p>
+<div class="formula"># Mel spectrogram front end (torchaudio) — the input to every speech encoder
+import torchaudio, torch
+wav, sr = torchaudio.load("clip.wav")                       # (1, samples), e.g. sr=16000
+wav = torchaudio.functional.resample(wav, sr, 16000)
+mel = torchaudio.transforms.MelSpectrogram(
+    sample_rate=16000, n_fft=400, win_length=400, hop_length=160,   # 25 ms window, 10 ms hop
+    n_mels=80)(wav)                                              # (1, 80, frames)  frames ≈ seconds*100
+log_mel = torch.log(mel.clamp(min=1e-10))                        # Whisper normalizes to roughly [-1, 1]
+
+# Whisper-style encoder front: 2 convs halve the frame rate, then a transformer
+class AudioEncoderFront(torch.nn.Module):
+    def __init__(self, n_mels=80, dim=1024):
+        super().__init__()
+        self.c1 = torch.nn.Conv1d(n_mels, dim, 3, padding=1)
+        self.c2 = torch.nn.Conv1d(dim, dim, 3, stride=2, padding=1)  # 100 → 50 frames/s
+    def forward(self, log_mel):                                      # (B, 80, T)
+        x = torch.nn.functional.gelu(self.c1(log_mel))
+        x = torch.nn.functional.gelu(self.c2(x))                     # (B, dim, T/2)
+        return x.transpose(1, 2)                                     # (B, T/2, dim) → transformer blocks
+
+# Downsample ×4 by stacking frames before the projector (50 → 12.5 tokens/s)
+def stack_frames(x, k=4):                      # x: (B, T, dim)
+    B, T, D = x.shape; T = T - T % k
+    return x[:, :T].reshape(B, T // k, D * k)   # (B, T/4, 4*dim) → Projector(4*dim → llm_dim)</div>
+
+<h3>3.2 Discrete codec tokens (generation)</h3>
+<p>To make a language model <em>produce</em> audio, you need audio to be a vocabulary. Neural codecs (SoundStream, EnCodec, and successors like Mimi in Moshi) learn exactly that: an encoder compresses the waveform to a low-rate latent (e.g. 75 or 12.5 frames per second), a quantizer snaps each latent to entries of learned codebooks, and a decoder reconstructs the waveform from the codes. The quantizer is the clever part — <strong>residual vector quantization (RVQ)</strong>: the first codebook (say 1024 entries) picks the nearest code; the <em>residual</em> error is quantized by a second codebook; its residual by a third; and so on for 8–32 stages. Each stage adds fidelity, so the first codebooks carry phonetic/semantic content and later ones carry timbre and detail.</p>
+<p>With audio as discrete tokens, AudioLM-style models generate speech autoregressively; <strong>Moshi</strong> goes further to <em>full-duplex</em> conversation by modeling the user's audio stream and the model's own audio-and-text streams in parallel at 12.5 Hz, so it can listen and talk simultaneously with ~200 ms latency. The architectural question of "how many codebooks per timestep and in what order" (flattened, delayed/interleaved, or predicted by a small depth transformer) is the audio equivalent of multi-token prediction in the <a href="architectures.html#mtp">architectures chapter</a>.</p>
+
+<div class="card">
+<h3>Animation: residual vector quantization</h3>
+<canvas id="rvqViz" class="viz" width="900" height="280"></canvas>
+<div class="controls">
+  <button class="btn" id="rvqStep">Next stage</button>
+  <button class="btn secondary" id="rvqReset">New vector</button>
+  <span class="dim" id="rvqStat"></span>
+</div>
+<p class="caption">A 2-D latent (★) is approximated stage by stage: each codebook (colored dots) quantizes the current residual, the chosen code is added to the running reconstruction (◆), and the residual shrinks. Four stages with 8-entry codebooks encode the point with 4×3 = 12 bits; the error after each stage is shown. Real codecs use 1024-entry codebooks and 8–32 stages on ~128-D latents.</p>
+</div>
+<div class="formula"># Residual vector quantizer forward pass (inference path; training adds commitment/codebook losses + EMA updates)
+class RVQ(torch.nn.Module):
+    def __init__(self, dim=128, n_codebooks=8, codebook_size=1024):
+        super().__init__()
+        self.books = torch.nn.ParameterList(
+            [torch.nn.Parameter(torch.randn(codebook_size, dim)) for _ in range(n_codebooks)])
+
+    def forward(self, z):                              # z: (B, T, dim) latent from the codec encoder
+        residual, recon, codes = z, torch.zeros_like(z), []
+        for book in self.books:
+            d = torch.cdist(residual, book[None])      # (B, T, codebook_size) distances to every code
+            idx = d.argmin(-1)                         # (B, T) token ids for this stage
+            q = book[idx]                              # (B, T, dim) chosen codes
+            recon = recon + q
+            residual = residual - q                    # next stage quantizes what is left
+            codes.append(idx)
+        # straight-through estimator so gradients reach the encoder during training
+        recon = z + (recon - z).detach()
+        return recon, torch.stack(codes, -1)           # codes: (B, T, n_codebooks) → 8 tokens per frame</div>
+
+<h2 id="video">4. Video</h2>
+<p>Video is the modality that breaks naive scaling. Treat each frame as an image and the token count is <em>frames × tokens-per-frame</em>: one minute sampled at 1 fps with 196 tokens per frame is already 11,760 tokens; at 2 fps with 448-px frames it is 94,080 — longer than most context windows and, per the <a href="inference.html#kv-cache">KV formula</a>, about 1.5 GB of cache on an 8B model in BF16. Everything in video-LLM design is about spending that budget wisely:</p>
+<ul>
+<li><strong>Temporal sampling</strong>: sparse uniform sampling (8–64 frames) for short clips; adaptive keyframe selection for long ones.</li>
+<li><strong>Tubelets / 3D patches</strong>: patchify across time as well as space (2×16×16), so two frames share one token — the video-native ViT (ViViT, VideoMAE) and Qwen2-VL's approach.</li>
+<li><strong>Temporal pooling</strong>: average or attention-pool neighboring frames' tokens before the LLM (Video-LLaMA, LLaVA-Video).</li>
+<li><strong>Streaming memory</strong>: for hour-long video, keep a compressed memory of past tokens (a few hundred) plus full detail for the current window — the same hierarchy as long-context text methods.</li>
+</ul>
+<h3>Positions in three dimensions: M-RoPE</h3>
+<p>Once tokens come from a (time, height, width) grid, a 1-D position index throws away the geometry. Qwen2-VL's <strong>M-RoPE</strong> splits the rotary dimensions into three groups and gives each token three position ids: <em>t</em> (frame index), <em>h</em> (patch row), <em>w</em> (patch column). Text tokens use the same value for all three (so M-RoPE reduces to ordinary RoPE on text), and tokens after a video continue counting from the video's maximum id. The attention score between two patches then depends on their offsets in all three axes — "same row, three frames later" is a geometric relation the model can express directly, and resolution or frame-rate changes do not scramble positions.</p>
+<div class="formula"># M-RoPE position ids for a text + video + text sequence
+def mrope_positions(n_text_before, T, H, W, n_text_after):
+    ids = []                                   # each entry: (t, h, w)
+    p = 0
+    for _ in range(n_text_before):             # text: t = h = w = running index
+        ids.append((p, p, p)); p += 1
+    base = p
+    for t in range(T):                          # video patches: 3-D grid offsets from base
+        for h in range(H):
+            for w in range(W):
+                ids.append((base + t, base + h, base + w))
+    p = base + max(T, H, W)                     # resume text after the largest extent
+    for _ in range(n_text_after):
+        ids.append((p, p, p)); p += 1
+    return torch.tensor(ids)                    # (L, 3) → three RoPE rotations on three slices of head_dim
+# Worked example: 1 min @ 1 fps, 224px/16 → T=60, H=W=14 → 11,760 video tokens; with 2-frame tubelets + 2×2 merge → 1,470</div>
+
+<h2 id="3d">5. 3D and spatial understanding</h2>
+<p>Images are projections; the world is 3-D. Models that must act in it (the robots in the <a href="robot-learning.html">RL &amp; Robotics chapter</a>) need geometry, and there are three ways to get it into an LLM.</p>
+<h3>5.1 Point clouds and the permutation problem</h3>
+<p>A LiDAR scan or a depth camera gives an unordered set of (x, y, z[, color]) points. A set has no sequence order, so any tokenizer must be <strong>permutation-invariant</strong>: processing the same points in a different order must give the same result. <strong>PointNet</strong> does it with shared per-point MLPs plus a symmetric max-pool; <strong>PointNet++</strong> and <strong>Point-BERT</strong> add locality by <em>farthest point sampling</em> (pick well-spread center points), grouping each center's k nearest neighbors into a local patch, and encoding each patch with a small PointNet — producing, say, 512 "point tokens" from 8,192 points. Those tokens are to a point cloud what ViT patches are to an image, and from there the LLaVA recipe applies: <strong>PointLLM</strong>, <strong>3D-LLM</strong>, and <strong>LL3DA</strong> project point tokens (or 3-D features lifted from multi-view images) into an LLM for captioning, grounding ("the red chair left of the table"), and question answering about scenes.</p>
+
+<div class="card">
+<h3>Animation: farthest point sampling and grouping</h3>
+<canvas id="fpsViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="fpsStep">Sample next center</button>
+  <button class="btn secondary" id="fpsGroup">Group neighbors</button>
+  <button class="btn secondary" id="fpsReset">Reset</button>
+  <span class="dim" id="fpsStat"></span>
+</div>
+<p class="caption">400 points (a 2-D slice of a cloud). Each FPS step picks the point farthest from all centers chosen so far — spreading centers evenly regardless of density. "Group" then draws each center's k nearest neighbors; each group becomes one token via a mini-PointNet (per-point MLP → max-pool), which is order-independent by construction.</p>
+</div>
+<div class="formula"># Point tokenizer: FPS centers → kNN groups → mini-PointNet per group (permutation invariant)
+def farthest_point_sample(xyz, n_centers):          # xyz: (N, 3)
+    N = xyz.shape[0]; idx = torch.zeros(n_centers, dtype=torch.long)
+    dist = torch.full((N,), float("inf")); far = torch.randint(N, (1,)).item()
+    for i in range(n_centers):
+        idx[i] = far
+        dist = torch.minimum(dist, ((xyz - xyz[far]) ** 2).sum(-1))   # distance to nearest chosen center
+        far = dist.argmax().item()
+    return idx
+
+class PointTokenizer(torch.nn.Module):
+    def __init__(self, k=32, dim=384):
+        super().__init__(); self.k = k
+        self.mlp = torch.nn.Sequential(torch.nn.Linear(3, 128), torch.nn.GELU(), torch.nn.Linear(128, dim))
+    def forward(self, xyz, n_tokens=512):             # (N, 3) → (n_tokens, dim)
+        centers = xyz[farthest_point_sample(xyz, n_tokens)]            # (n_tokens, 3)
+        d = torch.cdist(centers, xyz)                                  # (n_tokens, N)
+        nbrs = xyz[d.topk(self.k, largest=False).indices]              # (n_tokens, k, 3)
+        local = nbrs - centers[:, None]                                # center each group
+        return self.mlp(local).max(dim=1).values                       # max-pool over k: order-invariant</div>
+
+<h3>5.2 From many images to a 3-D model</h3>
+<p>When the sensor is a camera, 3-D must be <em>inferred</em>. <strong>NeRF</strong> represents a scene as a neural function from (position, viewing direction) to (color, density), fit by rendering rays and matching the training photos — beautiful, slow to render. <strong>3-D Gaussian Splatting</strong> replaces the implicit function with millions of explicit anisotropic Gaussians that are rasterized directly, giving real-time rendering and fast training; it is now the default for scene reconstruction. Neither is itself an LLM component, but their outputs (a renderable scene, novel views, depth) feed 3-D-LLMs, and feed-forward successors (DUSt3R-style networks that regress point maps from image pairs in one pass) are increasingly the "encoder" for spatial reasoning: images in, metric 3-D out, project to the LLM.</p>
+<h3>5.3 Why VLMs are bad at space, and what fixes it</h3>
+<p>Standard VLMs are trained on captions, which rarely say "0.4 m left of". Benchmarks like VSI-Bench and SpatialRGPT show strong models failing at relative distance, counting, and left/right under rotation. The fixes are data and inputs: add <em>depth as an extra channel</em> or extra tokens (from a monocular depth estimator), add camera pose, train on synthetic spatial QA generated from 3-D scenes, and — the embodied route — train on robot trajectories where wrong spatial answers produce visibly failed actions. Vision-Language-Action models consume exactly these spatially-grounded representations; the handoff is in the <a href="robot-learning.html">next chapter</a>.</p>
+
+<h2 id="other">6. Other modalities, concretely</h2>
+<table class="cmp">
+<tr><th>Modality</th><th>Tokenization / encoder</th><th>Representative work</th><th>The one thing that makes it different</th></tr>
+<tr><td>Time series</td><td>Scale, then patch windows of values (like ViT in 1-D), or quantize values into bins as tokens</td><td>PatchTST, Chronos (bins → T5 vocabulary)</td><td>Cross-domain transfer: a pretrained forecaster works zero-shot on new series</td></tr>
+<tr><td>Tabular</td><td>Serialize rows as text, or per-column feature tokens</td><td>TabPFN (in-context learning over whole tables), LLM-as-table-reader</td><td>Column semantics matter more than order; numbers tokenize badly</td></tr>
+<tr><td>Graphs</td><td>GNN message passing → node/graph embeddings → projector</td><td>GraphGPT, G-Retriever (RAG over knowledge graphs)</td><td>No canonical ordering; structure is the information</td></tr>
+<tr><td>Proteins &amp; molecules</td><td>Residues as tokens (ESM), SMILES strings (text), 3-D structure as point/graph tokens</td><td>ESM-2/3, ProtGPT, MolT5</td><td>Alphabet is tiny; the "grammar" is physics</td></tr>
+<tr><td>Tactile / IMU / proprioception</td><td>Low-dimensional continuous vectors, normalized and linearly projected per timestep</td><td>Robot policies (Octo, π0) concatenating joint states with vision tokens</td><td>High rate, low dimension: usually bypasses a big encoder entirely</td></tr>
+<tr><td>Code</td><td>Plain text tokens — but with fill-in-the-middle objectives and repository-level context</td><td>StarCoder, Code Llama, Codex-class</td><td>Not a new modality; evaluation is (execution-based: pass@k), and structure-aware retrieval helps</td></tr>
+</table>
+
+<h2 id="recipe">7. The training recipe (and what it costs)</h2>
+<p>Nearly every encoder+projector model is trained in the same three stages, each cheaper than you would guess:</p>
+<ol>
+<li><strong>Alignment (projector only).</strong> Freeze the LLM and the encoder; train the projector on ~0.5–1M image–caption pairs to predict the caption. The LLM learns to read "vector-shaped pixels". Hours on 8 GPUs.</li>
+<li><strong>Instruction tuning (projector + LLM).</strong> Unfreeze the LLM (often with LoRA — see <a href="training.html">training chapter</a>) and train on ~1M multimodal instructions: VQA, OCR, charts, grounding with box coordinates as text, multi-image and interleaved documents. Optionally unfreeze the encoder at low LR late in training. This stage decides the model's resolution policy (tile counts, max tokens) — the <em>resolution curriculum</em> typically starts low and increases.</li>
+<li><strong>Preference / RL.</strong> DPO on hallucination-contrast pairs (answers that mention objects absent from the image are "rejected"), and increasingly RL with verifiable rewards on counting, OCR, and spatial tasks.</li>
+</ol>
+<p>Early-fusion models skip all this and instead pay for full pretraining; their recipe problem is balancing modalities (loss weighting, separate learning rates per modality, z-loss for stability) so that text quality does not regress. In Axolotl terms, the open-weight families on its list (Llama-Vision, Qwen2-VL, Pixtral, LLaVA, SmolVLM2, InternVL, Voxtral) are fine-tuned through the same YAML with a processor that handles image/audio inputs and a chat template that inserts the placeholder tokens; the knobs that matter are max image size/tiles, whether the vision tower is frozen, and sample packing (which must respect that image tokens are a contiguous block).</p>
+
+<h2 id="evals">8. Evaluation and the characteristic failure modes</h2>
+<ul>
+<li><strong>Language-prior hallucination</strong>: the LLM answers from what captions <em>usually</em> say rather than what is there ("a man riding a bike" when there is no bike). Measured by POPE-style object-presence probes; mitigated by contrastive decoding and preference data.</li>
+<li><strong>Counting and spatial relations</strong>: soft tokens blur instances; fine-grained geometry is lost in merging. VSI-Bench, CV-Bench.</li>
+<li><strong>Small text (OCR) and charts</strong>: resolution-bound; any-res tiling exists for this. DocVQA, ChartQA, TextVQA.</li>
+<li><strong>Long video</strong>: needle-in-a-haystack over frames; Video-MME, LongVideoBench.</li>
+<li><strong>Expert reasoning over images</strong>: MMMU (college-level, multi-discipline) is the headline VLM benchmark; MathVista for figures.</li>
+<li><strong>Audio</strong>: word error rate for ASR; AudioBench / AIR-Bench for spoken understanding; for speech generation, intelligibility (ASR round-trip WER), speaker similarity, and MOS.</li>
+</ul>
+
+<h2 id="omni">9. Omni models and serving</h2>
+<p>"Omni" models (GPT-4o/Gemini-class; open: Qwen2.5-Omni, Gemma 3n) accept text, image, audio, and video and emit text and speech. Two architectural choices make real-time speech-to-speech possible: a <strong>streaming audio encoder</strong> (causal or chunked, so understanding begins before the user stops talking) and <strong>interleaved generation</strong> where the model emits text tokens and audio codec tokens in a fixed cadence (Qwen2.5-Omni's "thinker–talker" split: the thinker produces text and hidden states, a lightweight talker turns them into audio codes in parallel). The latency budget for a natural conversation is about 300 ms from end-of-speech to first audio — which is prefill of the last audio chunk plus the first decode steps, so every trick in the <a href="inference.html">inference chapter</a> (chunked prefill, speculative decoding, small-batch TPOT) is load-bearing here.</p>
+<p>On the serving side, multimodal requests change the workload shape rather than the engine: the encoder runs as a separate stage (often on the same GPU before prefill, cacheable by image hash), visual tokens make prefill long and decode short, and prefix caching must key on image content, not just text. The KV budget is the first thing to size: a single 1344-px image with 16-px patches and no merging adds 7,056 tokens — on Llama-3-70B that is 7,056 × 160 KB ≈ 1.1 GB of cache per request before any text. vLLM's multimodal support (Step 12 of the plan) handles placeholder expansion, encoder caching, and the per-modality processors so that these requests flow through the same continuous-batching scheduler as text.</p>
+
+<h2 id="reading">10. Where to go deeper</h2>
+<ul>
+<li>Vision: <a href="https://arxiv.org/abs/2304.08485">LLaVA</a> and <a href="https://arxiv.org/abs/2310.03744">LLaVA-1.5</a>, <a href="https://arxiv.org/abs/2204.14198">Flamingo</a>, <a href="https://arxiv.org/abs/2103.00020">CLIP</a>, <a href="https://arxiv.org/abs/2303.15343">SigLIP</a>, <a href="https://arxiv.org/abs/2409.12191">Qwen2-VL</a> (M-RoPE, dynamic resolution), <a href="https://arxiv.org/abs/2405.09818">Chameleon</a> (early fusion).</li>
+<li>Audio: <a href="https://arxiv.org/abs/2212.04356">Whisper</a>, <a href="https://arxiv.org/abs/2210.13438">EnCodec</a>, <a href="https://arxiv.org/abs/2209.03143">AudioLM</a>, <a href="https://arxiv.org/abs/2410.00037">Moshi</a>, <a href="https://arxiv.org/abs/2311.07919">Qwen-Audio</a>.</li>
+<li>3-D: <a href="https://arxiv.org/abs/1612.00593">PointNet</a>, <a href="https://arxiv.org/abs/2308.16911">PointLLM</a>, <a href="https://arxiv.org/abs/2307.12981">3D-LLM</a>, <a href="https://arxiv.org/abs/2308.04079">3D Gaussian Splatting</a>, <a href="https://arxiv.org/abs/2412.14171">VSI-Bench</a> (thinking in space).</li>
+<li>Serving: <a href="https://docs.vllm.ai/en/latest/features/multimodal_inputs.html">vLLM multimodal inputs</a> (plan Step 12); the <a href="inference.html">inference chapter</a> for the cost model.</li>
+<li>Next: the <a href="robot-learning.html">RL &amp; Robotics chapter</a>, where vision-language-action models consume these representations to act; the <a href="flashcards.html">Multimodal flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="gallery.html">← Gallery</a><a href="gpu.html">GPU →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+function onTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+
+// ---------- 1. fusion families ----------
+(function(){
+const cv=document.getElementById('fuseViz'),ctx=cv.getContext('2d');
+const sel=document.getElementById('fuseSel');let phase=0,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const txt=css('--text'),dim=css('--text-dim'),bd=css('--border'),acc=css('--accent'),vis='#f2a65a',card=css('--bg-card');
+  ctx.font='12px sans-serif';ctx.textAlign='center';ctx.lineWidth=1.5;
+  const mode=sel.value;
+  // image + encoder on the left
+  ctx.fillStyle=vis;rr(ctx,30,110,70,60,8);ctx.fill();ctx.fillStyle='#fff';ctx.fillText('image',65,145);
+  const t=Math.min(phase,6);
+  function box(x,y,w,h,label,fill){ctx.fillStyle=fill||card;ctx.strokeStyle=bd;rr(ctx,x,y,w,h,8);ctx.fill();ctx.stroke();ctx.fillStyle=txt;ctx.fillText(label,x+w/2,y+h/2+4);}
+  function arrow(x1,y1,x2,y2,col,on){ctx.strokeStyle=on?col:bd;ctx.lineWidth=on?2.5:1.2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();ctx.lineWidth=1.5;}
+  if(mode==='proj'){
+    box(130,115,110,50,'ViT encoder');arrow(100,140,130,140,vis,t>=1);
+    box(270,115,90,50,'MLP projector');arrow(240,140,270,140,vis,t>=2);
+    // sequence row
+    const seqY=230;ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('LLM input sequence',390,seqY-14);ctx.textAlign='center';
+    const toks=['The','<img>','…','…','…','…','looks','like'];
+    toks.forEach((s,i)=>{const x=390+i*58;const isImg=i>=1&&i<=5;const on=isImg?t>=3:true;ctx.fillStyle=isImg?(on?vis:bd):acc;rr(ctx,x,seqY,50,30,6);ctx.fill();ctx.fillStyle='#fff';ctx.fillText(isImg?'v'+i:s,x+25,seqY+19);});
+    arrow(360,140,420,seqY,vis,t>=3);
+    box(390,60,460,40,'LLM blocks (unchanged) → next token',card);arrow(620,seqY,620,100,acc,t>=4);
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('576 visual vectors become 576 extra positions; the LLM cannot tell they are not words.',30,H-14);
+  }else if(mode==='xattn'){
+    box(130,115,110,50,'ViT encoder');arrow(100,140,130,140,vis,t>=1);
+    box(270,115,110,50,'Perceiver resampler');arrow(240,140,270,140,vis,t>=2);
+    ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('64 latent tokens',325,185);
+    // LLM stack with inserted xattn
+    const layers=['self-attn','gated x-attn','MLP','self-attn','gated x-attn','MLP'];
+    layers.forEach((l,i)=>{const y=40+i*40;const isX=l.includes('x-attn');box(560,y,220,30,l,isX?(t>=3?'rgba(242,166,90,0.35)':card):card);
+      if(isX){arrow(380,140,560,y+15,vis,t>=3);}});
+    const seqY=270;['The','image','looks','like'].forEach((s,i)=>{const x=560+i*58;ctx.fillStyle=acc;rr(ctx,x,seqY,50,30,6);ctx.fill();ctx.fillStyle='#fff';ctx.fillText(s,x+25,seqY+19);});
+    arrow(670,seqY,670,280,acc,true);
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('Text sequence length is unchanged; visual K/V are read through new cross-attention blocks (zero-init gates keep the frozen LLM intact).',30,H-14);
+  }else{
+    box(130,115,110,50,'VQ image tokenizer');arrow(100,140,130,140,vis,t>=1);
+    ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('codebook ids: 8192-entry vocab',185,185);
+    const seqY=230;ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('one shared vocabulary',390,seqY-14);ctx.textAlign='center';
+    const toks=['The','#4821','#17','#902','#3','looks','like','#55'];
+    toks.forEach((s,i)=>{const x=390+i*58;const isImg=s.startsWith('#');const on=isImg?t>=2:true;ctx.fillStyle=isImg?(on?vis:bd):acc;rr(ctx,x,seqY,50,30,6);ctx.fill();ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.fillText(s,x+25,seqY+19);ctx.font='12px sans-serif';});
+    arrow(240,140,420,seqY,vis,t>=2);
+    box(390,60,460,40,'one transformer, pretrained on mixed sequences → text OR image tokens out',card);arrow(620,seqY,620,100,acc,t>=3);
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('Images are literally words now: generation of images is just predicting codebook ids and decoding them.',30,H-14);
+  }
+}
+document.getElementById('fusePlay').onclick=()=>{phase=0;if(timer)clearInterval(timer);timer=setInterval(()=>{phase++;draw();if(phase>6){clearInterval(timer);timer=null;}},500);};
+sel.onchange=()=>{phase=6;draw();};phase=6;draw();onTheme(draw);
+})();
+
+// ---------- 2. patchify ----------
+(function(){
+const cv=document.getElementById('patchViz'),ctx=cv.getContext('2d');
+const res=document.getElementById('patchRes'),P=document.getElementById('patchP'),merge=document.getElementById('patchMerge');
+function fmt(b){const u=['B','KB','MB','GB'];let i=0;while(b>=1024&&i<3){b/=1024;i++;}return b.toFixed(b>=10?0:1)+' '+u[i];}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const r=parseInt(res.value),p=parseInt(P.value);const n=Math.floor(r/p);let tok=n*n;if(merge.checked)tok=Math.ceil(n/2)*Math.ceil(n/2);
+  document.getElementById('patchResLabel').textContent=r+' px';
+  document.getElementById('patchTok').textContent=tok.toLocaleString();
+  const kvPerTok=2*32*8*128*2;document.getElementById('patchKV').textContent=fmt(tok*kvPerTok);
+  document.getElementById('patchPrefill').textContent=(tok*2*8e9/1e12).toFixed(1)+' TFLOP';
+  const dim=css('--text-dim'),txt=css('--text');
+  // draw image grid scaled to 240px square
+  const S=240,x0=30,y0=30,cell=S/n;
+  const grid=merge.checked?Math.ceil(n/2):n,gcell=S/grid;
+  for(let i=0;i<grid;i++)for(let j=0;j<grid;j++){const h=(i*grid+j)*137%360;ctx.fillStyle='hsl('+h+',55%,'+(45+(i+j)%2*8)+'%)';ctx.fillRect(x0+j*gcell,y0+i*gcell,Math.max(gcell-1,1),Math.max(gcell-1,1));}
+  ctx.strokeStyle=txt;ctx.strokeRect(x0,y0,S,S);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText(r+'×'+r+' px, '+p+'-px patches → '+n+'×'+n+' grid'+(merge.checked?' → 2×2 merge → '+grid+'×'+grid:''),x0,y0+S+18);
+  // sequence strip
+  const sx=300,sy=60;ctx.fillStyle=txt;ctx.fillText('token sequence ('+tok.toLocaleString()+' visual tokens):',sx,sy-12);
+  const per=Math.min(tok,400);const cw=Math.max(1.2,Math.min(12,(W-sx-30)/Math.min(per,60)));
+  for(let i=0;i<per;i++){const row=Math.floor(i/60),col=i%60;const h=(i*137)%360;ctx.fillStyle='hsl('+h+',55%,50%)';ctx.fillRect(sx+col*(cw+1),sy+row*(cw+1)*1.3,cw,cw);}
+  if(tok>per){ctx.fillStyle=dim;ctx.fillText('… and '+(tok-per).toLocaleString()+' more',sx,sy+8*(cw+1)*1.3+20);}
+  ctx.fillStyle=dim;ctx.fillText('A typical text prompt is 100–1,000 tokens. Visual tokens dominate prefill at any real resolution.',sx,H-14);
+}
+[res,P,merge].forEach(e=>e.oninput=draw);draw();onTheme(draw);
+})();
+
+// ---------- 3. CLIP InfoNCE ----------
+(function(){
+const cv=document.getElementById('clipViz'),ctx=cv.getContext('2d');
+const N=8;let img,txt,step=0,timer=null;
+function rand(){return Array.from({length:N},()=>Array.from({length:4},()=>Math.random()*2-1));}
+function norm(v){const n=Math.hypot(...v);return v.map(x=>x/n);}
+function init(){img=rand().map(norm);txt=rand().map(norm);step=0;}
+function sims(){return img.map(a=>txt.map(b=>a.reduce((s,x,i)=>s+x*b[i],0)));}
+function loss(S){const T=10;let L=0;for(let i=0;i<N;i++){const row=S[i].map(x=>Math.exp(x*T)),col=S.map(r=>Math.exp(r[i]*T));L+=-Math.log(row[i]/row.reduce((a,b)=>a+b,0))-Math.log(col[i]/col.reduce((a,b)=>a+b,0));}return L/(2*N);}
+function train(){ // gradient-free: nudge matching pairs together, others apart
+  const lr=0.08;for(let i=0;i<N;i++){const S=sims();for(let j=0;j<N;j++){const g=(i===j?1:-0.15)*lr*(i===j?(1-S[i][j]):Math.max(0,S[i][j]+0.3));img[i]=img[i].map((x,k)=>x+g*txt[j][k]);txt[j]=txt[j].map((x,k)=>x+g*img[i][k]);}img[i]=norm(img[i]);}
+  txt=txt.map(norm);step++;}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const S=sims(),dim=css('--text-dim'),tx=css('--text');const cell=28,x0=140,y0=40;
+  ctx.font='12px sans-serif';ctx.fillStyle=dim;ctx.textAlign='center';
+  for(let j=0;j<N;j++)ctx.fillText('cap'+j,x0+j*cell+cell/2,y0-8);
+  for(let i=0;i<N;i++){ctx.textAlign='right';ctx.fillText('img'+i,x0-6,y0+i*cell+18);
+    for(let j=0;j<N;j++){const v=S[i][j];const c=v>0?'rgba(56,198,160,'+Math.min(1,v)+')':'rgba(229,96,76,'+Math.min(1,-v)+')';ctx.fillStyle=c;ctx.fillRect(x0+j*cell,y0+i*cell,cell-1,cell-1);
+      if(i===j){ctx.strokeStyle=tx;ctx.lineWidth=1.5;ctx.strokeRect(x0+j*cell+1,y0+i*cell+1,cell-3,cell-3);}}}
+  const L=loss(S);let correct=0;for(let i=0;i<N;i++){if(S[i].indexOf(Math.max(...S[i]))===i)correct++;}
+  document.getElementById('clipStat').textContent='step '+step+' · loss '+L.toFixed(3)+' · '+correct+'/'+N+' images retrieve their own caption';
+  ctx.fillStyle=dim;ctx.textAlign='left';
+  ctx.fillText('cosine similarity: green = similar, red = dissimilar',400,70);
+  ctx.fillText('loss = ½[CE(rows) + CE(cols)], temperature-scaled',400,92);
+  ctx.fillText('the diagonal (outlined) must win every row AND every column',400,114);
+  ctx.fillText('SigLIP: replace the softmax with per-cell sigmoids',400,136);
+}
+document.getElementById('clipPlay').onclick=function(){if(timer){clearInterval(timer);timer=null;this.textContent='▶ Train';return;}this.textContent='⏸ Pause';timer=setInterval(()=>{train();draw();if(step>=60){clearInterval(timer);timer=null;document.getElementById('clipPlay').textContent='▶ Train';}},120);};
+document.getElementById('clipReset').onclick=()=>{if(timer){clearInterval(timer);timer=null;document.getElementById('clipPlay').textContent='▶ Train';}init();draw();};
+init();draw();onTheme(draw);
+})();
+
+// ---------- 4. mel spectrogram ----------
+(function(){
+const cv=document.getElementById('melViz'),ctx=cv.getContext('2d');
+const SR=8000,DUR=1.0,N=SR*DUR;const wave=new Float32Array(N);
+for(let i=0;i<N;i++){const t=i/SR;wave[i]=0.6*Math.sin(2*Math.PI*(200+1800*t)*t)+0.35*Math.sin(2*Math.PI*300*t)+(Math.random()-0.5)*0.08;}
+const WIN=200,HOP=80,NB=32;const frames=Math.floor((N-WIN)/HOP);
+const spec=[];for(let f=0;f<frames;f++){const col=new Float32Array(NB);for(let b=0;b<NB;b++){const fr=100*Math.pow(2,b/NB*5.3);let re=0,im=0;for(let k=0;k<WIN;k++){const w=0.5-0.5*Math.cos(2*Math.PI*k/WIN);const ph=2*Math.PI*fr*(f*HOP+k)/SR;re+=wave[f*HOP+k]*w*Math.cos(ph);im-=wave[f*HOP+k]*w*Math.sin(ph);}col[b]=Math.log(1e-3+Math.hypot(re,im)/WIN*4);}spec.push(col);}
+let cur=0,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),acc=css('--accent'),warn='#f2a65a';
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=dim;ctx.fillText('waveform (1 s, 8 kHz)',30,22);
+  const wx=30,ww=W-60,wy=70;ctx.strokeStyle=acc;ctx.lineWidth=1;ctx.beginPath();for(let i=0;i<N;i+=4){const x=wx+ww*i/N,y=wy+wave[i]*34;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();
+  // window highlight
+  const fx=wx+ww*(cur*HOP)/N,fw=ww*WIN/N;ctx.fillStyle='rgba(242,166,90,0.3)';ctx.fillRect(fx,wy-40,fw,80);ctx.strokeStyle=warn;ctx.strokeRect(fx,wy-40,fw,80);
+  ctx.fillStyle=dim;ctx.fillText('25 ms window, 10 ms hop → frame '+cur+' / '+frames,30,128);
+  // spectrogram
+  const sy=150,sh=120,cw=ww/frames;ctx.fillText('mel spectrogram (low freq at bottom, mel-spaced bins)',30,sy-6);
+  for(let f=0;f<=cur&&f<frames;f++)for(let b=0;b<NB;b++){const v=Math.max(0,Math.min(1,(spec[f][b]+6)/6));ctx.fillStyle='hsl('+(260-v*220)+',80%,'+(20+v*45)+'%)';ctx.fillRect(wx+f*cw,sy+sh-(b+1)*sh/NB,Math.ceil(cw),sh/NB+0.5);}
+  ctx.strokeStyle=warn;ctx.strokeRect(wx+cur*cw,sy,Math.max(cw,2),sh);
+}
+function tick(){if(cur<frames-1){cur++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('melPlay').textContent='▶ Play';}}
+document.getElementById('melPlay').onclick=function(){if(timer){stop();return;}if(cur>=frames-1)cur=0;this.textContent='⏸ Pause';timer=setInterval(tick,40);};
+document.getElementById('melReset').onclick=()=>{stop();cur=0;draw();};
+cur=frames-1;draw();cur=0;draw();onTheme(draw);
+})();
+
+// ---------- 5. RVQ ----------
+(function(){
+const cv=document.getElementById('rvqViz'),ctx=cv.getContext('2d');
+const STAGES=4,K=8;let books,z,recon,resid,stage;
+function rnd(s){return (Math.random()*2-1)*s;}
+function init(){books=[];for(let s=0;s<STAGES;s++){const sc=1/Math.pow(2.2,s);books.push(Array.from({length:K},()=>[rnd(sc),rnd(sc)]));}z=[rnd(0.9),rnd(0.9)];recon=[0,0];resid=[...z];stage=0;}
+function step(){if(stage>=STAGES)return;const b=books[stage];let best=0,bd=1e9;b.forEach((c,i)=>{const d=Math.hypot(resid[0]-c[0],resid[1]-c[1]);if(d<bd){bd=d;best=i;}});recon=[recon[0]+b[best][0],recon[1]+b[best][1]];resid=[z[0]-recon[0],z[1]-recon[1]];stage++;}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),tx=css('--text');
+  const cx=200,cy=H/2,S=110;const cols=['#5b8cff','#38c6a0','#f2a65a','#b07cff'];
+  ctx.strokeStyle=css('--border');ctx.strokeRect(cx-S,cy-S,2*S,2*S);
+  // codebooks relative to current recon position: draw stage s codes centered at recon before that stage? draw all at origin for clarity
+  books.forEach((b,s)=>{if(s>stage)return;ctx.fillStyle=cols[s];ctx.globalAlpha=s===stage?1:0.35;b.forEach(c=>{ctx.beginPath();ctx.arc(cx+c[0]*S+(s<stage?0:recon[0]*S),cy-c[1]*S-(s<stage?0:recon[1]*S),4,0,7);ctx.fill();});ctx.globalAlpha=1;});
+  // target star
+  ctx.fillStyle=tx;ctx.font='18px sans-serif';ctx.textAlign='center';ctx.fillText('★',cx+z[0]*S,cy-z[1]*S+6);
+  // recon diamond
+  ctx.fillStyle='#e5604c';ctx.fillText('◆',cx+recon[0]*S,cy-recon[1]*S+6);
+  ctx.strokeStyle='#e5604c';ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(cx+recon[0]*S,cy-recon[1]*S);ctx.lineTo(cx+z[0]*S,cy-z[1]*S);ctx.stroke();ctx.setLineDash([]);
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=dim;
+  ctx.fillText('★ latent z   ◆ reconstruction   dashed = residual',360,50);
+  for(let s=0;s<STAGES;s++){ctx.fillStyle=cols[s];ctx.fillRect(360,70+s*24,12,12);ctx.fillStyle=s<stage?tx:dim;ctx.fillText('codebook '+(s+1)+(s<stage?' — code chosen, residual passed on':s===stage?' — quantizing current residual (dots drawn around ◆)':''),380,81+s*24);}
+  const err=Math.hypot(resid[0],resid[1]);
+  document.getElementById('rvqStat').textContent='stage '+stage+'/'+STAGES+' · residual error '+err.toFixed(3)+' · bits used '+(stage*3);
+  ctx.fillStyle=dim;ctx.fillText('Each stage adds 3 bits (8 codes) and shrinks the error; codebooks shrink in scale stage by stage.',360,H-20);
+}
+document.getElementById('rvqStep').onclick=()=>{step();draw();};
+document.getElementById('rvqReset').onclick=()=>{init();draw();};
+init();draw();onTheme(draw);
+})();
+
+// ---------- 6. farthest point sampling ----------
+(function(){
+const cv=document.getElementById('fpsViz'),ctx=cv.getContext('2d');
+const NPTS=400,K=14;let pts,centers,groups,dist;
+function init(){pts=[];for(let i=0;i<NPTS;i++){const r=Math.random();let x,y;if(r<0.5){x=120+Math.random()*180;y=60+Math.random()*180;}else if(r<0.8){const a=Math.random()*6.28,rad=60+Math.random()*25;x=520+rad*Math.cos(a);y=150+rad*Math.sin(a);}else{x=680+Math.random()*180;y=200+Math.random()*60;}pts.push([x,y]);}
+  centers=[];groups=null;dist=new Array(NPTS).fill(Infinity);}
+function sample(){let idx;if(!centers.length)idx=Math.floor(Math.random()*NPTS);else{idx=0;let m=-1;dist.forEach((d,i)=>{if(d>m){m=d;idx=i;}});}
+  centers.push(idx);pts.forEach((p,i)=>{const d=Math.hypot(p[0]-pts[idx][0],p[1]-pts[idx][1]);if(d<dist[i])dist[i]=d;});groups=null;}
+function group(){groups=centers.map(c=>pts.map((p,i)=>[Math.hypot(p[0]-pts[c][0],p[1]-pts[c][1]),i]).sort((a,b)=>a[0]-b[0]).slice(0,K).map(x=>x[1]));}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),acc=css('--accent');
+  ctx.fillStyle=dim;pts.forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],2,0,7);ctx.fill();});
+  if(groups){groups.forEach((g,ci)=>{const c=pts[centers[ci]];ctx.strokeStyle='hsla('+(ci*47%360)+',70%,55%,0.7)';g.forEach(i=>{ctx.beginPath();ctx.moveTo(c[0],c[1]);ctx.lineTo(pts[i][0],pts[i][1]);ctx.stroke();});});}
+  centers.forEach((c,ci)=>{ctx.fillStyle='hsl('+(ci*47%360)+',70%,55%)';ctx.beginPath();ctx.arc(pts[c][0],pts[c][1],6,0,7);ctx.fill();ctx.strokeStyle='#fff';ctx.stroke();});
+  ctx.font='12px sans-serif';ctx.fillStyle=dim;ctx.textAlign='left';
+  document.getElementById('fpsStat').textContent=centers.length+' centers'+(groups?' · '+centers.length+' groups of '+K+' → '+centers.length+' tokens':'');
+  ctx.fillText('dense blob, sparse ring, thin bar: FPS spreads centers by distance, not by density',30,H-14);
+}
+document.getElementById('fpsStep').onclick=()=>{if(centers.length<24){sample();draw();}};
+document.getElementById('fpsGroup').onclick=()=>{if(centers.length){group();draw();}};
+document.getElementById('fpsReset').onclick=()=>{init();draw();};
+init();draw();onTheme(draw);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+Vendored from https://github.com/rasbt/llm-architecture-gallery (Apache License 2.0, Sebastian Raschka).
+models.yml is the per-model metadata behind https://sebastianraschka.com/llm-architecture-gallery/ ; learn/gallery.html is generated from it by scripts/build_gallery.py.
+Architecture figures are not included in this repo; gallery.html loads them from sebastianraschka.com and credits the author.

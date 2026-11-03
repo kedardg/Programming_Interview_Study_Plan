@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RL &amp; Robot Learning</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links"><a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="robot-learning.html" class="here">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<main>
+<h1>Reinforcement Learning &amp; Robot Learning</h1>
+<p class="dim">From Markov decision processes to vision-language-action models: the math of learning from reward, why robots make it hard, how imitation learning took over, and how the same PPO/GRPO that aligns LLMs now trains policies that fold laundry. Companion to Step 19 of the study plan (<a href="https://arxiv.org/abs/2510.12403">Robot Learning: A Tutorial</a> and <a href="https://github.com/huggingface/lerobot">LeRobot</a>).</p>
+
+<h2 id="mdp">1. RL foundations: the MDP and the Bellman equation</h2>
+<p>Supervised learning is told the right answer. Reinforcement learning is only told how well it did, later, and must work out which of its actions deserve the credit. The formal object is the <strong>Markov decision process</strong>: a tuple (S, A, P, R, γ). At each step the agent observes a state <em>s ∈ S</em>, picks an action <em>a ∈ A</em>, the environment samples the next state from <em>P(s′ | s, a)</em> and emits a reward <em>R(s, a, s′)</em>. The discount <em>γ ∈ [0,1)</em> makes an infinite sum finite and encodes a preference for sooner reward. The Markov property — the next state depends only on the current state and action — is what makes everything below tractable, and is exactly what robots violate (Section 3).</p>
+<p>The agent's goal is to maximize the <strong>return</strong>, the discounted sum of future rewards <em>G<sub>t</sub> = r<sub>t+1</sub> + γ r<sub>t+2</sub> + γ² r<sub>t+3</sub> + …</em>. Because the future is random, we reason about expectations. The <strong>state-value function</strong> <em>V<sup>π</sup>(s) = E<sub>π</sub>[G<sub>t</sub> | s<sub>t</sub> = s]</em> says how good it is to be in <em>s</em> and then follow policy π; the <strong>action-value function</strong> <em>Q<sup>π</sup>(s, a)</em> says how good it is to take <em>a</em> first and follow π afterwards. Both satisfy a recursive consistency condition, the <strong>Bellman equation</strong>, which is the whole engine of RL:</p>
+<div class="formula">V<sup>π</sup>(s) = Σ<sub>a</sub> π(a|s) Σ<sub>s′</sub> P(s′|s,a) [ R(s,a,s′) + γ V<sup>π</sup>(s′) ]
+
+Q*(s,a) = Σ<sub>s′</sub> P(s′|s,a) [ R(s,a,s′) + γ max<sub>a′</sub> Q*(s′,a′) ]      ← Bellman optimality</div>
+<p>"The value of now equals the immediate reward plus the discounted value of next." The optimal policy is then greedy: <em>π*(s) = argmax<sub>a</sub> Q*(s, a)</em>. Everything from tabular Q-learning to PPO to GRPO is a method for estimating these quantities when <em>P</em> is unknown and <em>S</em> is enormous.</p>
+
+<h3>Worked example: a 3-state chain</h3>
+<p>States {A, B, C}, C is terminal. In A or B you can <em>stay</em> (reward 0) or <em>advance</em> (reward −1 for the effort, except B→C which pays +10). γ = 0.9, transitions deterministic. Compute V* by backward induction from the terminal state:</p>
+<table class="cmp">
+<tr><th>State</th><th>Option</th><th>Immediate r</th><th>+ γ · V*(next)</th><th>Q*</th><th>V* = max</th></tr>
+<tr><td>C (terminal)</td><td>—</td><td>—</td><td>—</td><td>—</td><td><strong>0</strong></td></tr>
+<tr><td rowspan="2">B</td><td>advance → C</td><td>+10</td><td>0.9 × 0 = 0</td><td>10.0</td><td rowspan="2"><strong>10.0</strong></td></tr>
+<tr><td>stay → B</td><td>0</td><td>0.9 × V*(B) = 9.0</td><td>9.0</td></tr>
+<tr><td rowspan="2">A</td><td>advance → B</td><td>−1</td><td>0.9 × 10 = 9.0</td><td>8.0</td><td rowspan="2"><strong>8.0</strong></td></tr>
+<tr><td>stay → A</td><td>0</td><td>0.9 × V*(A) = 7.2</td><td>7.2</td></tr>
+</table>
+<p>Note the fixed point in the "stay" rows: V*(A) appears on both sides, and 8.0 is the unique solution of V = max(0 + 0.9V, 8). That self-reference is why we solve Bellman equations by <em>iteration</em> (value iteration, or its sample-based cousin Q-learning) rather than in closed form.</p>
+
+<div class="card">
+<h3>Animation: tabular Q-learning in a gridworld</h3>
+<canvas id="gridViz" class="viz" width="900" height="420"></canvas>
+<div class="controls">
+  <button class="btn" id="gridPlay">▶ Play</button>
+  <button class="btn secondary" id="gridStep">Step</button>
+  <button class="btn secondary" id="gridReset">Reset</button>
+  <label class="ctl">ε (explore) <input type="range" id="gridEps" min="0" max="100" value="20"> <span id="gridEpsL">0.20</span></label>
+  <label class="ctl">α (learning rate) <input type="range" id="gridAlpha" min="1" max="100" value="30"> <span id="gridAlphaL">0.30</span></label>
+  <span class="dim" id="gridStats"></span>
+</div>
+<p class="caption">The agent (dot) starts bottom-left; the star pays +1, the red pits pay −1 and end the episode, every step costs −0.04. Cell shading is max<sub>a</sub> Q(s,a) (green good, red bad), arrows are the current greedy policy. Watch value propagate backwards from the goal one cell per visit — that is the Bellman equation being applied as a <em>sample update</em>: Q(s,a) ← Q(s,a) + α [ r + γ max<sub>a′</sub> Q(s′,a′) − Q(s,a) ]. Set ε to 0 early and the agent locks into the first path it finds; raise α and the values jitter — the two classic RL dials.</p>
+</div>
+
+<h3>Three distinctions you must be able to explain</h3>
+<p><strong>Exploration vs exploitation.</strong> A greedy agent repeats the best action it knows; it never learns that an untried action was better. ε-greedy (random action with probability ε), optimistic initialization, entropy bonuses, and curiosity are all ways to pay a short-term cost for information. In the gridworld, the entire difference between finding the short path and settling for a long one is ε.</p>
+<p><strong>On-policy vs off-policy.</strong> An on-policy method (SARSA, REINFORCE, PPO) evaluates and improves the policy that generated the data, so the data is thrown away after each update. An off-policy method (Q-learning, DQN, SAC) learns about the greedy policy from data generated by any behavior policy — which is what lets it reuse a replay buffer and, in robotics, learn from logged demonstrations. Q-learning's <em>max</em> in the target is exactly what makes it off-policy: it asks "what would the best action have been?" regardless of what was actually taken.</p>
+<p><strong>Model-free vs model-based.</strong> Model-free methods learn V, Q, or π directly from experience. Model-based methods learn (or are given) <em>P</em> and <em>R</em> and plan in the model — vastly more sample-efficient when the model is good, catastrophic when it is not. Robotics lives on this boundary: physics simulators are models (Section 3), and learned <em>world models</em> (Section 6) are the modern attempt to get sample efficiency without hand-written physics.</p>
+
+<h2 id="deeprl">2. Deep RL: from tables to gradients</h2>
+<p>Tables die at the first camera image. Deep RL replaces the table with a network — but naively plugging a network into Q-learning diverges, because the target <em>r + γ max Q(s′,·)</em> moves every time the weights move, and consecutive samples are correlated. <strong>DQN</strong> (2015) added two stabilizers that are now everywhere: a <strong>replay buffer</strong> (sample random minibatches of past transitions to break correlation and reuse data) and a <strong>target network</strong> (a frozen copy of Q used for the targets, synced every few thousand steps). Double DQN, dueling heads, prioritized replay, and distributional Q (Rainbow) are refinements; the two stabilizers are the idea.</p>
+
+<h3>Policy gradients: optimizing the policy directly</h3>
+<p>Q-learning learns values and derives a policy. Policy-gradient methods parameterize the policy π<sub>θ</sub>(a|s) directly — essential when actions are continuous (joint torques) and argmax over actions is impossible. We want ∇<sub>θ</sub> J(θ) where J is the expected return. The trick is the <strong>log-derivative identity</strong> ∇p = p ∇log p, which turns a gradient of an expectation into an expectation of a gradient we can sample:</p>
+<div class="formula">J(θ) = E<sub>τ~π<sub>θ</sub></sub>[ R(τ) ]
+
+∇<sub>θ</sub> J = ∇<sub>θ</sub> ∫ p<sub>θ</sub>(τ) R(τ) dτ = ∫ p<sub>θ</sub>(τ) ∇<sub>θ</sub> log p<sub>θ</sub>(τ) R(τ) dτ = E<sub>τ</sub>[ ∇<sub>θ</sub> log p<sub>θ</sub>(τ) · R(τ) ]
+
+and since the dynamics P(s′|s,a) don't depend on θ, log p<sub>θ</sub>(τ) = Σ<sub>t</sub> log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) + const:
+
+∇<sub>θ</sub> J = E[ Σ<sub>t</sub> ∇<sub>θ</sub> log π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) · G<sub>t</sub> ]        ← REINFORCE (with reward-to-go G<sub>t</sub>)</div>
+<p>Read it as: <em>increase the log-probability of actions that were followed by high return, decrease those followed by low return, in proportion.</em> It is unbiased and horribly high-variance. Two fixes make it practical. A <strong>baseline</strong> b(s) subtracted from G<sub>t</sub> leaves the gradient unbiased but shrinks variance; the natural baseline is V(s), giving the <strong>advantage</strong> A(s,a) = Q(s,a) − V(s): "how much better than average was this action?" Learning V with a second network makes it an <strong>actor-critic</strong>. <strong>GAE</strong> (generalized advantage estimation) blends one-step TD errors δ<sub>t</sub> = r<sub>t</sub> + γV(s<sub>t+1</sub>) − V(s<sub>t</sub>) over horizons with a λ-weighted sum, trading bias for variance with one knob.</p>
+
+<div class="card">
+<h3>Animation: the policy gradient as "upweight what worked"</h3>
+<canvas id="pgViz" class="viz" width="900" height="330"></canvas>
+<div class="controls">
+  <button class="btn" id="pgStep">Sample batch &amp; update</button>
+  <button class="btn secondary" id="pgReset">Reset</button>
+  <label class="ctl">batch size <input type="range" id="pgN" min="4" max="32" value="12"> <span id="pgNL">12</span></label>
+  <span class="dim" id="pgStats"></span>
+</div>
+<p class="caption">A Gaussian policy over launch angle (mean μ, std σ) fires shots from the left toward the target. Each update samples a batch, scores every shot by −distance, subtracts the batch mean (the baseline), and nudges μ toward above-average shots (thick green) and away from below-average ones (thin red) — literally ∇log π · A. σ shrinks as the policy gets confident. Small batches wobble; large batches converge smoothly: variance is the whole story of policy gradients.</p>
+</div>
+
+<h3>PPO: the default algorithm, in RL and in RLHF</h3>
+<p>Vanilla policy gradient has a step-size problem: one large update can move the policy into a region where its own data is useless, and recovery is slow. TRPO solved this with a KL-constrained trust region; <strong>PPO</strong> gets most of the benefit with a clipped surrogate objective that is just a few lines of code:</p>
+<div class="formula">ratio r<sub>t</sub>(θ) = π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) / π<sub>θ<sub>old</sub></sub>(a<sub>t</sub>|s<sub>t</sub>)
+
+L<sup>CLIP</sup>(θ) = E<sub>t</sub>[ min( r<sub>t</sub> Â<sub>t</sub> ,  clip(r<sub>t</sub>, 1−ε, 1+ε) Â<sub>t</sub> ) ]      ε ≈ 0.2
+
+total loss = −L<sup>CLIP</sup> + c<sub>1</sub> · (V<sub>θ</sub>(s<sub>t</sub>) − V<sub>target</sub>)² − c<sub>2</sub> · H[π<sub>θ</sub>(·|s<sub>t</sub>)]</div>
+<p>The <em>min</em> with the clipped ratio removes the incentive to move the probability ratio beyond [1−ε, 1+ε] in the direction the advantage favors: the objective goes flat there, so the gradient is zero. That lets you take several epochs of minibatch SGD on the same batch of rollouts (sample efficiency) without the policy running away (stability). PPO is the default for continuous control, for Atari, for Dota, and — crucially for this plan — for <strong>RLHF</strong>: the same clipped objective, with the LLM as the policy, a reward model as R, and a KL penalty to the SFT model (<a href="training.html">Chapter 11</a>). GRPO is PPO with the critic removed and the baseline replaced by the group mean. Once you have read the code below, you have read the heart of both.</p>
+<div class="formula"># Minimal PPO update (discrete or continuous actions via `dist`) — the whole algorithm minus rollout plumbing
+import torch, torch.nn.functional as F
+
+def ppo_update(policy, value_fn, opt, batch, clip_eps=0.2, vf_coef=0.5, ent_coef=0.01, epochs=4, mb=64):
+    obs, act, old_logp, ret, adv = batch          # tensors collected under pi_old; adv from GAE, ret = adv + V_old
+    adv = (adv - adv.mean()) / (adv.std() + 1e-8)  # per-batch advantage normalization: cheap variance reduction
+    n = obs.shape[0]
+    for _ in range(epochs):                        # several passes over the SAME data is the point of clipping
+        for idx in torch.randperm(n).split(mb):
+            dist = policy(obs[idx])                # e.g. torch.distributions.Normal(mu, sigma) for robot joints
+            logp = dist.log_prob(act[idx]).sum(-1) # sum over action dims (independent Gaussians)
+            ratio = torch.exp(logp - old_logp[idx])            # pi_theta / pi_old, computed in log space
+            surr1 = ratio * adv[idx]
+            surr2 = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * adv[idx]
+            policy_loss = -torch.min(surr1, surr2).mean()      # L^CLIP, negated because we minimize
+            value_loss = F.mse_loss(value_fn(obs[idx]).squeeze(-1), ret[idx])
+            entropy = dist.entropy().sum(-1).mean()            # keeps exploring; the c2 term
+            loss = policy_loss + vf_coef * value_loss - ent_coef * entropy
+            opt.zero_grad(); loss.backward()
+            torch.nn.utils.clip_grad_norm_(list(policy.parameters()) + list(value_fn.parameters()), 0.5)
+            opt.step()
+    # Swap in RLHF: obs = prompt+partial response, act = next token, dist = LM softmax,
+    # ret/adv from a reward model on the full completion, plus a KL(pi || pi_sft) penalty in the reward.</div>
+
+<h3>Off-policy actor-critics for continuous control</h3>
+<p><strong>SAC</strong> (soft actor-critic) maximizes return <em>plus</em> policy entropy, <em>J = Σ E[r + α H(π(·|s))]</em>, with twin Q-networks and a replay buffer. The entropy term keeps exploration alive automatically (α is tuned online), and the off-policy buffer makes it 10–100× more sample-efficient than PPO on real robots, where every sample costs wall-clock time and wear. It is the standard choice when you can run RL on hardware at all. <strong>TD3</strong> is its deterministic sibling: twin critics (take the min to fight overestimation), delayed policy updates, and target-policy smoothing noise; simpler, slightly more brittle. DDPG is the ancestor of both and mostly of historical interest.</p>
+
+<h2 id="robots">3. The robotics problem: why the clean MDP breaks</h2>
+<p>Every assumption above gets stressed on a real robot:</p>
+<ul>
+<li><strong>Continuous, high-dimensional actions.</strong> A 7-DoF arm plus gripper is an 8-vector of joint commands per step; a humanoid is 30–50. Argmax over actions is impossible; policies must be parametric distributions (Gaussian, or now diffusion/flow, Section 4).</li>
+<li><strong>Partial observability.</strong> Cameras don't see occluded objects, forces, or friction; the "state" is a history of observations, which is why policies take image stacks or recurrent/transformer context — and why the Markov property is a fiction we manage with memory.</li>
+<li><strong>Real time.</strong> Control loops run at 10–50 Hz (sometimes 200–1000 Hz at the torque level). A policy that takes 300 ms per decision needs <em>action chunking</em> or asynchronous inference (Section 5) to keep the robot moving smoothly.</li>
+<li><strong>Expensive, unsafe data.</strong> A simulator gives a million steps per hour; a real robot gives thousands, breaks things, and needs a human to reset the scene. Sample efficiency is not academic.</li>
+<li><strong>No reset.</strong> Episodes don't end cleanly; the cup is on the floor now. Reset-free and autonomous-recovery methods are a research area of their own.</li>
+<li><strong>The sim-to-real gap.</strong> A policy trained in simulation meets different friction, latency, lighting, and camera noise in reality. <strong>Domain randomization</strong> (train across randomized physics and visuals so the real world looks like one more sample) and <strong>system identification</strong> (fit the simulator's parameters to the real robot) are the two standard answers; both are easier for locomotion than for contact-rich manipulation, which is why manipulation went the imitation route.</li>
+</ul>
+<p><strong>Observation and action spaces in practice.</strong> A typical LeRobot dataset row carries <code>observation.images.*</code> (one or more RGB cameras), <code>observation.state</code> (joint positions, sometimes velocities), and <code>action</code> — either target joint positions (position control, the common case for cheap arms like the SO-100) or end-effector deltas (Δx, Δy, Δz, Δrotation, gripper). Position targets are easier to learn and safer than torques; end-effector deltas transfer better across robots with the same hand but different kinematics.</p>
+<p><strong>Action chunking.</strong> Instead of one action per inference, the policy emits a <em>chunk</em> of the next k (e.g. 50) actions. It reduces inference frequency, smooths motion, and — the surprising part from the ACT paper — reduces compounding error, because the policy commits to a coherent short plan instead of re-deciding (and re-dithering) every 20 ms. Temporal ensembling overlaps successive chunks with exponential weights for smoothness.</p>
+
+<div class="card">
+<h3>Animation: a 2-link arm, random policy vs trained policy</h3>
+<canvas id="armViz" class="viz" width="900" height="380"></canvas>
+<div class="controls">
+  <button class="btn" id="armPlay">▶ Play</button>
+  <button class="btn secondary" id="armReset">New target</button>
+  <label class="ctl">chunk size k <input type="range" id="armChunk" min="1" max="20" value="8"> <span id="armChunkL">8</span></label>
+</div>
+<p class="caption">Left: a policy that samples random joint deltas — it wanders, rarely reaches, and jitters. Right: a trained policy (here, inverse kinematics plus a smooth interpolation standing in for a learned one) that reaches in a straight end-effector line. Below each arm, the action-chunk timeline: the trained policy runs inference once per k steps (dark ticks) and executes the chunk open-loop in between; the random one "infers" every step. Raise k and inference load drops while motion stays smooth — until k is so large the policy can't react to a moved target.</p>
+</div>
+
+<h2 id="il">4. Imitation learning: the route that actually worked for manipulation</h2>
+<p>If reward engineering, resets, and safety make RL on a real arm painful, the pragmatic alternative is to <em>show</em> the robot. <strong>Behavioral cloning (BC)</strong> treats demonstrations as a supervised dataset: regress action from observation, minimizing ‖π<sub>θ</sub>(o) − a*‖. It is embarrassingly simple and, with enough demos and the right output distribution, it is the backbone of every modern manipulation policy.</p>
+<p>Its classic failure is <strong>covariate shift</strong>: the demonstrator never visited the slightly-off states the learner drifts into, so the learner's error compounds — a small mistake leads to an unfamiliar state, which produces a bigger mistake. Over a horizon T the error grows O(T²) in the worst case, versus O(T) for a policy trained on its own state distribution. <strong>DAgger</strong> fixes it by rolling out the learner, having the expert label the states it actually visits, and retraining on the union — effective, but it needs an expert on call during training. The modern remedies are architectural: predict chunks (ACT) and predict <em>distributions</em> (diffusion), both of which make the learner far less likely to drift in the first place.</p>
+
+<h3>ACT: action chunking with transformers</h3>
+<p>ACT (2023, the ALOHA paper) feeds images (ResNet features) and joint state into a transformer encoder-decoder that outputs a chunk of k actions at once. Because human demonstrations of the same task vary (multimodal data — two different but valid ways to grasp), a plain L1 regression averages them into a useless middle. ACT wraps the policy in a <strong>CVAE</strong>: a style variable z, inferred from the demo at training time, is decoded alongside the observations, and set to its prior mean at test time. The result reached 80–90% success on fine bimanual tasks (ziploc bags, battery insertion) from ~50 demos per task on $20k hardware, and is still the first thing to try on a new LeRobot setup.</p>
+
+<h3>Diffusion Policy: actions as a denoising process</h3>
+<p>The cleaner solution to multimodal demonstrations is to stop regressing and start <em>sampling</em>. <strong>Diffusion Policy</strong> (2023) models the conditional distribution over action chunks p(a<sub>t:t+k</sub> | o<sub>t</sub>) with a DDPM: training adds Gaussian noise to demonstration action chunks at a random noise level and trains a network ε<sub>θ</sub>(a<sup>noisy</sup>, o, step) to predict the noise; inference starts from pure noise and runs the learned reverse process for K steps (DDIM reduces K from 100 to ~10 for real-time use). Gradient fields of a denoiser can represent arbitrarily multimodal distributions, which is why diffusion policies handle "left or right around the obstacle" where BC with an MSE head would drive straight into it. The price is inference cost: K forward passes per chunk, which action chunking amortizes.</p>
+
+<div class="card">
+<h3>Animation: a diffusion policy denoising a trajectory</h3>
+<canvas id="diffViz" class="viz" width="900" height="340"></canvas>
+<div class="controls">
+  <button class="btn" id="diffPlay">▶ Denoise</button>
+  <button class="btn secondary" id="diffStep">Step</button>
+  <button class="btn secondary" id="diffReset">Resample noise</button>
+  <label class="ctl">DDIM steps <input type="range" id="diffK" min="4" max="50" value="16"> <span id="diffKL">16</span></label>
+  <span class="dim" id="diffStats"></span>
+</div>
+<p class="caption">Start: a 24-waypoint action chunk that is pure Gaussian noise. Each step the "denoiser" (here an analytic stand-in that knows the clean demonstration path) removes a scheduled fraction of noise, exactly as ε<sub>θ</sub> would. Fewer DDIM steps means faster inference and a slightly rougher path — the real trade-off on a 50 Hz control loop. The dashed curve is one of two valid demonstrations (left or right around the obstacle); resample noise and the sampler may commit to the other mode — the multimodality that MSE regression cannot express.</p>
+</div>
+
+<p><strong>Flow matching</strong> is the current refinement: instead of a stochastic reverse diffusion, learn a velocity field v<sub>θ</sub>(a<sup>t</sup>, o, t) that transports noise to data along straight-line paths, and integrate it with a handful of Euler steps. Same expressivity, simpler objective (regress the velocity (a − noise) at interpolated points), fewer inference steps. π0 and its descendants use flow matching in their action experts.</p>
+<div class="formula"># Behavioral cloning over a LeRobot-format dataset (episodes of observation.image / observation.state / action)
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
+import torch, torch.nn as nn
+
+# delta_timestamps asks the loader for an action CHUNK: the next 16 actions at 50 Hz (0.02 s apart)
+ds = LeRobotDataset("lerobot/pusht", delta_timestamps={"action": [i / 50 for i in range(16)]})
+loader = torch.utils.data.DataLoader(ds, batch_size=64, shuffle=True, num_workers=4)
+
+class BCPolicy(nn.Module):
+    def __init__(self, state_dim=2, act_dim=2, chunk=16):
+        super().__init__()
+        self.vision = torchvision_resnet18_trunk()          # (B,3,96,96) -> (B,512); any pretrained trunk works
+        self.head = nn.Sequential(nn.Linear(512 + state_dim, 512), nn.ReLU(), nn.Linear(512, act_dim * chunk))
+        self.chunk, self.act_dim = chunk, act_dim
+    def forward(self, img, state):
+        z = torch.cat([self.vision(img), state], -1)
+        return self.head(z).view(-1, self.chunk, self.act_dim)  # one forward pass -> a whole action chunk
+
+policy, opt = BCPolicy().cuda(), torch.optim.AdamW(BCPolicy().parameters(), lr=1e-4)
+for batch in loader:
+    img, state, act = batch["observation.image"].cuda(), batch["observation.state"].cuda(), batch["action"].cuda()
+    loss = nn.functional.l1_loss(policy(img, state), act)   # L1 (as in ACT) is more robust than MSE to outlier demos
+    opt.zero_grad(); loss.backward(); opt.step()
+
+# Diffusion Policy swaps the head and the loss for noise prediction:
+def diffusion_loss(eps_net, act_chunk, cond, alphas_cumprod):
+    B = act_chunk.shape[0]
+    t = torch.randint(0, len(alphas_cumprod), (B,), device=act_chunk.device)      # random noise level per sample
+    noise = torch.randn_like(act_chunk)
+    a_bar = alphas_cumprod[t].view(B, 1, 1)
+    noisy = a_bar.sqrt() * act_chunk + (1 - a_bar).sqrt() * noise                  # forward diffusion q(a_t | a_0)
+    return nn.functional.mse_loss(eps_net(noisy, cond, t), noise)                   # predict the noise you added
+# Inference: start from randn, loop t = T..1 applying the DDPM/DDIM update with eps_net; execute the resulting chunk.</div>
+
+<h2 id="vla">5. Generalist policies and vision-language-action models</h2>
+<p>ACT and Diffusion Policy are <em>one task, one robot, ~50 demos</em>. The 2022–2026 story is the same one that played out in NLP a few years earlier: pool data across tasks and robots, put a big pretrained backbone in front, and let language be the task specification.</p>
+<table class="cmp">
+<tr><th>Model</th><th>Year</th><th>Backbone</th><th>Action representation</th><th>Data</th><th>Size</th></tr>
+<tr><td>RT-1</td><td>2022</td><td>EfficientNet + FiLM language conditioning, transformer</td><td>Discretized bins (256 per dim), tokens</td><td>130k real episodes, 700 tasks, one robot</td><td>35M</td></tr>
+<tr><td>RT-2</td><td>2023</td><td>PaLI-X / PaLM-E VLM, co-fine-tuned on web + robot data</td><td>Actions emitted as <em>text tokens</em> ("1 128 91 241 …")</td><td>RT-1 data + internet VQA</td><td>5–55B</td></tr>
+<tr><td>Octo / OXE</td><td>2023</td><td>Small transformer, diffusion action head</td><td>Diffusion over chunks</td><td>Open X-Embodiment: 1M+ episodes, 22 robots</td><td>27–93M</td></tr>
+<tr><td>OpenVLA</td><td>2024</td><td>Llama-2 7B + SigLIP &amp; DINOv2 dual encoders (Prismatic)</td><td>256-bin discretization overwriting the LM's rarest tokens</td><td>970k OXE episodes</td><td>7B</td></tr>
+<tr><td>π0</td><td>2024</td><td>PaliGemma 3B VLM + 300M <em>action expert</em> (MoE-style second set of weights)</td><td>Continuous chunks of 50, flow matching</td><td>10k+ hours, 7 robot types, cross-embodiment</td><td>3.3B</td></tr>
+<tr><td>π0.5</td><td>2025</td><td>π0 + co-training on web, subtask prediction, open-world data</td><td>Discrete (subtask language) then continuous (flow) in one model</td><td>Heterogeneous: mobile manipulation across homes</td><td>~3B</td></tr>
+<tr><td>GR00T N1</td><td>2025</td><td>Eagle VLM + diffusion-transformer action module (System 2 / System 1)</td><td>Flow-matching chunks</td><td>Real + synthetic + human video</td><td>2B</td></tr>
+<tr><td>SmolVLA</td><td>2025</td><td>SmolVLM-2 (pruned) + flow-matching action expert; LeRobot's open VLA</td><td>Continuous chunks, async inference</td><td>Community LeRobot datasets (~30k episodes)</td><td>450M</td></tr>
+<tr><td>Gemini Robotics</td><td>2025</td><td>Gemini 2.0 VLA with an on-robot local action decoder</td><td>Continuous, with cloud-backbone / local-decoder split</td><td>Proprietary ALOHA-2 fleet + web</td><td>large + small</td></tr>
+</table>
+<p>Two lessons across the table. First, <strong>action representation moved from discrete tokens to continuous flow/diffusion heads</strong>: tokens let you reuse the LM head unchanged (RT-2, OpenVLA) but quantize actions coarsely and decode autoregressively (slow, 1 token per action dim); a dedicated action expert outputs a whole chunk of continuous actions in a few flow steps. Second, the <strong>VLM is the pretraining</strong>: web-scale vision-language gives the policy semantic generalization ("put the extinct animal in the box") that no amount of robot data provides, and the <a href="multimodal.html">vision tokenization</a> you learned for VLMs applies unchanged — a VLA is a VLM whose output modality is motion.</p>
+
+<div class="card">
+<h3>Animation: the VLA inference pipeline and its latency budget</h3>
+<canvas id="vlaViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="vlaStep">Next stage</button>
+  <button class="btn secondary" id="vlaReset">Reset</button>
+  <label class="ctl">model <select id="vlaModel"><option value="7b">OpenVLA 7B, token actions</option><option value="pi0" selected>π0 3B, flow chunk of 50</option><option value="smol">SmolVLA 450M, async</option></select></label>
+</div>
+<p class="caption">Camera frames and the instruction are tokenized (images → a few hundred patch tokens each, see <a href="multimodal.html">Multimodal</a>), the VLM backbone runs a prefill over them, the action head produces either one discrete token per action dimension (autoregressive, slow) or a continuous chunk in a few flow steps, and the chunk is streamed to the robot at 50 Hz while the next inference starts. The numbers under each stage are a realistic budget on a single consumer-class GPU; the bar at the bottom shows how many control ticks the chunk covers versus how long inference takes — when inference is longer than the chunk, the robot stalls, which is exactly the problem async inference and small VLAs exist to solve.</p>
+</div>
+
+<p><strong>The latency budget, worked.</strong> Suppose a 50 Hz controller (20 ms per tick), two 224×224 cameras (≈ 256 tokens each after a SigLIP-style encoder), a 20-token instruction, and a 3B backbone. Prefill of ~540 tokens on an RTX-class GPU: ~40–60 ms. A flow-matching action expert with 10 integration steps over a 50-action chunk: ~30–50 ms. Total ≈ 100 ms ≈ 5 ticks, while the chunk covers 50 ticks (1 s) — comfortably ahead, so the next chunk is ready long before the current one runs out, and <em>temporal ensembling</em> blends the overlap. Now do the same with OpenVLA-style token actions: 7 action dims × 1 autoregressive decode step each ≈ 7 × 25 ms = 175 ms on top of prefill, for <em>one</em> action — barely 5 Hz without chunking. This is why every 2025+ VLA has a continuous action expert, and why SmolVLA's asynchronous inference (policy server predicts the next chunk while the robot executes the current one) matters on cheap hardware.</p>
+
+<h2 id="rl-llm">6. RL for robots and RL for LLMs: the same math</h2>
+<p>Having seen PPO twice, make the correspondence explicit. In RLHF/GRPO the <em>state</em> is the prompt plus the tokens generated so far, the <em>action</em> is the next token, the <em>episode</em> is one completion, and the <em>reward</em> arrives once at the end — a horizon-T problem with a single terminal reward, which is why GRPO can get away with no critic (the group mean is a good enough baseline when every trajectory is scored once). Robotics has dense-ish rewards and long horizons, which is why it still wants value functions. But the policy-gradient estimator, the clipping, the KL regularization toward a reference policy — identical (<a href="training.html">Chapter 11</a>).</p>
+<p><strong>Where the reward comes from</strong> is the real difference. LLM RL has moved toward <em>verifiable rewards</em> (unit tests, math checkers) precisely because learned reward models get exploited. Robotics has always had this problem in reverse: success is easy to verify in simulation and expensive to verify in the real world (a human or a learned success detector watches the episode), so <strong>RL post-training of VLAs</strong> — take a π0/OpenVLA-style policy trained by imitation, then run PPO/SAC-style fine-tuning with task success as reward — is the 2025–2026 frontier, mirroring SFT-then-RL for LLMs exactly. Imitation gets you to 70%; RL on the robot's own rollouts gets you to 95%, because it sees and corrects the learner's own failure states (DAgger without the human).</p>
+<p><strong>Offline RL</strong> asks the complementary question: can we learn a better-than-demonstrator policy from a fixed dataset with rewards, with no further interaction? The obstacle is extrapolation error — Q-learning will happily assign high value to actions never seen in the data. CQL penalizes Q on out-of-distribution actions; IQL avoids querying Q on unseen actions at all by fitting value functions with expectile regression and extracting the policy with advantage-weighted regression. Both matter for robotics because logged data is the asset you actually have.</p>
+<p><strong>World models.</strong> Dreamer-style agents learn a latent dynamics model from pixels and train the policy entirely inside imagined rollouts — thousands of imagined steps per real one. JEPA-style objectives (predict in representation space rather than pixel space) and video-generation models are the current push to make world models that generalize across robots and scenes; if they work, model-based RL finally gets the sample efficiency robotics needs. The LLM analogy is test-time compute: a world model lets a policy "think ahead" with simulated rollouts the way a reasoning model thinks ahead with tokens.</p>
+
+<h2 id="data">7. Data: where it comes from and how to use it</h2>
+<p><strong>Teleoperation</strong> produces nearly all manipulation demos. The ALOHA pattern — a cheap <em>leader</em> arm you move by hand, a <em>follower</em> arm that mirrors it, cameras recording both — is what LeRobot's SO-100/SO-101 kits reproduce for a few hundred dollars. Each recorded episode is a sequence of (images, joint state, commanded action) at the control rate; 50 episodes of a task take about an hour. VR controllers, spacemice, and hand-tracking from video are alternatives with worse precision and better scale.</p>
+<p><strong>Datasets.</strong> <em>Open X-Embodiment</em> pooled 60 datasets from 22 robots (1M+ episodes) and showed cross-embodiment transfer is real. The <strong>LeRobot dataset format</strong> on the Hugging Face Hub is now the open standard: a Parquet table of per-frame rows (state, action, timestamps, episode index) plus MP4-encoded camera streams, with an <code>info.json</code> describing features and fps and <code>episodes.jsonl</code> indexing episode boundaries. <code>delta_timestamps</code> at load time assembles observation histories and action chunks on the fly, which is how the BC code above got 16 future actions per row. Augmentation (random crops, color jitter) matters more than in vision classification because demos are few and cameras drift.</p>
+<p><strong>Do robots have scaling laws?</strong> Partially. Success improves log-linearly with demos and with the diversity of objects/scenes, and VLA performance tracks backbone size — but the data is a few orders of magnitude smaller than text, and the "token" (a 20 ms action) carries far less information. The field's bet is that web video and simulation close the gap; that bet is unresolved.</p>
+
+<div class="card">
+<h3>Hands-on: train one policy on your RTX 5080 (Step 19)</h3>
+<div class="formula"># 1. Install (Linux/WSL2; needs ffmpeg for dataset video decoding)
+pip install "lerobot[pusht]"            # or: git clone https://github.com/huggingface/lerobot && pip install -e ".[pusht]"
+
+# 2. Look at the data before you train on it
+lerobot-dataset-viz --repo-id lerobot/pusht --episode-index 0
+
+# 3. Train Diffusion Policy on PushT (2D pushing task; ~200 episodes). Fits in 16 GB easily.
+lerobot-train \
+  --policy.type=diffusion \
+  --dataset.repo_id=lerobot/pusht \
+  --env.type=pusht \
+  --batch_size=64 --steps=100000 \
+  --eval_freq=10000 --eval.n_episodes=20 --eval.batch_size=10 \
+  --output_dir=outputs/train/diffusion_pusht --wandb.enable=false
+
+# 4. Or ACT on the simulated ALOHA insertion task (bimanual, 14-dim actions, chunk of 100)
+lerobot-train --policy.type=act --dataset.repo_id=lerobot/aloha_sim_insertion_human \
+  --env.type=aloha --env.task=AlohaInsertion-v0 --steps=100000 --output_dir=outputs/train/act_aloha
+
+# 5. Evaluate a checkpoint in the simulator and watch the rollouts
+lerobot-eval --policy.path=outputs/train/diffusion_pusht/checkpoints/last/pretrained_model \
+  --env.type=pusht --eval.n_episodes=50 --eval.batch_size=10</div>
+<p class="caption">What success looks like: PushT success rate climbing past ~60% by 100k steps (the published diffusion-policy number is ~65–70%; ACT gets ~50%); ALOHA insertion above ~70% for ACT. Expect 2–4 hours on the 5080 for 100k steps. If success is stuck near zero, check that the dataset fps and your action chunk horizon match, and that you are not evaluating with a different observation resolution than you trained on — the two most common mistakes. The CLI flag names track the LeRobot release you install; run <code>lerobot-train --help</code> if one has moved.</p>
+</div>
+
+<h2 id="eval">8. Evaluation: the part nobody does well</h2>
+<p>The headline metric is <strong>success rate</strong> over N episodes (N = 20–50 in sim, often only 10 on real hardware), with <strong>episode length</strong> and sometimes a partial-credit score. Simulation benchmarks let you compare fairly: <strong>LIBERO</strong> (130 language-conditioned manipulation tasks in four suites testing spatial, object, goal, and long-horizon generalization — the standard VLA benchmark), <strong>SimplerEnv</strong> (simulated replicas of real RT-1/Bridge setups, so sim scores predict real-robot scores), <strong>Meta-World</strong> (50 tasks for multi-task/meta-RL), and the LeRobot-bundled PushT / ALOHA-sim / xArm environments.</p>
+<p>Real-world evaluation protocol, if you ever report one: fix the set of initial configurations in advance (photograph them), randomize the order, run every policy on the same set, report the count out of N rather than a percentage of a tiny N, and record videos. The reproducibility problem is severe — the same checkpoint on a different lab's robot, lighting, or camera mount can lose 30 points — and it is the main reason VLA papers are now expected to report SimplerEnv or LIBERO alongside their real results.</p>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li><a href="https://arxiv.org/abs/2510.12403">Robot Learning: A Tutorial</a> (Step 19) and its <a href="https://huggingface.co/spaces/lerobot/robot-learning-tutorial">hands-on Space</a> — RL, BC, diffusion/flow policies, and VLAs with runnable LeRobot code; the spine of this chapter.</li>
+<li><a href="https://github.com/huggingface/lerobot">LeRobot</a> — datasets, ACT, Diffusion Policy, SmolVLA, π0 ports, and the SO-100 hardware guides.</li>
+<li>Sutton &amp; Barto, <a href="http://incompleteideas.net/book/the-book-2nd.html">Reinforcement Learning: An Introduction</a> (Sections 1–2 here are chapters 3–6 and 13 there); OpenAI <a href="https://spinningup.openai.com/">Spinning Up</a> for the deep-RL algorithms with code.</li>
+<li>Papers: <a href="https://arxiv.org/abs/1707.06347">PPO</a>, <a href="https://arxiv.org/abs/1801.01290">SAC</a>, <a href="https://arxiv.org/abs/2304.13705">ACT / ALOHA</a>, <a href="https://arxiv.org/abs/2303.04137">Diffusion Policy</a>, <a href="https://arxiv.org/abs/2307.15818">RT-2</a>, <a href="https://arxiv.org/abs/2406.09246">OpenVLA</a>, <a href="https://arxiv.org/abs/2410.24164">π0</a>, <a href="https://arxiv.org/abs/2506.01844">SmolVLA</a>.</li>
+<li>In this notebook: <a href="training.html">Training</a> for the RLHF/GRPO side of the same algorithms, <a href="multimodal.html">Multimodal</a> for how images become tokens, <a href="inference.html">Inference</a> for the serving budget a VLA lives inside, and the <a href="flashcards.html">RL &amp; Robotics flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="training.html">← Training</a><a href="hardware.html">Hardware →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function watchTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+// ---------- 1. gridworld Q-learning ----------
+(function(){
+const cv=document.getElementById('gridViz'),ctx=cv.getContext('2d');
+const W=8,H=6,GOAL=[7,0],PITS=[[3,1],[5,3],[2,4]],WALLS=[[3,2],[3,3],[5,1],[6,4]],START=[0,5];
+const GAMMA=0.95,STEP_R=-0.04;const DIRS=[[0,-1],[1,0],[0,1],[-1,0]];
+let Q,pos,episodes,steps,timer=null,lastReward=0,totalSteps=0;
+const $=id=>document.getElementById(id);
+function isWall(x,y){return WALLS.some(p=>p[0]===x&&p[1]===y)}function isPit(x,y){return PITS.some(p=>p[0]===x&&p[1]===y)}
+function init(){Q=Array.from({length:W*H},()=>[0,0,0,0]);pos=[...START];episodes=0;steps=0;totalSteps=0;}
+function eps(){return parseInt($('gridEps').value)/100}function alpha(){return parseInt($('gridAlpha').value)/100}
+$('gridEps').oninput=()=>$('gridEpsL').textContent=eps().toFixed(2);$('gridAlpha').oninput=()=>$('gridAlphaL').textContent=alpha().toFixed(2);
+function step(){
+  const s=pos[1]*W+pos[0];
+  let a;if(Math.random()<eps())a=Math.floor(Math.random()*4);else{const q=Q[s];const m=Math.max(...q);const best=[0,1,2,3].filter(i=>q[i]===m);a=best[Math.floor(Math.random()*best.length)];}
+  let nx=pos[0]+DIRS[a][0],ny=pos[1]+DIRS[a][1];
+  if(nx<0||ny<0||nx>=W||ny>=H||isWall(nx,ny)){nx=pos[0];ny=pos[1];}
+  let r=STEP_R,done=false;
+  if(nx===GOAL[0]&&ny===GOAL[1]){r=1;done=true;}else if(isPit(nx,ny)){r=-1;done=true;}
+  const s2=ny*W+nx;const target=done?r:r+GAMMA*Math.max(...Q[s2]);
+  Q[s][a]+=alpha()*(target-Q[s][a]);
+  pos=[nx,ny];steps++;totalSteps++;lastReward=r;
+  if(done||steps>200){episodes++;steps=0;pos=[...START];}
+  draw();
+}
+function draw(){
+  const cw=cv.width,ch=cv.height;ctx.clearRect(0,0,cw,ch);
+  const cell=60,x0=30,y0=28;const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const X=x0+x*cell,Y=y0+y*cell;const q=Q[y*W+x];const v=Math.max(...q);
+    if(isWall(x,y)){ctx.fillStyle=bd;ctx.fillRect(X,Y,cell,cell);continue;}
+    const t=Math.max(-1,Math.min(1,v));
+    ctx.fillStyle=t>=0?`rgba(56,198,160,${0.1+0.8*t})`:`rgba(229,96,76,${0.1+0.8*-t})`;
+    ctx.fillRect(X,Y,cell,cell);ctx.strokeStyle=bd;ctx.strokeRect(X,Y,cell,cell);
+    if(x===GOAL[0]&&y===GOAL[1]){ctx.fillStyle='#f2c14e';ctx.font='26px sans-serif';ctx.textAlign='center';ctx.fillText('★',X+cell/2,Y+cell/2+9);continue;}
+    if(isPit(x,y)){ctx.fillStyle='#e5604c';ctx.beginPath();ctx.arc(X+cell/2,Y+cell/2,14,0,7);ctx.fill();continue;}
+    if(q.some(z=>z!==0)){const a=q.indexOf(v);const d=DIRS[a];ctx.strokeStyle=txt;ctx.lineWidth=2;ctx.beginPath();
+      ctx.moveTo(X+cell/2-d[0]*12,Y+cell/2-d[1]*12);ctx.lineTo(X+cell/2+d[0]*12,Y+cell/2+d[1]*12);ctx.stroke();
+      ctx.beginPath();ctx.arc(X+cell/2+d[0]*12,Y+cell/2+d[1]*12,3.5,0,7);ctx.fillStyle=txt;ctx.fill();}
+    ctx.fillStyle=dim;ctx.font='10px monospace';ctx.textAlign='left';ctx.fillText(v.toFixed(2),X+3,Y+cell-4);
+  }
+  ctx.fillStyle=css('--accent');ctx.beginPath();ctx.arc(x0+pos[0]*cell+cell/2,y0+pos[1]*cell+cell/2,11,0,7);ctx.fill();
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('Q(s,a) ← Q + α[ r + γ·max Q(s′,·) − Q ]',x0+W*cell+24,60);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ['green = high max Q, red = negative','arrow = greedy action','★ +1 (ends)   ● −1 (ends)','each step −0.04, γ = 0.95'].forEach((l,i)=>ctx.fillText(l,x0+W*cell+24,90+i*20));
+  $('gridStats').textContent='episodes: '+episodes+' · steps: '+totalSteps;
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('gridPlay').textContent='▶ Play';}}
+$('gridPlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(()=>{for(let i=0;i<3;i++)step();},40);};
+$('gridStep').onclick=()=>{stop();step();};$('gridReset').onclick=()=>{stop();init();draw();};
+init();draw();watchTheme(draw);
+})();
+
+// ---------- 2. policy gradient ----------
+(function(){
+const cv=document.getElementById('pgViz'),ctx=cv.getContext('2d');
+const ORIGIN=[80,250],TARGET=[760,110],LR=0.35;
+let mu,sigma,iter,shots=[];const $=id=>document.getElementById(id);
+function init(){mu=-0.35;sigma=0.45;iter=0;shots=[];}
+function gauss(){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+function endpoint(theta){const L=720;return [ORIGIN[0]+Math.cos(theta)*L,ORIGIN[1]-Math.sin(theta)*L];}
+function update(){
+  const N=parseInt($('pgN').value);const batch=[];
+  for(let i=0;i<N;i++){const th=mu+sigma*gauss();const e=endpoint(th);
+    // closest approach of the ray to the target = reward
+    const dx=TARGET[0]-ORIGIN[0],dy=TARGET[1]-ORIGIN[1];const ux=Math.cos(th),uy=-Math.sin(th);
+    const t=Math.max(0,dx*ux+dy*uy);const px=ORIGIN[0]+ux*t,py=ORIGIN[1]+uy*t;
+    const d=Math.hypot(px-TARGET[0],py-TARGET[1]);batch.push({th,r:-d/100});}
+  const mean=batch.reduce((a,b)=>a+b.r,0)/N;
+  // REINFORCE on a Gaussian: grad_mu log pi = (th-mu)/sigma^2 ; grad_logsigma = ((th-mu)^2/sigma^2 - 1)
+  let gmu=0,gls=0;batch.forEach(b=>{const A=b.r-mean;b.A=A;gmu+=(b.th-mu)/(sigma*sigma)*A;gls+=(((b.th-mu)**2)/(sigma*sigma)-1)*A;});
+  gmu/=N;gls/=N;mu+=LR*0.05*gmu;sigma=Math.max(0.03,sigma*Math.exp(LR*0.05*gls));
+  iter++;shots=batch;draw();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text');
+  ctx.fillStyle='#f2c14e';ctx.beginPath();ctx.arc(TARGET[0],TARGET[1],12,0,7);ctx.fill();
+  ctx.fillStyle=css('--accent');ctx.beginPath();ctx.arc(ORIGIN[0],ORIGIN[1],9,0,7);ctx.fill();
+  const maxA=Math.max(0.01,...shots.map(s=>Math.abs(s.A||0)));
+  shots.forEach(s=>{const e=endpoint(s.th);const good=(s.A||0)>=0;ctx.strokeStyle=good?'rgba(56,198,160,0.9)':'rgba(229,96,76,0.7)';
+    ctx.lineWidth=good?1+4*Math.abs(s.A)/maxA:Math.max(0.5,1.5-1.2*Math.abs(s.A)/maxA);ctx.beginPath();ctx.moveTo(ORIGIN[0],ORIGIN[1]);ctx.lineTo(e[0],e[1]);ctx.stroke();});
+  // policy mean + 1σ cone
+  const e=endpoint(mu),e1=endpoint(mu+sigma),e2=endpoint(mu-sigma);
+  ctx.strokeStyle=txt;ctx.lineWidth=2.5;ctx.setLineDash([6,4]);ctx.beginPath();ctx.moveTo(ORIGIN[0],ORIGIN[1]);ctx.lineTo(e[0],e[1]);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle='rgba(91,140,255,0.12)';ctx.beginPath();ctx.moveTo(ORIGIN[0],ORIGIN[1]);ctx.lineTo(e1[0],e1[1]);ctx.lineTo(e2[0],e2[1]);ctx.closePath();ctx.fill();
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText('dashed = policy mean μ · shaded = ±1σ · green thick = above-average shots (upweighted) · red thin = below-average (downweighted)',20,H-14);
+  const opt=Math.atan2(ORIGIN[1]-TARGET[1],TARGET[0]-ORIGIN[0]);
+  $('pgStats').textContent='iter '+iter+' · μ='+mu.toFixed(3)+' (optimal '+opt.toFixed(3)+') · σ='+sigma.toFixed(3);
+}
+$('pgN').oninput=()=>$('pgNL').textContent=$('pgN').value;
+$('pgStep').onclick=update;$('pgReset').onclick=()=>{init();draw();};
+init();draw();watchTheme(draw);
+})();
+
+// ---------- 3. two-link arm ----------
+(function(){
+const cv=document.getElementById('armViz'),ctx=cv.getContext('2d');
+const L1=110,L2=90;let target,tR,tT,plan,t,timer=null;const $=id=>document.getElementById(id);
+function ik(x,y){const d=Math.min(Math.hypot(x,y),L1+L2-1);const c2=(d*d-L1*L1-L2*L2)/(2*L1*L2);const t2=Math.acos(Math.max(-1,Math.min(1,c2)));
+  const t1=Math.atan2(y,x)-Math.atan2(L2*Math.sin(t2),L1+L2*Math.cos(t2));return [t1,t2];}
+function fk(a,base){const ex=base[0]+L1*Math.cos(a[0]),ey=base[1]-L1*Math.sin(a[0]);return [[ex,ey],[ex+L2*Math.cos(a[0]+a[1]),ey-L2*Math.sin(a[0]+a[1])]];}
+function newTarget(){const ang=Math.random()*Math.PI*0.9+0.05,r=90+Math.random()*95;target=[Math.cos(ang)*r,Math.sin(ang)*r];
+  tR=[Math.PI/2,0.3];tT=[Math.PI/2,0.3];t=0;
+  // trained: straight-line EE path in Cartesian space over 60 ticks
+  const start=fk(tT,[0,0]);const sx=start[1][0],sy=-start[1][1];plan=[];
+  for(let i=1;i<=60;i++){const u=i/60;const s=u*u*(3-2*u);plan.push(ik(sx+(target[0]-sx)*s,sy+(target[1]-sy)*s));}
+}
+function tick(){t++;
+  tR=[tR[0]+(Math.random()-0.5)*0.25,tR[1]+(Math.random()-0.5)*0.25];
+  if(t<=60)tT=plan[t-1];
+  draw();if(t>=90)stop();}
+function drawArm(base,a,color,label){
+  const [el,ee]=fk(a,base);ctx.strokeStyle=css('--border');ctx.lineWidth=1;ctx.beginPath();ctx.arc(base[0],base[1],L1+L2,Math.PI,2*Math.PI);ctx.stroke();
+  ctx.strokeStyle=color;ctx.lineWidth=7;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(base[0],base[1]);ctx.lineTo(el[0],el[1]);ctx.lineTo(ee[0],ee[1]);ctx.stroke();
+  ctx.fillStyle=css('--text');[base,el].forEach(p=>{ctx.beginPath();ctx.arc(p[0],p[1],5,0,7);ctx.fill();});
+  ctx.fillStyle='#f2c14e';ctx.beginPath();ctx.arc(base[0]+target[0],base[1]-target[1],8,0,7);ctx.fill();
+  const d=Math.hypot(ee[0]-(base[0]+target[0]),ee[1]-(base[1]-target[1]));
+  ctx.fillStyle=css('--text');ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.fillText(label,base[0],base[1]+30);
+  ctx.fillStyle=css('--text-dim');ctx.font='12px sans-serif';ctx.fillText('distance to target: '+d.toFixed(0)+' px',base[0],base[1]+48);
+  return d;
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  drawArm([225,240],tR,'#e5604c','random policy: infer every tick');
+  drawArm([675,240],tT,'#38c6a0','trained policy: chunked inference');
+  const k=parseInt($('armChunk').value);
+  // timelines
+  [[225,false],[675,true]].forEach(([cx,chunked])=>{const x0=cx-150,y=320;ctx.fillStyle=css('--text-dim');ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('ticks →',x0,y-6);
+    for(let i=0;i<60;i++){const x=x0+i*5;const infer=chunked?(i%k===0):true;ctx.fillStyle=i<t?(infer?css('--accent'):'rgba(56,198,160,0.5)'):css('--border');ctx.fillRect(x,y,4,infer?16:8);}
+    const n=chunked?Math.ceil(Math.min(t,60)/k):Math.min(t,60);ctx.fillText('inference calls so far: '+n,x0,y+32);});
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('armPlay').textContent='▶ Play';}}
+$('armPlay').onclick=function(){if(timer){stop();return;}if(t>=90)newTarget();this.textContent='⏸ Pause';timer=setInterval(tick,50);};
+$('armReset').onclick=()=>{stop();newTarget();draw();};$('armChunk').oninput=()=>{$('armChunkL').textContent=$('armChunk').value;draw();};
+newTarget();draw();watchTheme(draw);
+})();
+
+// ---------- 4. diffusion policy denoising ----------
+(function(){
+const cv=document.getElementById('diffViz'),ctx=cv.getContext('2d');
+const N=24;let clean,noisy,K,step,timer=null,mode;const $=id=>document.getElementById(id);
+function gauss(){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+function path(m){const pts=[];for(let i=0;i<N;i++){const u=i/(N-1);const x=120+u*660;const bump=Math.sin(u*Math.PI)*110*(m?1:-1);pts.push([x,200+bump]);}return pts;}
+function reset(){mode=Math.random()<0.5?1:0;clean=path(mode);K=parseInt($('diffK').value);step=0;
+  noisy=clean.map(p=>[p[0]+gauss()*170,p[1]+gauss()*120]);draw();}
+function sigma(s){return Math.cos((s/K)*Math.PI/2);} // noise level schedule 1 -> 0
+function denoise(){if(step>=K)return;step++;const sPrev=sigma(step-1),sNow=sigma(step);const f=sNow/sPrev;
+  // x_{t-1} = clean + (x_t - clean) * sigma_t-1/sigma_t  (DDIM-style deterministic step with an oracle denoiser)
+  noisy=noisy.map((p,i)=>[clean[i][0]+(p[0]-clean[i][0])*f,clean[i][1]+(p[1]-clean[i][1])*f]);draw();if(step>=K)stop();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text');
+  ctx.fillStyle=css('--border');ctx.fillRect(430,170,40,60);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';ctx.fillText('obstacle',450,250);
+  ctx.fillStyle=css('--accent');ctx.beginPath();ctx.arc(120,200,8,0,7);ctx.fill();ctx.fillStyle='#f2c14e';ctx.beginPath();ctx.arc(780,200,9,0,7);ctx.fill();
+  [path(0),path(1)].forEach(p=>{ctx.strokeStyle='rgba(154,163,181,0.45)';ctx.setLineDash([5,5]);ctx.lineWidth=1.5;ctx.beginPath();p.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]));ctx.stroke();ctx.setLineDash([]);});
+  ctx.strokeStyle=css('--accent2');ctx.lineWidth=2.5;ctx.beginPath();noisy.forEach((q,i)=>i?ctx.lineTo(q[0],q[1]):ctx.moveTo(q[0],q[1]));ctx.stroke();
+  noisy.forEach(q=>{ctx.fillStyle=css('--accent2');ctx.beginPath();ctx.arc(q[0],q[1],3.5,0,7);ctx.fill();});
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('denoising step '+step+' / '+K+' · noise level σ = '+sigma(step).toFixed(2),20,24);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('dashed = the two demonstrated modes (left / right of the obstacle) · green = sampled action chunk (24 waypoints)',20,H-14);
+  $('diffStats').textContent=step>=K?'converged to the '+(mode?'lower':'upper')+' mode':'';
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('diffPlay').textContent='▶ Denoise';}}
+$('diffPlay').onclick=function(){if(timer){stop();return;}if(step>=K)reset();this.textContent='⏸ Pause';timer=setInterval(denoise,260);};
+$('diffStep').onclick=()=>{stop();denoise();};$('diffReset').onclick=()=>{stop();reset();};
+$('diffK').oninput=()=>{$('diffKL').textContent=$('diffK').value;stop();reset();};
+reset();watchTheme(draw);
+})();
+
+// ---------- 5. VLA pipeline ----------
+(function(){
+const cv=document.getElementById('vlaViz'),ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);let stage=0;
+const CFG={
+ '7b':{name:'OpenVLA 7B',stages:['tokenize 2 cams + text\n~530 tokens','VLM prefill 7B\n~120 ms','autoregressive action tokens\n7 dims × ~25 ms = 175 ms','1 action\n(no chunk)','robot @ 50 Hz'],infer:295,chunk:1},
+ 'pi0':{name:'π0 3B',stages:['tokenize 2 cams + text\n~540 tokens','VLM prefill 3B\n~50 ms','flow-matching expert\n10 steps ≈ 40 ms','chunk of 50 actions\n= 1.0 s','robot @ 50 Hz'],infer:90,chunk:50},
+ 'smol':{name:'SmolVLA 450M (async)',stages:['tokenize 1–3 cams + text\n~300 tokens','VLM prefill 450M\n~15 ms','flow expert\n10 steps ≈ 15 ms','chunk of 50, next chunk\npredicted while executing','robot @ 50 Hz'],infer:30,chunk:50}};
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const c=CFG[$('vlaModel').value];
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),bd=css('--border');
+  ctx.font='bold 13px sans-serif';ctx.fillStyle=txt;ctx.textAlign='left';ctx.fillText(c.name+' — inference pipeline',20,24);
+  const bw=160,bh=70,gap=20,x0=20,y=60;
+  c.stages.forEach((s,i)=>{const x=x0+i*(bw+gap);const on=i<=stage;
+    ctx.fillStyle=on?(i===stage?acc:'rgba(91,140,255,0.35)'):css('--bg-card');ctx.strokeStyle=bd;rr(ctx,x,y,bw,bh,10);ctx.fill();ctx.stroke();
+    ctx.fillStyle=on?'#fff':dim;ctx.font='12px sans-serif';ctx.textAlign='center';s.split('\n').forEach((l,j)=>ctx.fillText(l,x+bw/2,y+28+j*18));
+    if(i<c.stages.length-1){ctx.fillStyle=dim;ctx.fillText('→',x+bw+gap/2,y+bh/2+4);}});
+  // budget bar
+  const by=180;ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText('latency budget (ms)',20,by-8);
+  const scale=0.7;const chunkMs=c.chunk*20;
+  ctx.fillStyle='rgba(56,198,160,0.35)';ctx.fillRect(20,by,Math.min(860,chunkMs*scale),22);
+  ctx.fillStyle=c.infer>chunkMs?'#e5604c':acc;ctx.fillRect(20,by+30,Math.min(860,c.infer*scale),22);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText('chunk covers '+chunkMs+' ms ('+c.chunk+' ticks)',24+Math.min(860,chunkMs*scale)+6,by+16);
+  ctx.fillText('inference ≈ '+c.infer+' ms',24+Math.min(860,c.infer*scale)+6,by+46);
+  ctx.fillStyle=txt;ctx.fillText(c.infer>chunkMs?'inference is longer than the chunk → the robot stalls between actions (≈ '+Math.round(1000/c.infer)+' Hz effective)':'inference finishes with '+(chunkMs-c.infer)+' ms to spare → next chunk is ready before this one ends; blend the overlap',20,by+80);
+}
+$('vlaStep').onclick=()=>{stage=(stage+1)%5;draw();};$('vlaReset').onclick=()=>{stage=0;draw();};$('vlaModel').onchange=()=>{stage=0;draw();};
+draw();watchTheme(draw);
+})();
+</script>
+</body>
+</html>

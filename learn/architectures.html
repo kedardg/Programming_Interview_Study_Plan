@@ -116,7 +116,38 @@
 <li><strong>What hasn't changed</strong>: tokenizer+embedding → repeated mixer/MLP blocks with residuals and norms → LM head. Every winner since 2019 is still that shape. Bet on components changing, not the shape.</li>
 </ul>
 
-<h2 id="reading">8. Where to go deeper</h2>
+
+<h2 id="data">8. What 109 architectures say: the data</h2>
+<p>Narratives drift; counts don't. The chart below is computed live from the <a href="gallery.html">Architecture Gallery</a> dataset vendored in this repo (Sebastian Raschka's metadata for every notable open-weight model, 2019–2026): for each release year, the share of models using each component. Read it as adoption curves.</p>
+<div class="card">
+<h3>Component adoption by release year</h3>
+<canvas id="adoptViz" class="viz" width="900" height="360"></canvas>
+<p class="caption">Share of models released each year that use the component (detected from the dataset's attention, layer-mix, and highlight fields; 2019 is GPT-2 alone, 2024 has six models, so weight the 2025–2026 columns most). GQA is near-universal; MoE crossed half the field; hybrids with SSM/linear-attention layers and sliding-window ratios went from rare to mainstream in one year; MLA, MTP, QK-norm, and NoPE follow. Open the gallery to filter the models behind any bar.</p>
+</div>
+
+<h2 id="recent">9. 2025–2026 developments, model by model</h2>
+<p>Beyond the big families above, the last two years added a layer of refinements that now appear in most new releases. Each one below is grounded in specific gallery entries; click through to the <a href="gallery.html">gallery</a> for the fact sheets and config files.</p>
+<table class="cmp">
+<tr><th>Development</th><th>What it is</th><th>Seen in (gallery)</th></tr>
+<tr><td><strong>Gated DeltaNet / Kimi Delta Attention hybrids</strong></td><td>Linear-attention layers with a delta-rule state update and learned forgetting gates, interleaved 3:1 (sometimes 5:1) with full or latent attention — the dominant 2026 recipe for long-context efficiency.</td><td>Qwen3-Next lineage, Kimi Linear → Kimi K3, Solar Open 2, Ling 3.0 Flash, GLM-5.3-Flash</td></tr>
+<tr><td><strong>Gated attention</strong></td><td>A learned sigmoid gate on the attention output before the output projection; stabilizes training and removes attention-sink artifacts at little cost.</td><td>Qwen3.8, Muse Glimmer, Step-5, Laguna series</td></tr>
+<tr><td><strong>NoPE / partial RoPE on global layers</strong></td><td>Apply RoPE only in local sliding-window layers and give global layers no positional encoding (or RoPE on a fraction of dims, "p-RoPE"); improves length extrapolation of the global layers.</td><td>Muse Glimmer, Kolibri-1, North Mini Code, Gemma 4 (p-RoPE), Kimi K3</td></tr>
+<tr><td><strong>DeepSeek Sparse Attention (DSA) + index sharing</strong></td><td>A lightweight "indexer" scores past tokens and attention runs only over the top-k (e.g. 2,048) per query — near-linear long-context cost; GLM-5.2's IndexShare reuses an indexer's result across the next three layers, Tencent's IndexCache does the same at serving time.</td><td>DeepSeek V3.2 → V4, GLM-5.2/5.3-Flash, Tencent Hy4, Naive-N0.5</td></tr>
+<tr><td><strong>mHC / iHC residual streams</strong></td><td>Manifold-constrained hyper-connections: the residual stream is split into several parallel streams (typically four) mixed around each sublayer, a stability-preserving generalization of the single residual.</td><td>DeepSeek V4 family, GLM-5.3-Flash, Tencent Hy4</td></tr>
+<tr><td><strong>Attention residuals / block-attention residual groups</strong></td><td>Replace plain residual addition with an attention over previous layers' outputs within a block group, letting each layer weight which earlier representations it reads.</td><td>Kimi Linear, Kimi K3, Ember-1</td></tr>
+<tr><td><strong>ShortConv preprocessing</strong></td><td>A small depthwise causal convolution (kernel 4) on Q/K/V before a linear-attention layer — cheap local mixing that linear attention otherwise lacks.</td><td>Kimi Linear/K3, Solar Open 2, Inkling</td></tr>
+<tr><td><strong>Cross-layer KV sharing</strong></td><td>Global attention layers share one K/V set (or reuse a previous layer's cache); Gemma 4 collapses to a single KV head on global layers for edge devices, DeepSeek V4.1-Flash takes decoder global KV from encoder states.</td><td>Gemma 4 E2B/E4B, DeepSeek V4.1-Flash</td></tr>
+<tr><td><strong>Per-layer embeddings</strong></td><td>Extra embedding tables injected per layer (or a large n-gram embedding at a shallow layer) — memory-cheap capacity that can be offloaded, aimed at on-device models.</td><td>Gemma 3n/4 edge models, Qwen3.8-Flash-Next (20M-entry n-gram table)</td></tr>
+<tr><td><strong>Attention budgeting</strong></td><td>Different query-head counts per layer: spend heads where ablations show they matter.</td><td>Laguna XS/S series</td></tr>
+<tr><td><strong>Parallel attention + MoE blocks</strong></td><td>Run the attention and expert sublayers in parallel from the same input and sum — similar quality, better throughput (fewer sequential dependencies).</td><td>Command A+, North Mini Code</td></tr>
+<tr><td><strong>Looped / depth-shared stacks</strong></td><td>Re-apply the same layer stack several passes with a learned exit — depth without parameters, a form of test-time compute baked into the architecture.</td><td>Ouro-Thinking (4 passes), Nanbeige 4.2 (2 passes)</td></tr>
+<tr><td><strong>Latent / compressed MoE and attention caches</strong></td><td>Experts or attention operating in a compressed latent space (Stable LatentMoE; CSA/HCA compressed attention caches; CCA) — the MLA idea applied beyond K/V.</td><td>Kimi K3, DeepSeek V4 (CSA/HCA), ZAYA1 (CCA)</td></tr>
+<tr><td><strong>MTP as standard equipment</strong></td><td>One (sometimes three, "MTP-3") multi-token-prediction layers shipped with the model for self-speculative decoding.</td><td>DeepSeek V3/V4, Qwen3.8, Ling 3.0, Step-5, Nemotron 3.5</td></tr>
+<tr><td><strong>Sandwich norm, PolyNorm, QK-norm variants</strong></td><td>Normalization both before and after sublayers (sandwich), polynomial norms per expert, and scale-free QK-norm — all training-stability tooling for very long runs.</td><td>Kolibri-1, Ouro, Motif 3, Muse Glimmer</td></tr>
+</table>
+<p>Step back and the pattern of <a href="#lineage">Section 1</a> still holds: <strong>cheaper mixers (DeltaNet, sliding windows, sparse indexers) take most layers; exact attention becomes rationed; residual streams and norms get re-engineered for stability; and inference hooks (MTP, KV sharing, index caches) ship inside the architecture</strong>. If you can explain those four sentences with two model examples each, you understand the 2026 frontier.</p>
+
+<h2 id="reading">10. Where to go deeper</h2>
 <ul>
 <li><a href="https://arxiv.org/abs/2405.04434">DeepSeek-V2</a> (MLA) and <a href="https://arxiv.org/html/2412.19437">DeepSeek-V3</a> (fine-grained MoE, aux-loss-free balancing, MTP) — the densest single sources of modern architecture ideas.</li>
 <li><a href="https://arxiv.org/abs/2312.00752">Mamba</a> and <a href="https://arxiv.org/abs/2405.21060">Mamba-2/SSD</a>; <a href="https://arxiv.org/abs/2502.11089">Native Sparse Attention</a>.</li>
@@ -126,6 +157,7 @@
 
 <div class="footer-nav"><a href="attention.html">← Attention</a><a href="gpu.html">GPU →</a></div>
 </main>
+<script src="gallery-data.js"></script>
 <script>
 (function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
 function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
@@ -273,6 +305,31 @@ document.getElementById('ssmPlay').onclick=function(){if(timer){stop();return;}i
 document.getElementById('ssmReset').onclick=()=>{stop();t=0;state=Array(8).fill(0);draw();};
 draw();
 new MutationObserver(()=>draw()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 8. adoption chart from gallery data ----------
+(function(){
+const cv=document.getElementById('adoptViz');if(!cv||!window.ADOPTION)return;const ctx=cv.getContext('2d');
+const A=window.ADOPTION;const years=A.years.filter(y=>A.totals[y]>=1);
+const feats=A.features;const cols=['#5b8cff','#38c6a0','#f2a65a','#e5604c','#b07cff','#4cc3e5','#e5a0c3','#9ad24c','#d2b84c','#ff8c66'];
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const x0=70,y0=H-70,ph=H-120,pw=W-x0-220;
+  ctx.strokeStyle=bd;ctx.lineWidth=1;
+  for(let p=0;p<=100;p+=25){const y=y0-ph*p/100;ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x0+pw,y);ctx.stroke();ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='right';ctx.fillText(p+'%',x0-8,y+4);}
+  const gw=pw/years.length,bw=Math.max(4,(gw-16)/feats.length);
+  years.forEach((y,yi)=>{
+    const n=A.totals[y];feats.forEach((f,fi)=>{
+      const c=(A.counts[y]||{})[f]||0;const h=ph*c/n;const x=x0+yi*gw+8+fi*bw;
+      ctx.fillStyle=cols[fi%cols.length];ctx.fillRect(x,y0-h,bw-1,h);
+    });
+    ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(y+' (n='+n+')',x0+yi*gw+gw/2,y0+18);
+  });
+  feats.forEach((f,fi)=>{const ly=30+fi*22;ctx.fillStyle=cols[fi%cols.length];ctx.fillRect(x0+pw+20,ly-9,12,12);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText(f,x0+pw+38,ly+1);});
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('share of models released that year using the component',x0,H-30);
+}
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 </script>
 </body>
