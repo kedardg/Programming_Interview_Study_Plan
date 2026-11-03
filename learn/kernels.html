@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Writing Kernels</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="gpu.html">GPU</a><a href="kernels.html" class="here">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Writing Kernels: CUDA, Triton &amp; the Matmul Ladder</h1>
+<p class="dim">The replacement notebook for the plan's kernel exercises (Steps 9, 11, 18): vector add, reduction, transpose, online softmax, and the full matmul optimization ladder — each with annotated code and an animation of what the memory system is doing. Read <a href="gpu.html">GPU</a> first; the vocabulary (warps, coalescing, shared memory, roofline) is assumed.</p>
+
+<h2 id="anatomy">1. Anatomy of a kernel: vector add in CUDA and Triton</h2>
+<p>Every CUDA kernel answers one question: <em>given my thread's coordinates, which piece of the data is mine?</em> Here is the complete vector add, the "hello world" from GPU MODE L3:</p>
+<div class="formula">__global__ void add(const float* x, const float* y, float* out, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;  // my global index
+    if (i &lt; n)                                      // guard the ragged edge
+        out[i] = x[i] + y[i];                       // coalesced: lane k hits element k
+}
+// launch: one thread per element, 256 threads per block
+int threads = 256, blocks = (n + threads - 1) / threads;   // ceil-div
+add&lt;&lt;&lt;blocks, threads&gt;&gt;&gt;(x, y, out, n);</div>
+<ul>
+<li><code>blockIdx.x * blockDim.x + threadIdx.x</code> is <em>the</em> CUDA idiom: block coordinate × block size + position within the block = global position. Memorize it.</li>
+<li>The <code>if (i &lt; n)</code> guard exists because grids are launched in whole blocks; the last block overhangs the array.</li>
+<li>Adjacent threads touch adjacent floats → perfectly coalesced (see the coalescing animation in <a href="gpu.html#coalescing">GPU §4</a>).</li>
+</ul>
+<p>The same kernel in <strong>Triton</strong> swaps the per-thread view for a per-<em>tile</em> view: one <em>program</em> owns a block of 1024 elements and operates on whole vectors; the compiler decides how the tile maps onto threads, registers, and shared memory.</p>
+<div class="formula">@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid  = tl.program_id(axis=0)                 # ↔ blockIdx.x
+    offs = pid * BLOCK + tl.arange(0, BLOCK)     # ↔ blockIdx.x*blockDim.x + threadIdx.x, vectorized
+    mask = offs &lt; n                              # ↔ if (i &lt; n)
+    x = tl.load(x_ptr + offs, mask=mask)         # a whole tile at once
+    y = tl.load(y_ptr + offs, mask=mask)
+    tl.store(out_ptr + offs, x + y, mask=mask)
+
+grid = (triton.cdiv(n, 1024),)
+add_kernel[grid](x, y, out, n, BLOCK=1024)</div>
+<p>The correspondence is exact — <code>program_id ↔ blockIdx</code>, <code>arange + mask ↔ threadIdx + bounds guard</code> — and it holds for every kernel in this chapter. CUDA gives you control of each of the 32 lanes; Triton gives you tiles and lets the compiler handle coalescing, shared memory, and pipelining. Learn both: CUDA to understand what the machine does, Triton to ship fused kernels fast.</p>
+
+<h2 id="reduction">2. Reduction: from atomics to warp shuffles</h2>
+<p>Summing an array is the first kernel where threads must <em>cooperate</em>, and it introduces the pattern behind softmax, norms, and attention: <strong>parallel reduction</strong>. Three generations:</p>
+<ol>
+<li><strong>Naive:</strong> every thread does <code>atomicAdd(&amp;sum, x[i])</code>. Correct, but all threads serialize on one memory location — throughput of a single counter.</li>
+<li><strong>Tree reduction in shared memory:</strong> each block stages its slice into shared memory, then halves the active threads each step: 256→128→…→1 partial sum per block, in log₂(n) steps, then one atomic per <em>block</em>. This is the NVIDIA reduction-deck classic.</li>
+<li><strong>Warp shuffle:</strong> the last 32 values never need shared memory at all — <code>__shfl_down_sync</code> moves registers between lanes directly: <code>v += __shfl_down_sync(0xffffffff, v, 16); …, 8, 4, 2, 1</code>. Modern reductions do shared-memory tree down to one warp, shuffles the rest.</li>
+</ol>
+
+<div class="card">
+<h3>Animation: tree reduction</h3>
+<canvas id="redViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="redStep">Step</button>
+  <button class="btn secondary" id="redReset">Reset (new values)</button>
+  <span class="dim" id="redInfo"></span>
+</div>
+<p class="caption">16 values in shared memory. Each step, the active half adds its partner from <code>stride</code> away and the stride halves: 4 steps instead of 15 sequential adds. Note which threads go idle — by the last step 15 of 16 do nothing, which is why the final warp switches to shuffles and why reductions want many blocks in flight.</p>
+</div>
+
+<div class="formula">__global__ void reduce(const float* x, float* out, int n) {
+    __shared__ float s[256];
+    int tid = threadIdx.x, i = blockIdx.x * 256 + tid;
+    s[tid] = (i &lt; n) ? x[i] : 0.0f;
+    __syncthreads();                                   // tile fully staged
+    for (int stride = 128; stride &gt; 0; stride &gt;&gt;= 1) { // 256→1 in 8 steps
+        if (tid &lt; stride) s[tid] += s[tid + stride];   // no divergence *within* active warps
+        __syncthreads();                               // every step is a barrier
+    }
+    if (tid == 0) atomicAdd(out, s[0]);                // one atomic per block, not per element
+}</div>
+<p>The barrier placement is the classic bug: <code>__syncthreads()</code> must be hit by <em>all</em> threads of the block, so it lives outside the <code>if</code>. Run Compute Sanitizer's <code>racecheck</code> on your version before trusting it (Step 18 protocol, §8).</p>
+
+<h2 id="transpose">3. Transpose: fixing uncoalesced access with a staging tile</h2>
+<p>Matrix transpose does zero math — it is a pure memory-movement exercise, which is exactly why it teaches coalescing. The naive kernel reads rows and writes columns: the read is coalesced, but adjacent threads write <code>out[x*N + y]</code> with stride N — up to 32 transactions per warp store. The fix: stage a 32×32 tile in shared memory, transpose <em>inside</em> the tile (where random access is cheap), and write out rows again.</p>
+
+<div class="card">
+<h3>Animation: tiled transpose through shared memory</h3>
+<canvas id="transViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="transPlay">▶ Play</button>
+  <button class="btn secondary" id="transStep">Step</button>
+  <button class="btn secondary" id="transReset">Reset</button>
+</div>
+<p class="caption">Left: source matrix — a warp reads one row of the blue tile (coalesced, 1 transaction). Middle: the tile sits in shared memory and is read column-wise — fine on-chip, and the +1 padding (<code>[32][33]</code>) dodges bank conflicts. Right: the warp writes a contiguous row of the output (coalesced again). Both global-memory touches are coalesced; the "bad" access pattern happens only where it's free.</p>
+</div>
+
+<div class="formula">__global__ void transpose(const float* in, float* out, int N) {
+    __shared__ float tile[32][33];              // 33: pad to avoid bank conflicts
+    int x = blockIdx.x*32 + threadIdx.x, y = blockIdx.y*32 + threadIdx.y;
+    tile[threadIdx.y][threadIdx.x] = in[y*N + x];       // coalesced read
+    __syncthreads();
+    x = blockIdx.y*32 + threadIdx.x;  y = blockIdx.x*32 + threadIdx.y;
+    out[y*N + x] = tile[threadIdx.x][threadIdx.y];      // coalesced write, transposed via smem
+}</div>
+<p>Benchmark both versions against <code>x.T.contiguous()</code> in PyTorch and against the copy bandwidth of your 5080 (~0.96 TB/s): a good transpose reaches ~80–90% of pure copy speed. This is Week 4 of the schedule.</p>
+
+<h2 id="softmax">4. Online softmax: the trick that enables FlashAttention</h2>
+<p>Softmax must be computed stably: <code>softmax(x)ᵢ = e^(xᵢ−m)/Σⱼe^(xⱼ−m)</code> with m = max(x), otherwise <code>e^x</code> overflows FP16 at x≈11. The textbook version makes <strong>three passes</strong> over the row (max, then sum, then normalize) — three trips through memory for a bandwidth-bound op. The <em>online</em> formulation (Milakov &amp; Gimelshein, the Step 9 exercise) fuses the first two passes by keeping a running max m and running denominator d, <strong>rescaling d whenever the max improves</strong>:</p>
+<div class="formula">m ← −∞ ; d ← 0
+for each xᵢ:
+    m_new = max(m, xᵢ)
+    d     = d · e^(m − m_new)  +  e^(xᵢ − m_new)   // rescale old sum, add new term
+    m     = m_new
+// one pass gives (m, d); a second pass writes e^(xᵢ−m)/d</div>
+<p>The correction factor <code>e^(m − m_new)</code> is the whole idea: every term already in d was computed against the old max, so when the max rises, multiply d once to re-reference it. The same algebra lets <strong>FlashAttention</strong> process K/V in tiles and merge per-tile softmax statistics without ever materializing the full attention matrix — see <a href="attention.html">Attention</a>.</p>
+
+<div class="card">
+<h3>Animation: running max and rescaled denominator</h3>
+<canvas id="smaxViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="smaxStep">Next element</button>
+  <button class="btn secondary" id="smaxReset">Reset (new row)</button>
+</div>
+<p class="caption">One row streams left to right. The table tracks m and d after each element; when an element beats the running max, the old denominator visibly shrinks by e^(m−m_new) (flash) before the new term joins. At the end, compare with the 3-pass result: identical, one less pass over memory.</p>
+</div>
+
+<p>The fused Triton version (the Week 6 exercise, in the style of the GPU MODE L14 / Liger notebooks) does the whole row in registers — one load, one store:</p>
+<div class="formula">@triton.jit
+def softmax_kernel(x_ptr, y_ptr, stride, n_cols, BLOCK: tl.constexpr):
+    row  = tl.program_id(0)
+    offs = tl.arange(0, BLOCK)                        # BLOCK = next_pow2(n_cols)
+    x = tl.load(x_ptr + row*stride + offs,
+                mask=offs &lt; n_cols, other=float('-inf'))
+    x = x - tl.max(x, axis=0)                         # stable
+    num = tl.exp(x)
+    y = num / tl.sum(num, axis=0)                     # max+sum+normalize, zero extra memory trips
+    tl.store(y_ptr + row*stride + offs, y, mask=offs &lt; n_cols)</div>
+<p>Why it beats eager PyTorch: unfused softmax is ~4 kernel launches and ~8N bytes of traffic; this is 1 launch and ~2N bytes (read once, write once) — and softmax is bandwidth-bound, so bytes ≈ time. Check it with <code>torch.allclose(y, torch.softmax(x, -1), atol=1e-6)</code>, then benchmark GB/s vs row length like the Triton tutorial does.</p>
+
+<h2 id="matmul">5. The matmul ladder</h2>
+<p>Matrix multiply is the centerpiece exercise (Weeks 7–8) because it is the one kernel where you can feel every level of the hierarchy. The core quantity is <strong>data reuse</strong>: C = A·B does 2N³ FLOPs on 3N² values, so each value can in principle be used N times — but only if you orchestrate the reuse. The naive kernel reuses nothing: each thread computes one C element and streams 2N values from HBM, so AI ≈ 1 and you sit at the far left of the roofline. Every rung of the ladder below is a reuse mechanism.</p>
+
+<div class="card">
+<h3>Animation: shared-memory tiled matmul</h3>
+<canvas id="mmViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="mmPlay">▶ Play</button>
+  <button class="btn secondary" id="mmStep">Step</button>
+  <button class="btn secondary" id="mmReset">Reset</button>
+  <span class="dim" id="mmInfo"></span>
+</div>
+<p class="caption">One thread block owns the highlighted C tile. Each step it stages one tile of A (row panel) and one of B (column panel) into shared memory — the two flashes — then accumulates their product into C's registers while marching k across the K dimension. Each A/B value is loaded from HBM once and reused TILE times from shared memory: reuse = tile size, which is the whole trick.</p>
+</div>
+
+<div class="formula">__global__ void sgemm_tiled(const float* A, const float* B, float* C, int N) {
+    __shared__ float As[32][32], Bs[32][32];
+    int row = blockIdx.y*32 + threadIdx.y, col = blockIdx.x*32 + threadIdx.x;
+    float acc = 0.f;
+    for (int k = 0; k &lt; N; k += 32) {                       // march across K
+        As[threadIdx.y][threadIdx.x] = A[row*N + k + threadIdx.x];   // stage tiles
+        Bs[threadIdx.y][threadIdx.x] = B[(k + threadIdx.y)*N + col]; // (coalesced loads)
+        __syncthreads();
+        for (int kk = 0; kk &lt; 32; ++kk)                     // reuse from smem 32×
+            acc += As[threadIdx.y][kk] * Bs[kk][threadIdx.x];
+        __syncthreads();
+    }
+    C[row*N + col] = acc;
+}</div>
+
+<p><strong>The full ladder</strong>, following <a href="https://siboehm.com/articles/22/CUDA-MMM">siboehm's worklog</a> (FP32, 4096², A6000; replicate these on your 5080 and record your own numbers — that's the Step 18 deliverable):</p>
+<table class="cmp">
+<tr><th>#</th><th>Kernel</th><th>GFLOP/s</th><th>% of cuBLAS</th><th>What it adds</th></tr>
+<tr><td>1</td><td>Naive</td><td>309</td><td>1.3%</td><td>One thread per C element; nothing reused.</td></tr>
+<tr><td>2</td><td>Coalesced loads</td><td>1,987</td><td>8.5%</td><td>Swap thread x/y so warps read rows contiguously. 6.4× from an index swap.</td></tr>
+<tr><td>3</td><td>Shared-memory tiling</td><td>2,980</td><td>12.8%</td><td>The kernel above: HBM traffic ÷ tile size.</td></tr>
+<tr><td>4</td><td>1D register blocking</td><td>8,475</td><td>36.5%</td><td>Each thread computes 8 C elements; A values reused from <em>registers</em>, arithmetic intensity per thread jumps.</td></tr>
+<tr><td>5</td><td>2D register blocking</td><td>15,972</td><td>68.7%</td><td>Each thread owns an 8×8 C micro-tile: 64 FMAs per 16 loads; the inner loop becomes outer products.</td></tr>
+<tr><td>6</td><td>Vectorized float4 loads</td><td>18,237</td><td>78.4%</td><td>128-bit loads/stores cut instruction count and transactions.</td></tr>
+<tr><td>7</td><td>Autotuned tiles</td><td>19,721</td><td>84.8%</td><td>Search block/tile shapes per GPU — what Triton's autotuner automates.</td></tr>
+<tr><td>8</td><td>Warptiling</td><td>21,779</td><td>93.7%</td><td>An explicit warp-level tile between block and thread tiles; sets up the tensor-core layout.</td></tr>
+<tr><td>—</td><td>cuBLAS</td><td>23,250</td><td>100%</td><td>+ double buffering: prefetch tile k+1 while computing k, overlapping load and math.</td></tr>
+</table>
+<p>Read the ladder as a hierarchy of reuse: HBM → shared memory (rung 3) → registers (rungs 4–5) → better instructions (6–8). The same decomposition — block tile / warp tile / thread tile marching over K — is exactly what CUTLASS formalizes and what you'll meet again as NKI's tile model in <a href="hardware.html">Hardware</a>.</p>
+
+<h2 id="tensorcores">6. Tensor cores, CUTLASS &amp; CuTe</h2>
+<p>Past rung 8, scalar FMAs run out; FP16+ matmuls move to <strong>tensor cores</strong>. One <code>mma.sync.m16n8k16</code> instruction makes a whole warp cooperatively compute D = A·B + C for a 16×8 output tile with k=16, with inputs scattered across the 32 lanes' registers in a fixed <em>fragment layout</em>. You don't address "thread 3's element" anymore — you lay data out so the hardware's expected fragment pattern is satisfied, usually via <code>ldmatrix</code> from shared memory. That layout bookkeeping is the hard part, and it is why the ecosystem built abstractions:</p>
+<p><strong>CUTLASS</strong> is NVIDIA's template library implementing the full tiling hierarchy (block/warp/instruction tiles, pipelined stages, epilogues). <strong>CuTe</strong>, its core since 3.x, reduces all of it to one algebraic object — the <code>Layout</code>, a function from logical coordinates to memory offsets built from (shape, stride) pairs. Tiling, swizzling, fragment layouts, and partitioning become layout algebra (compose, divide, partition), checked at compile time. The CuTe GEMM tutorial in Step 11 walks a matmul through these layouts; after rungs 1–8 above, it reads as naming things you already built by hand.</p>
+<p><strong>Your hardware:</strong> the RTX 5080 is consumer Blackwell (<code>sm_120</code>). Its tensor cores run warp-level <code>mma.sync</code>, now including FP8 and FP4 — but Hopper's <code>wgmma</code> and datacenter Blackwell's <code>tcgen05</code>/tensor-memory instructions don't exist on it. CUTLASS example 79 ("blackwell_geforce_gemm", the Week 8 wildcard) targets exactly your chip; read wgmma/tcgen05 material as theory.</p>
+
+<h2 id="triton">7. Triton in depth</h2>
+<p>Triton's model: a kernel is a grid of <em>programs</em>; each program computes on <em>tiles</em> (power-of-2 blocks) with whole-tile loads, stores, and math. The compiler assigns tiles to warps, inserts shared-memory staging and <code>ldmatrix</code>/<code>mma</code>, handles coalescing and double buffering. What you keep: tile sizes, the grid, masking, and the algorithm. What you give up: warp-level tricks (shuffles, custom fragment layouts), fine control of smem.</p>
+<ul>
+<li><strong>Triton wins</strong> for fused elementwise+reduction kernels (softmax, RMSNorm, LayerNorm — the Liger kernels), attention variants, quantize/dequantize epilogues: 10× less code within ~5% of hand CUDA.</li>
+<li><strong>CUDA/CUTLASS wins</strong> when the fragment layout <em>is</em> the problem: peak dense GEMM, exotic quantized formats (see the marlin kernels), warp-specialized pipelines.</li>
+<li><strong>Autotuning:</strong> decorate with <code>@triton.autotune(configs=[...], key=['N'])</code> — it benchmarks tile-size configs per input shape and caches the winner, mechanizing rung 7 of the ladder.</li>
+</ul>
+<p>GPU MODE L14 (Practitioner's Guide to Triton) and the three official Triton tutorials (vector add → fused softmax → matmul) are the canonical path; they mirror sections 1, 4, and 5 of this page.</p>
+
+<h2 id="protocol">8. The practice protocol (Step 18)</h2>
+<p>Every kernel you write goes through the same gate before it counts:</p>
+<div class="formula"># 1. Correctness — against PyTorch, with tolerance appropriate to dtype
+torch.testing.assert_close(mine(x), torch.softmax(x, -1), rtol=1e-4, atol=1e-5)
+compute-sanitizer --tool memcheck ./bench     # and racecheck for smem kernels
+
+# 2. Honest benchmark — warmup, sync, CUDA events, many iters
+for _ in range(10): k()                        # warmup (JIT, clocks, caches)
+torch.cuda.synchronize()
+start, end = torch.cuda.Event(True), torch.cuda.Event(True)
+start.record()
+for _ in range(100): k()
+end.record(); torch.cuda.synchronize()
+ms = start.elapsed_time(end) / 100             # never time.time() around async launches
+
+# 3. Roofline check — GB/s or TFLOP/s vs the 5080's ~0.96 TB/s / ~220 TF
+# 4. Profile — ncu --set full ./bench  → SOL, coalescing, occupancy (GPU §6)</div>
+<ol>
+<li>Implement the Step 9 set yourself: transpose, reduction, scan, online softmax. Then climb the matmul ladder one rung at a time, recording your numbers next to siboehm's.</li>
+<li>Fuse something real: the Triton softmax above, then an RMSNorm forward against Liger's.</li>
+<li>Port one kernel (online softmax or RoPE) to <strong>NKI</strong> with <code>nki.simulate_kernel</code> — no Trainium needed — and compare your tiling against the nki-library reference (details in <a href="hardware.html">Hardware</a>).</li>
+<li>Try a <a href="https://proceedings.mlr.press/v267/ouyang25a.html">KernelBench</a> problem, and share numbers on the <a href="https://discord.gg/gpumode">GPU MODE Discord</a>.</li>
+</ol>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li><a href="https://siboehm.com/articles/22/CUDA-MMM">siboehm's CUDA matmul worklog</a> — the ladder, with code for every rung.</li>
+<li>GPU MODE <strong>L3/L5</strong> (first kernels), <strong>L9</strong> (reductions), <strong>L14</strong> (Triton), <strong>L23</strong> (tensor cores), <strong>L36</strong> (CUTLASS &amp; FA3) — Steps 7–11 of the <a href="../index.html">plan</a>.</li>
+<li><a href="https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf">NVIDIA reduction deck</a>, <a href="https://developer.nvidia.com/blog/efficient-matrix-transpose-cuda-cc/">transpose blog</a>, <a href="https://arxiv.org/abs/1805.02867">online softmax paper</a>.</li>
+<li><a href="https://docs.nvidia.com/cutlass/latest/media/docs/cpp/cute/0x_gemm_tutorial.html">CuTe GEMM tutorial</a>; PMPP ch 10–11 for reduction/scan theory.</li>
+<li>Drill it: the <a href="flashcards.html">Kernels flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="gpu.html">← GPU</a><a href="quantization.html">Quantization →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+// ---------- 2. tree reduction ----------
+(function(){
+const cv=document.getElementById('redViz'),ctx=cv.getContext('2d');
+let vals,hist,step;
+function init(){vals=Array.from({length:16},()=>Math.floor(Math.random()*9)+1);hist=[vals.slice()];step=0;
+  let v=vals.slice();for(let s=8;s>=1;s>>=1){v=v.slice();for(let i=0;i<s;i++)v[i]=v[i]+v[i+s];hist.push(v.slice());}}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const bw=48,bh=34,x0=40;
+  ctx.font='12px sans-serif';
+  for(let r=0;r<=step;r++){
+    const v=hist[r],y=30+r*52,stride=r===0?null:8>>(r-1);
+    const activeN=r===0?16:(8>>(r-1));
+    ctx.fillStyle=dim;ctx.textAlign='left';
+    ctx.fillText(r===0?'shared mem':'stride '+ (8>>(r-1)),x0-10+0,y-8);
+    for(let i=0;i<16;i++){
+      const x=x0+60+i*(bw+4);
+      const live=r===0||i<activeN;
+      const justWritten=r===step&&r>0&&i<activeN;
+      ctx.fillStyle=justWritten?acc2:(live?acc:css('--bg-card'));
+      ctx.globalAlpha=live?1:0.35;
+      rr(ctx,x,y,bw,bh,6);ctx.fill();ctx.globalAlpha=1;
+      ctx.strokeStyle=bd;ctx.stroke();
+      ctx.fillStyle=live?'#fff':dim;ctx.textAlign='center';ctx.font='12px monospace';
+      ctx.fillText(v[i],x+bw/2,y+22);
+    }
+    // arrows for the step just taken
+    if(r===step&&r>0){const s=8>>(r-1);
+      for(let i=0;i<s;i++){
+        const xa=x0+60+(i+s)*(bw+4)+bw/2,xb=x0+60+i*(bw+4)+bw/2,ya=y-52+34,yb2=y;
+        ctx.strokeStyle=css('--warn');ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(xa,ya);ctx.lineTo(xb,yb2);ctx.stroke();
+      }}
+  }
+  document.getElementById('redInfo').textContent=step===0?'16 values staged · 4 steps to go':
+    step<4?('step '+step+': '+(8>>(step-1))+' threads active, rest idle'):
+    ('done: sum = '+hist[4][0]+' in 4 steps (log₂16) vs 15 sequential adds');
+}
+document.getElementById('redStep').onclick=()=>{if(step<4){step++;draw();}};
+document.getElementById('redReset').onclick=()=>{init();draw();};
+init();draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3. transpose ----------
+(function(){
+const cv=document.getElementById('transViz'),ctx=cv.getContext('2d');
+const N=8;let phase=0,timer=null; // 0 idle,1 read row->smem (per row 1..8 => phases 1-8), 9 transposed view, 10-17 write rows, 18 done
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const cs=26,g=[['input (global)',60],['shared tile [8][9]',390],['output (global)',680]];
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  g.forEach(([n,x])=>{ctx.fillStyle=dim;ctx.fillText(n,x,36);});
+  const readRows=Math.max(0,Math.min(phase,N));
+  const writeRows=Math.max(0,Math.min(phase-N-1,N));
+  // input
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const x=60+c*cs,y=50+r*cs;
+    const read=r<readRows;const reading=phase>=1&&phase<=N&&r===phase-1;
+    ctx.fillStyle=reading?warn:(read?acc:css('--bg-card'));
+    ctx.globalAlpha=read||reading?0.9:1;ctx.fillRect(x,y,cs-2,cs-2);ctx.globalAlpha=1;
+    ctx.strokeStyle=bd;ctx.strokeRect(x,y,cs-2,cs-2);
+  }
+  // smem
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const x=390+c*cs,y=50+r*cs;
+    const have=r<readRows;
+    const colRead=phase>N&&phase<=2*N+1&&c===writeRows;
+    ctx.fillStyle=colRead?warn:(have?acc2:css('--bg-card'));
+    ctx.globalAlpha=have?0.85:1;ctx.fillRect(x,y,cs-2,cs-2);ctx.globalAlpha=1;
+    ctx.strokeStyle=bd;ctx.strokeRect(x,y,cs-2,cs-2);
+  }
+  // output
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const x=680+c*cs,y=50+r*cs;
+    const written=r<writeRows;const writing=phase>N+1&&phase<=2*N+1&&r===writeRows;
+    ctx.fillStyle=written?acc:css('--bg-card');
+    if(writing)ctx.fillStyle=warn;
+    ctx.globalAlpha=written||writing?0.9:1;ctx.fillRect(x,y,cs-2,cs-2);ctx.globalAlpha=1;
+    ctx.strokeStyle=bd;ctx.strokeRect(x,y,cs-2,cs-2);
+  }
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  let msg='Press play: warp reads input row by row.';
+  if(phase>=1&&phase<=N)msg='Read row '+(phase)+' of input → shared memory. Contiguous: ONE transaction.';
+  if(phase===N+1)msg='Tile staged. Now read it by COLUMN — free in shared memory (with padding).';
+  if(phase>N+1&&phase<=2*N+1)msg='smem column '+(writeRows+1)+' → output row '+(writeRows+1)+'. Contiguous write: ONE transaction.';
+  if(phase>2*N+1)msg='Done. Every global access was coalesced; the transposed pattern only touched smem.';
+  ctx.fillText(msg,60,H-20);
+}
+function advance(){if(phase<2*N+2){phase++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('transPlay').textContent='▶ Play';}}
+document.getElementById('transStep').onclick=()=>{stop();advance();};
+document.getElementById('transReset').onclick=()=>{stop();phase=0;draw();};
+document.getElementById('transPlay').onclick=function(){if(timer){stop();return;}if(phase>=2*N+2)phase=0;this.textContent='⏸ Pause';timer=setInterval(advance,420);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4. online softmax ----------
+(function(){
+const cv=document.getElementById('smaxViz'),ctx=cv.getContext('2d');
+let xs,i,m,d,rows,flash;
+function init(){xs=Array.from({length:8},()=>Math.round((Math.random()*8-2)*10)/10);i=-1;m=-Infinity;d=0;rows=[];flash=false;}
+function stepIn(){
+  if(i>=xs.length-1)return;i++;
+  const x=xs[i],mNew=Math.max(m,x);flash=mNew>m&&isFinite(m);
+  const scale=isFinite(m)?Math.exp(m-mNew):1;
+  d=d*scale+Math.exp(x-mNew);m=mNew;
+  rows.push({x,m,d,scale:flash?scale:null});draw();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const bw=58,x0=40;
+  ctx.font='12px monospace';
+  // stream
+  for(let k=0;k<xs.length;k++){
+    const x=x0+k*(bw+6);
+    ctx.fillStyle=k<i?acc:(k===i?warn:css('--bg-card'));
+    rr(ctx,x,30,bw,30,6);if(k<=i)ctx.fill();ctx.strokeStyle=bd;ctx.stroke();
+    ctx.fillStyle=k<=i?'#fff':dim;ctx.textAlign='center';ctx.fillText(xs[k].toFixed(1),x+bw/2,50);
+  }
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.font='12px sans-serif';
+  ctx.fillText('x streams in →',x0,22);
+  // table
+  const ty=92;ctx.font='bold 12px monospace';ctx.fillStyle=dim;
+  ctx.fillText('  i      x      m (running max)    d (running denom)',x0,ty);
+  ctx.font='12px monospace';
+  rows.slice(-7).forEach((r,k)=>{
+    const idx=rows.length-Math.min(rows.length,7)+k;
+    const y=ty+18+k*20;
+    ctx.fillStyle=idx===i?txt:dim;
+    let line='  '+idx+'   '+r.x.toFixed(1).padStart(5)+'    '+r.m.toFixed(1).padStart(6)+'            '+r.d.toFixed(4);
+    if(r.scale!==null)line+='   ← old d × e^(Δm) = ×'+r.scale.toFixed(3);
+    ctx.fillText(line,x0,y);
+    if(r.scale!==null&&idx===i){ctx.fillStyle=warn;ctx.fillText('max improved! rescale',x0+560,y);}
+  });
+  if(i>=xs.length-1&&i>=0){
+    const trueM=Math.max(...xs),trueD=xs.reduce((a,v)=>a+Math.exp(v-trueM),0);
+    ctx.fillStyle=acc2;ctx.font='bold 13px sans-serif';
+    ctx.fillText('3-pass check:  m='+trueM.toFixed(1)+'  d='+trueD.toFixed(4)+'  — identical, one pass over memory instead of two.',x0,H-16);
+  }
+}
+document.getElementById('smaxStep').onclick=stepIn;
+document.getElementById('smaxReset').onclick=()=>{init();draw();};
+init();draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 5. tiled matmul ----------
+(function(){
+const cv=document.getElementById('mmViz'),ctx=cv.getContext('2d');
+const N=8,T=2; // 8x8 matrices in 2x2 tiles => K marches 4 steps
+let kStep=0,sub=0,timer=null; // sub: 0=stage,1=compute
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const cs=24;
+  const ax=60,ay=70,bx=330,by=70,cx=600,cy=70;
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=dim;
+  ctx.fillText('A (row panel)',ax,56);ctx.fillText('B (column panel)',bx,56);ctx.fillText('C (this block\'s tile)',cx,56);
+  const steps=N/T;
+  // target C tile: rows 2-3, cols 4-5 (block coords 1, 2)
+  const cr=2,cc=4;
+  function cell(x,y,fill,alpha){ctx.fillStyle=fill;ctx.globalAlpha=alpha;ctx.fillRect(x,y,cs-2,cs-2);ctx.globalAlpha=1;ctx.strokeStyle=bd;ctx.strokeRect(x,y,cs-2,cs-2);}
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    // A
+    let f=css('--bg-card'),a=1;
+    const inRowPanel=r>=cr&&r<cr+T;
+    const inCurTileA=inRowPanel&&c>=kStep*T&&c<(kStep+1)*T&&kStep<steps;
+    if(inRowPanel){f=acc;a=0.25;}
+    if(inCurTileA){f=sub===0?warn:acc;a=0.95;}
+    if(inRowPanel&&c<kStep*T){f=acc;a=0.55;}
+    cell(ax+c*cs,ay+r*cs,f,a);
+    // B
+    f=css('--bg-card');a=1;
+    const inColPanel=c>=cc&&c<cc+T;
+    const inCurTileB=inColPanel&&r>=kStep*T&&r<(kStep+1)*T&&kStep<steps;
+    if(inColPanel){f=acc2;a=0.25;}
+    if(inCurTileB){f=sub===0?warn:acc2;a=0.95;}
+    if(inColPanel&&r<kStep*T){f=acc2;a=0.55;}
+    cell(bx+c*cs,by+r*cs,f,a);
+    // C
+    f=css('--bg-card');a=1;
+    const inC=r>=cr&&r<cr+T&&c>=cc&&c<cc+T;
+    if(inC){f=css('--warn');a=0.2+0.75*(Math.min(kStep+(sub===1?1:0),steps)/steps);f=acc;}
+    cell(cx+c*cs,cy+r*cs,f,a);
+  }
+  // smem boxes
+  ctx.fillStyle=dim;ctx.fillText('shared memory',330,300);
+  ctx.strokeStyle=bd;ctx.strokeRect(330,308,120,36);
+  if(kStep<steps){ctx.fillStyle=sub===0?warn:acc;ctx.fillRect(334,312,50,28);ctx.fillStyle=sub===0?warn:acc2;ctx.fillRect(394,312,50,28);
+    ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.textAlign='center';ctx.fillText('As',359,330);ctx.fillText('Bs',419,330);}
+  ctx.textAlign='left';ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  let msg;
+  if(kStep>=steps)msg='Done: C tile complete. Each A/B element was fetched from HBM once, used '+T+'× from smem.';
+  else if(sub===0)msg='k-step '+(kStep+1)+'/'+steps+': stage A and B tiles into shared memory, __syncthreads().';
+  else msg='k-step '+(kStep+1)+'/'+steps+': accumulate As×Bs into C registers ('+(T*T*T)+' FMAs per '+(2*T*T)+' loads).';
+  ctx.fillText(msg,60,H-18);
+  document.getElementById('mmInfo').textContent='accumulated k-steps: '+Math.min(kStep+(sub===1?1:0),steps)+'/'+steps;
+}
+function advance(){if(kStep>=N/T){stop();return;}if(sub===0)sub=1;else{sub=0;kStep++;}draw();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('mmPlay').textContent='▶ Play';}}
+document.getElementById('mmStep').onclick=()=>{stop();advance();};
+document.getElementById('mmReset').onclick=()=>{stop();kStep=0;sub=0;draw();};
+document.getElementById('mmPlay').onclick=function(){if(timer){stop();return;}if(kStep>=N/T){kStep=0;sub=0;}this.textContent='⏸ Pause';timer=setInterval(advance,850);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

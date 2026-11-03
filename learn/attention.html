@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Attention &amp; FlashAttention</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html" class="here">Attention</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Attention, FlashAttention &amp; Long Context</h1>
+<p class="dim">The mechanism itself, computed by hand; multi-head and its cache-saving variants; RoPE; and the kernel that made long context affordable — FlashAttention's tiling and online softmax, animated tile by tile. This is the deep dive behind Step 12 of the study plan.</p>
+
+<h2 id="first-principles">1. Attention from first principles</h2>
+<p>Attention is a soft dictionary lookup. Each position emits a <strong>query</strong> ("what am I looking for?"), and offers a <strong>key</strong> ("what do I contain, as an address?") and a <strong>value</strong> ("what do I contribute, as content?"). A query is compared against every key by dot product — the natural "how aligned are we?" measure from the <a href="math.html">math chapter</a> — the comparisons become weights via softmax, and the output is the weight-blended average of the values. Nothing is retrieved exactly; everything is retrieved a little, in proportion to relevance.</p>
+<div class="formula">Attention(Q, K, V) = softmax( QKᵀ / √d_k ) V<br><br>shapes:  Q: n×d_k   K: n×d_k   V: n×d_v   QKᵀ: n×n   output: n×d_v<br>(n = sequence length; d_k = d_v = head dim, typically 64–128)</div>
+<p>The √d<sub>k</sub> matters: dot products of random d-dimensional vectors have standard deviation ~√d, and softmax of large-magnitude inputs saturates to a one-hot — killing gradients and nuance. Dividing by √d<sub>k</sub> keeps scores O(1) at any width.</p>
+
+<div class="card">
+<h3>Worked example: 3 tokens, d = 2, by hand</h3>
+<p class="dim">Query of token 3 attending over all three positions. Every number below is actually computed by the page — check any of them with a pencil.</p>
+<div id="workedExample"></div>
+<p class="caption">Read it bottom-up: the output vector is 57.6% token 3's value, 28.4% token 2's, 14.0% token 1's — the query "chose" its own and token 2's content. In a real model this happens for every position, every head, every layer, with d = 128 instead of 2.</p>
+</div>
+
+<h2 id="multihead">2. Multi-head attention and the KV-saving variants</h2>
+<p>One attention pattern per layer is too coarse: a token may simultaneously need its syntactic subject, the previous mention of the same entity, and the delimiter opening its bracket. <strong>Multi-head attention</strong> runs h independent attentions in parallel on h learned low-dimensional projections (d_model = h × d_head, e.g. 4096 = 32 × 128), letting each head learn its own notion of relevance — induction heads, positional heads, syntax heads are all well-documented. The outputs concatenate and project back. FLOPs stay the same as one full-width head; expressivity doesn't.</p>
+<p>At serving time, heads have a price: every K/V head is cached for every token (the <a href="inference.html#kv-cache">KV cache formula</a>). Since decode is bandwidth-bound, <em>reading</em> all those cached heads is the bottleneck — so the variants below shrink K/V while keeping all the query heads:</p>
+<table class="cmp">
+<tr><th>Variant</th><th>K/V heads for 32 Q heads</th><th>Cache vs MHA</th><th>Quality cost</th></tr>
+<tr><td>MHA</td><td>32</td><td>1×</td><td>baseline</td></tr>
+<tr><td>GQA</td><td>8 (groups of 4 share)</td><td>¼×</td><td>negligible (Llama-2/3, Mistral)</td></tr>
+<tr><td>MQA</td><td>1 (all share)</td><td>1/32×</td><td>small but real; needs uptraining</td></tr>
+<tr><td>MLA</td><td>one shared latent c ≈ 512 dims, K/V decompressed per head on the fly</td><td>~1/14× (DeepSeek-V2)</td><td>≈ none — latent is <em>trained</em>, and extra FLOPs are free in bandwidth-bound decode</td></tr>
+</table>
+
+<div class="card">
+<h3>Animation: who shares whose K/V</h3>
+<div class="controls">
+  <label class="ctl">Variant
+    <select id="mhSel">
+      <option value="mha">MHA — 8 Q heads, 8 KV heads</option>
+      <option value="gqa" selected>GQA — 8 Q heads, 2 KV heads</option>
+      <option value="mqa">MQA — 8 Q heads, 1 KV head</option>
+      <option value="mla">MLA — 8 Q heads, 1 shared latent</option>
+    </select>
+  </label>
+</div>
+<canvas id="mhViz" class="viz" width="900" height="250"></canvas>
+<p class="caption">Pulses travel from cached K/V (bottom) up to the query heads that read them each decode step. Fewer boxes on the bottom row = fewer bytes streamed from HBM per token = faster decode and more concurrent users. MLA caches only the small grey latent; the per-head K/V are recomputed from it inside the kernel.</p>
+</div>
+
+<h2 id="rope">3. Positional encoding: RoPE</h2>
+<p>Attention is permutation-invariant, so position must be injected. The original transformer <em>added</em> sinusoidal position vectors to embeddings; GPT-2 learned one vector per absolute position. Modern models use <strong>Rotary Position Embedding (RoPE)</strong>: split each query and key into d/2 two-dimensional pairs and <em>rotate</em> pair p of the vector at position m by angle m·θ<sub>p</sub>, where θ<sub>p</sub> = 10000<sup>−2p/d</sup> gives each pair its own frequency — fast-spinning pairs resolve nearby order, slow ones encode long-range position.</p>
+<p>The magic is in the dot product. Rotations compose: a query rotated by m·θ dotted with a key rotated by n·θ depends only on the <em>difference</em> (m−n)·θ. Attention scores become a function of relative position — "3 tokens back" — not absolute index, which is what language actually needs, and no vector is ever added to the residual stream.</p>
+
+<div class="card">
+<h3>Interactive: rotation encodes relative position</h3>
+<canvas id="ropeViz" class="viz" width="900" height="270"></canvas>
+<div class="controls">
+  <label class="ctl">query position m <input type="range" id="ropeM" min="0" max="20" value="6" step="1"> <span id="ropeML">6</span></label>
+  <label class="ctl">key position n <input type="range" id="ropeN" min="0" max="20" value="2" step="1"> <span id="ropeNL">2</span></label>
+</div>
+<p class="caption">One frequency pair, one q (blue) and one k (green), each rotated by its position × θ. Slide both positions by the same amount — the vectors spin, but the angle between them and the score q·k do not move. Only m−n matters. Context extension tricks (NTK scaling, YaRN) work by stretching the θ frequencies so a model trained at 8K positions can be served at 128K without the fast pairs aliasing.</p>
+</div>
+
+<h2 id="memory-wall">4. The n² wall</h2>
+<p>The score matrix QKᵀ is n×n <em>per head</em>. Computing it is O(n²d) FLOPs — tolerable, GPUs love matmuls — but <em>materializing</em> it in HBM is what killed long context: write n² scores, read them back for softmax, write n² weights, read them back to multiply by V. Four n²-sized HBM round trips, on hardware where HBM traffic, not FLOPs, is the budget (the <a href="gpu.html">roofline model</a>).</p>
+<div class="card">
+<h3>Interactive: what naive attention materializes</h3>
+<div class="controls">
+  <label class="ctl">Sequence length <input type="range" id="wallN" min="10" max="20" value="15" step="1"> <span id="wallNL"></span></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="wallMat">–</div><div class="l">score matrix, 1 head FP16</div></div>
+  <div class="box"><div class="v" id="wallLayer">–</div><div class="l">× 32 heads (one layer)</div></div>
+  <div class="box"><div class="v" id="wallFlash">–</div><div class="l">FlashAttention extra HBM</div></div>
+</div>
+<p class="caption">At 32K tokens one layer's attention matrices are tens of gigabytes in flight — more than the whole GPU. FlashAttention's answer: never write them at all. Its HBM footprint beyond Q, K, V, O is just the per-row statistics, linear in n.</p>
+</div>
+
+<h2 id="flash">5. FlashAttention: tiling + online softmax</h2>
+<p>FlashAttention computes <em>exact</em> attention without ever materializing the n×n matrix, by being <strong>IO-aware</strong>: it counts HBM reads and writes, not FLOPs. The kernel tiles Q into row blocks and K/V into column blocks sized to fit in on-chip SRAM (~hundreds of KB, ~20× HBM's bandwidth — see the <a href="gpu.html">memory hierarchy</a>). For each Q block it streams K/V blocks through SRAM, computing partial scores and accumulating output — one pass, nothing n² ever leaves the chip.</p>
+<p>The obstacle is softmax: its denominator needs <em>all</em> scores of a row before any weight is final. The fix is the <strong>online softmax</strong> (from the study plan's Step 9 kernel exercises — this is why that exercise exists): keep a running maximum m and running denominator l per row, and whenever a new tile raises the maximum, rescale what you've accumulated so far by e<sup>m_old − m_new</sup>. Algebraically identical to the full softmax, but computable tile by tile:</p>
+<div class="formula">for each K/V tile j:<br>  s = Q_i K_jᵀ/√d                    # tile of scores, lives only in SRAM<br>  m_new = max(m, rowmax(s))<br>  l     = l·e^(m−m_new) + rowsum(e^(s−m_new))<br>  O     = O·e^(m−m_new) + e^(s−m_new)·V_j<br>  m     = m_new<br>output: O / l                        # exact softmax(QKᵀ/√d)V</div>
+
+<div class="card">
+<h3>Animation: the kernel, tile by tile</h3>
+<canvas id="faViz" class="viz" width="900" height="400"></canvas>
+<div class="controls">
+  <button class="btn" id="faPlay">▶ Play</button>
+  <button class="btn secondary" id="faStep">Step</button>
+  <button class="btn secondary" id="faReset">Reset</button>
+</div>
+<p class="caption">Left: the n×n score matrix that is never stored — only the highlighted tile exists, in SRAM. Causal masking skips the greyed tiles entirely (half the work). Right: the running statistics for the current query block — watch m jump and l and O get rescaled by e<sup>m−m_new</sup> when a tile contains a new maximum. The HBM counters show why this wins: traffic scales with n·d, not n².</p>
+</div>
+
+<p>The versions since are about mapping this loop onto each GPU generation: <strong>FlashAttention-2</strong> reordered the loops and work partitioning so each thread block owns a Q block (parallelism over sequence, better occupancy, fewer non-matmul ops) — ~2× over FA-1. <strong>FlashAttention-3</strong> exploits Hopper: warp specialization with producer warps driving TMA (async memory copies) while consumer warps run WGMMA tensor-core ops, overlapping softmax with matmuls, plus FP8 support — ~1.5–2× over FA-2 on H100. <strong>FlashAttention-4</strong> re-schedules for Blackwell's tcgen05 tensor cores and tensor memory. The lesson generalizes beyond attention: <em>restructure the algorithm so its working set lives in fast memory, and recompute rather than round-trip</em> — the founding idea of every fused kernel in the <a href="kernels.html">kernels chapter</a>.</p>
+
+<h2 id="long-context">6. Long context: beyond one GPU, below n²</h2>
+<p><strong>Ring Attention</strong> scales <em>exact</em> attention across devices: shard the sequence, let every device keep its Q shard, and circulate K/V shards around a ring. Each hop, a device computes one Q-block × KV-block interaction (merging with online softmax, which composes across devices just like across tiles) while simultaneously sending its current KV shard onward — communication hides behind compute, and after P−1 hops every pair has met. Context then scales linearly with device count.</p>
+
+<div class="card">
+<h3>Animation: KV blocks around the ring</h3>
+<canvas id="ringViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="ringStep">Rotate</button>
+  <button class="btn secondary" id="ringReset">Reset</button>
+  <span class="dim" id="ringStatus"></span>
+</div>
+<p class="caption">Four devices, four sequence shards. Each device's Q stays home (outer label); the colored KV blocks hop clockwise each step. The coverage grid fills one diagonal per hop — after 3 rotations every Qᵢ has seen every KVⱼ, with the n×n work evenly split and no device ever holding more than 1/4 of the KV.</p>
+</div>
+
+<p><strong>Sparse attention</strong> attacks n² itself. <em>MInference</em> observes that long-context prefill attention is dominated by a few recurring patterns per head (A-shapes, vertical-slash bands, block-sparse blobs), classifies each head offline, and computes only the pattern — up to ~10× faster prefill at 1M tokens on existing models, no retraining. <em>Native Sparse Attention (NSA)</em> instead <em>trains</em> the model sparse: each query reads compressed block summaries, a selected set of fine blocks, and a sliding window, with hardware-aligned block sizes — so the sparsity is learned end-to-end rather than guessed post hoc. <strong>Sliding-window attention</strong> (Mistral) is the degenerate-but-effective case: attend only to the last w tokens; stacked layers still propagate information w tokens per layer, like a CNN's growing receptive field.</p>
+
+<h2 id="serving">7. Attention kernels in serving engines</h2>
+<p>Serving adds one more twist: the KV cache is <a href="inference.html#paged">paged</a>, so K and V are not even contiguous — kernels must gather blocks through a block table. <strong>FlashInfer</strong> is the library built for this regime: paged and ragged KV layouts, prefill/decode/append variants, shared-prefix batch kernels, and JIT-tuned schedules, used inside vLLM and SGLang. During decode there is no parallelism over query length (one token), so these kernels split work across the <em>KV length</em> instead (FlashDecoding-style), merging partial results with — once again — the online softmax. One idea, four scales: tile, thread block, device ring, serving batch.</p>
+
+<h2 id="reading">8. Where to go deeper</h2>
+<ul>
+<li><a href="https://arxiv.org/abs/2205.14135">FlashAttention</a>, <a href="https://arxiv.org/abs/2307.08691">FA-2</a>, <a href="https://arxiv.org/abs/2407.08608">FA-3</a> — read them in order; each is a lesson in hardware-algorithm co-design (Step 12).</li>
+<li><a href="https://arxiv.org/abs/1805.02867">Online normalizer calculation for softmax</a> — the Week 5 kernel you build yourself.</li>
+<li><a href="https://arxiv.org/abs/2305.13245">GQA</a> and <a href="https://arxiv.org/abs/2405.04434">DeepSeek-V2 (MLA)</a> — the cache-variant papers (Step 14).</li>
+<li><a href="https://arxiv.org/abs/2310.01889">Ring Attention</a>, <a href="https://arxiv.org/abs/2407.02490">MInference</a>, <a href="https://arxiv.org/abs/2502.11089">NSA</a> — long context (Steps 12, 15).</li>
+<li>Then build it: a Triton flash-attention forward pass is the Week 9 project in the <a href="../index.html">3-month schedule</a>, and the <a href="flashcards.html">Attention deck</a> locks in the formulas.</li>
+</ul>
+
+<div class="footer-nav"><a href="transformers.html">← Transformers</a><a href="gpu.html">GPU →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------- 1. worked example (computed live) ----------
+(function(){
+const toks=['tok₁','tok₂','tok₃'];
+const K=[[1,0],[0,1],[1,1]],V=[[1,0],[0,1],[0.5,0.5]],q=[1,2];const d=2;
+const scores=K.map(k=>(q[0]*k[0]+q[1]*k[1])/Math.sqrt(d));
+const m=Math.max(...scores),exps=scores.map(s=>Math.exp(s-m)),Z=exps.reduce((a,b)=>a+b,0);
+const w=exps.map(e=>e/Z);
+const out=[0,1].map(j=>w.reduce((s,wi,i)=>s+wi*V[i][j],0));
+const f=x=>x.toFixed(3);
+document.getElementById('workedExample').innerHTML=
+'<table class="cmp"><tr><th></th><th>key k</th><th>value v</th><th>q·k / √2</th><th>softmax weight</th></tr>'+
+toks.map((t,i)=>'<tr><td>'+t+'</td><td><code>['+K[i].join(', ')+']</code></td><td><code>['+V[i].join(', ')+']</code></td><td><code>'+f(scores[i])+'</code></td><td><code>'+f(w[i])+'</code></td></tr>').join('')+
+'</table><div class="formula">q₃ = [1, 2]   (the query of token 3)<br>weights = softmax(['+scores.map(f).join(', ')+']) = ['+w.map(f).join(', ')+']<br>output = '+w.map((wi,i)=>f(wi)+'·['+V[i].join(',')+']').join(' + ')+' = <b>['+out.map(f).join(', ')+']</b></div>';
+})();
+
+// ---------- 2. head sharing ----------
+(function(){
+const cv=document.getElementById('mhViz'),ctx=cv.getContext('2d');
+const sel=document.getElementById('mhSel');let t=0;
+function conf(){
+  switch(sel.value){
+    case 'mha':return{kv:8,label:'8 KV heads cached — 1× bytes/token',latent:false};
+    case 'gqa':return{kv:2,label:'2 KV heads cached — ¼ the bytes streamed each decode step',latent:false};
+    case 'mqa':return{kv:1,label:'1 KV head cached — 1/8 the bytes',latent:false};
+    case 'mla':return{kv:1,label:'only the small latent cached; K/V rebuilt from it in-kernel',latent:true};
+  }}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const c=conf();const Q=8;
+  const qw=70,qh=34,qy=40,kvy=165;
+  const qx=i=>60+i*(qw+28);
+  // KV boxes
+  const kvw=c.latent?140:qw,kvxs=[];
+  for(let j=0;j<c.kv;j++){
+    const groupSize=Q/c.kv;
+    const x=c.latent?(W/2-kvw/2):(qx(j*groupSize)+((groupSize-1)*(qw+28))/2);
+    kvxs.push(x+kvw/2);
+    ctx.fillStyle=c.latent?'rgba(128,128,128,0.35)':acc2;
+    ctx.beginPath();ctx.roundRect(x,kvy,kvw,qh,8);ctx.fill();
+    ctx.fillStyle='#fff';ctx.font='bold 12px sans-serif';ctx.textAlign='center';
+    ctx.fillText(c.latent?'latent c (cached)':'K/V '+(j+1),x+kvw/2,kvy+22);
+  }
+  // Q heads + lines with pulse
+  for(let i=0;i<Q;i++){
+    const x=qx(i);const kvIdx=c.latent?0:Math.floor(i/(Q/c.kv));
+    const x1=x+qw/2,y1=qy+qh,x2=kvxs[kvIdx],y2=kvy;
+    ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x2,y2);ctx.lineTo(x1,y1);ctx.stroke();
+    const p=(t*0.02+i*0.12)%1;
+    const px=x2+(x1-x2)*p,py=y2+(y1-y2)*p;
+    ctx.fillStyle=acc2;ctx.beginPath();ctx.arc(px,py,4,0,7);ctx.fill();
+    ctx.fillStyle=acc;ctx.beginPath();ctx.roundRect(x,qy,qw,qh,8);ctx.fill();
+    ctx.fillStyle='#fff';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText('Q'+(i+1),x+qw/2,qy+22);
+  }
+  if(c.latent){ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';
+    ctx.fillText('per-head K/V decompressed on the fly (extra FLOPs are free: decode is bandwidth-bound)',W/2,kvy+56);}
+  ctx.fillStyle=txt;ctx.font='13px sans-serif';ctx.textAlign='left';ctx.fillText(c.label,30,H-16);
+  t++;requestAnimationFrame(draw);
+}
+sel.oninput=()=>{};
+requestAnimationFrame(draw);
+})();
+
+// ---------- 3. RoPE ----------
+(function(){
+const cv=document.getElementById('ropeViz'),ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);const TH=0.22;
+const q0=[0.95,0.31],k0=[0.6,0.8]; // unit-ish base vectors
+function rot(v,a){return[v[0]*Math.cos(a)-v[1]*Math.sin(a),v[0]*Math.sin(a)+v[1]*Math.cos(a)];}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const m=parseInt($('ropeM').value),n=parseInt($('ropeN').value);
+  $('ropeML').textContent=m;$('ropeNL').textContent=n;
+  const q=rot(q0,m*TH),k=rot(k0,n*TH);
+  const dot=q[0]*k[0]+q[1]*k[1];
+  const cx=200,cy=135,R=95;
+  ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(cx,cy,R,0,7);ctx.stroke();
+  function arrow(v,color,label){
+    const x=cx+v[0]*R,y=cy-v[1]*R;
+    ctx.strokeStyle=color;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(x,y);ctx.stroke();
+    ctx.fillStyle=color;ctx.beginPath();ctx.arc(x,y,5,0,7);ctx.fill();
+    ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillText(label,x+8,y);
+  }
+  arrow(q,acc,'q at pos '+m);arrow(k,acc2,'k at pos '+n);
+  // readouts
+  ctx.fillStyle=txt;ctx.font='14px monospace';ctx.textAlign='left';
+  ctx.fillText('relative offset m−n = '+(m-n),420,70);
+  ctx.fillText('angle between q,k  = '+(((m-n)*TH).toFixed(2))+' rad (only depends on m−n)',420,100);
+  ctx.fillText('score q·k          = '+dot.toFixed(4),420,130);
+  // score bar
+  ctx.fillStyle=dim;ctx.fillRect(420,155,300,10);
+  ctx.fillStyle=dot>=0?acc2:'#e5604c';
+  const w=Math.min(Math.abs(dot),1.2)/1.2*150;
+  ctx.fillRect(570,155,(dot>=0?1:-1)*w,10);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';
+  ctx.fillText('try: move BOTH sliders up by 5 — nothing changes. That is relative encoding.',420,195);
+}
+['ropeM','ropeN'].forEach(id=>$(id).oninput=draw);
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4. memory wall ----------
+(function(){
+const $=id=>document.getElementById(id);
+function fmt(b){const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++;}return b.toFixed(b>=100?0:1)+' '+u[i];}
+function upd(){
+  const n=Math.pow(2,parseInt($('wallN').value));
+  $('wallNL').textContent=n>=1024?(n/1024)+'K tokens':n+' tokens';
+  const one=n*n*2; // fp16 scores, 1 head
+  $('wallMat').textContent=fmt(one);
+  $('wallLayer').textContent=fmt(one*32);
+  $('wallFlash').textContent=fmt(n*4*2)+' (m,l stats)';
+}
+$('wallN').oninput=upd;upd();
+})();
+
+// ---------- 5. FlashAttention tiling ----------
+(function(){
+const cv=document.getElementById('faViz'),ctx=cv.getContext('2d');
+const N=16,B=4,T=N/B; // 4x4 tiles
+let i=0,j=0,done=false,timer=null;
+let m=-Infinity,l=0,scale=1; // stats for current row block (display)
+let hbmFlash=0;
+function tileMax(i,j){return +(Math.sin(i*3.7+j*2.3)*2).toFixed(2);}
+function reset(){i=0;j=0;done=false;m=-Infinity;l=0;hbmFlash=N*64*2;/*Q read once per row block approx*/draw();}
+function stepFn(){
+  if(done)return;
+  const tm=tileMax(i,j);
+  const mNew=Math.max(m,tm);
+  const tileL=+(B*Math.exp(tm-mNew)).toFixed(2); // toy rowsum
+  l=+(l*Math.exp(m-mNew)+tileL).toFixed(2);
+  m=mNew;
+  hbmFlash+=B*64*2*2; // K,V tile loads (toy, d=64 fp16)
+  j++;
+  if(j>i){ // causal: row block i needs tiles 0..i
+    i++;j=0;m=-Infinity;l=0;hbmFlash+=B*64*2; // write O block + next Q
+    if(i>=T){done=true;}
+  }
+  draw();if(done)stop();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const cell=20,x0=60,y0=50;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('score matrix (never materialized) — n='+N+', tiles '+B+'×'+B,x0,30);
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const x=x0+c*cell,y=y0+r*cell;
+    const tr=Math.floor(r/B),tc=Math.floor(c/B);
+    const causalSkip=tc>tr;
+    const isCur=!done&&tr===i&&tc===j;
+    const doneTile=tr<i||(tr===i&&tc<j);
+    if(causalSkip)ctx.fillStyle='rgba(128,128,128,0.12)';
+    else if(isCur)ctx.fillStyle=warn;
+    else if(doneTile)ctx.fillStyle=acc;
+    else ctx.fillStyle='rgba(91,140,255,0.12)';
+    ctx.fillRect(x,y,cell-2,cell-2);
+  }
+  ctx.strokeStyle=bd;for(let k=0;k<=T;k++){ctx.beginPath();ctx.moveTo(x0+k*B*cell-1,y0);ctx.lineTo(x0+k*B*cell-1,y0+N*cell);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(x0,y0+k*B*cell-1);ctx.lineTo(x0+N*cell,y0+k*B*cell-1);ctx.stroke();}
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';
+  ctx.fillText('keys →',x0+N*cell/2-20,y0-8);
+  ctx.save();ctx.translate(x0-12,y0+N*cell/2);ctx.rotate(-Math.PI/2);ctx.fillText('queries →',-30,0);ctx.restore();
+  // right panel: SRAM + stats
+  const px=480,py=60;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  ctx.fillText('SRAM right now:',px,py);
+  ctx.fillStyle=acc;ctx.fillRect(px,py+12,90,26);ctx.fillStyle='#fff';ctx.font='11px sans-serif';ctx.textAlign='center';ctx.fillText('Q block '+Math.min(i,T-1),px+45,py+29);
+  ctx.fillStyle=warn;ctx.fillRect(px+100,py+12,90,26);ctx.fillStyle='#fff';ctx.fillText(done?'—':'K/V tile '+j,px+145,py+29);
+  ctx.fillStyle=acc2;ctx.fillRect(px+200,py+12,90,26);ctx.fillStyle='#fff';ctx.fillText('O accum',px+245,py+29);
+  ctx.textAlign='left';ctx.fillStyle=txt;ctx.font='14px monospace';
+  ctx.fillText('row-block stats (online softmax):',px,py+70);
+  ctx.fillText('m (running max)   = '+(m===-Infinity?'−∞':m.toFixed(2)),px,py+96);
+  ctx.fillText('l (running denom) = '+l.toFixed(2),px,py+120);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';
+  ctx.fillText('new max in a tile ⇒ O and l rescaled by e^(m−m_new)',px,py+142);
+  // HBM counters (scaled story for n=32K, d=128, fp16)
+  const n32=32768,d=128;
+  const naive=4*n32*n32*2, flash=4*n32*d*2;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  ctx.fillText('HBM traffic at n=32K, d=128 (per head):',px,py+180);
+  ctx.font='13px monospace';
+  ctx.fillStyle='#e5604c';ctx.fillText('naive  : '+(naive/2**30).toFixed(1)+' GB  (4 n² passes)',px,py+204);
+  ctx.fillStyle=acc2;ctx.fillText('flash  : '+(flash/2**20).toFixed(0)+' MB  (read QKV, write O)',px,py+228);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';
+  ctx.fillText(done?'done — every tile visited once, nothing n² ever touched HBM':'',px,py+252);
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('faPlay').textContent='▶ Play';}}
+document.getElementById('faStep').onclick=()=>{stop();stepFn();};
+document.getElementById('faReset').onclick=()=>{stop();reset();};
+document.getElementById('faPlay').onclick=function(){if(timer){stop();return;}if(done)reset();this.textContent='⏸ Pause';timer=setInterval(stepFn,420);};
+reset();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 6. ring attention ----------
+(function(){
+const cv=document.getElementById('ringViz'),ctx=cv.getContext('2d');
+const P=4;let step=0;const COLORS=['#5b8cff','#38c6a0','#f2a65a','#e5604c'];
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const cx=200,cy=150,R=95;
+  for(let d=0;d<P;d++){
+    const a=-Math.PI/2+d*2*Math.PI/P;
+    const x=cx+Math.cos(a)*R,y=cy+Math.sin(a)*R;
+    // device
+    ctx.fillStyle=css('--bg-card');ctx.strokeStyle=bd;ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.roundRect(x-42,y-26,84,52,10);ctx.fill();ctx.stroke();
+    ctx.fillStyle=txt;ctx.font='bold 11px sans-serif';ctx.textAlign='center';
+    ctx.fillText('dev '+d+' · Q'+d,x,y-8);
+    // kv block currently held: (d - step) mod P
+    const kv=((d-step)%P+P)%P;
+    ctx.fillStyle=COLORS[kv];ctx.beginPath();ctx.roundRect(x-32,y+2,64,18,6);ctx.fill();
+    ctx.fillStyle='#fff';ctx.font='10px monospace';ctx.fillText('KV'+kv,x,y+15);
+    // rotation arrow
+    const a2=-Math.PI/2+((d+1)%P)*2*Math.PI/P;
+    const mx=cx+Math.cos((a+a2)/2+(d===P-1?Math.PI:0))*(R+34),my=cy+Math.sin((a+a2)/2+(d===P-1?Math.PI:0))*(R+34);
+    ctx.fillStyle=dim;ctx.font='14px sans-serif';ctx.fillText('↻',cx,cy+4);
+  }
+  // coverage grid
+  const gx=480,gy=60,cell=38;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('coverage: which Qᵢ×KVⱼ computed',gx,gy-14);
+  for(let qi=0;qi<P;qi++)for(let kj=0;kj<P;kj++){
+    const x=gx+kj*cell,y=gy+qi*cell;
+    // pair (qi,kj) computed at step s where kj = (qi - s) mod P, s<=step
+    let s=((qi-kj)%P+P)%P;
+    const doneCell=s<=step;
+    ctx.fillStyle=doneCell?COLORS[kj]:'rgba(128,128,128,0.15)';
+    ctx.fillRect(x,y,cell-3,cell-3);
+    if(doneCell){ctx.fillStyle='#fff';ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText('s'+s,x+cell/2,y+cell/2+3);}
+  }
+  for(let k=0;k<P;k++){ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.textAlign='center';
+    ctx.fillText('KV'+k,gx+k*cell+17,gy-2+P*cell+12);
+    ctx.textAlign='right';ctx.fillText('Q'+k,gx-6,gy+k*cell+22);ctx.textAlign='center';}
+  document.getElementById('ringStatus').textContent=step<P-1?('hop '+step+' of '+(P-1)+' — compute overlaps with the send'):'complete: all 16 pairs, each device did exactly 4';
+}
+document.getElementById('ringStep').onclick=()=>{if(step<P-1)step++;draw();};
+document.getElementById('ringReset').onclick=()=>{step=0;draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>
