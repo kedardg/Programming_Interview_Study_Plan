@@ -37,19 +37,44 @@ VOICES = {
 }
 SPEED = 1.0
 
+CACHE = Path(os.environ.get("KOKORO_CACHE", str(MODEL_DIR / "cache")))
+THREADS = int(os.environ.get("KOKORO_THREADS", "1"))
+import time
+DEADLINE = time.time() + float(os.environ.get("KOKORO_BUDGET", "1e9"))  # seconds; stop cleanly and resume next run
+
 def synth(name):
+    """Resumable: each paragraph's samples are cached, so an interrupted run picks up where it left off."""
     import numpy as np
+    import onnxruntime as ort
     import soundfile as sf
+    _orig = ort.InferenceSession
+    def _limited(*a, **k):
+        so = k.get("sess_options") or ort.SessionOptions()
+        so.intra_op_num_threads = THREADS
+        so.inter_op_num_threads = 1
+        k["sess_options"] = so
+        return _orig(*a, **k)
+    ort.InferenceSession = _limited
     from kokoro_onnx import Kokoro
     k = Kokoro(str(MODEL_DIR / "kokoro-v1.0.onnx"), str(MODEL_DIR / "voices-v1.0.bin"))
     text = (SCRIPTS / f"{name}.txt").read_text()
     voice = VOICES.get(name, "af_heart")
+    paras = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    cdir = CACHE / name
+    cdir.mkdir(parents=True, exist_ok=True)
     chunks = []
     sr = 24000
-    for para in [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]:
-        samples, sr = k.create(para, voice=voice, speed=SPEED, lang="en-us")
+    for i, para in enumerate(paras):
+        f = cdir / f"{i:03d}.npy"
+        if f.exists():
+            samples = np.load(f)
+        else:
+            if time.time() > DEADLINE:
+                return name, voice, None  # out of time budget; cached paragraphs persist
+            samples, sr = k.create(para, voice=voice, speed=SPEED, lang="en-us")
+            np.save(f, samples)
         chunks.append(samples)
-        chunks.append(np.zeros(int(sr * 0.55), dtype=samples.dtype))  # paragraph pause
+        chunks.append(np.zeros(int(sr * 0.55), dtype=samples.dtype))
     audio = np.concatenate(chunks)
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         sf.write(tmp.name, audio, sr)
@@ -69,7 +94,7 @@ if __name__ == "__main__":
             print("no script:", n); continue
         if sys.argv[1:] or not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
             todo.append(n)
-    workers = max(1, min(len(todo), (os.cpu_count() or 2) // 2))
+    workers = max(1, min(len(todo), int(os.environ.get("KOKORO_WORKERS", os.cpu_count() or 2))))
     with ProcessPoolExecutor(workers) as ex:
         for name, voice, secs in ex.map(synth, todo):
-            print(f"{name:18s} {voice:12s} {secs/60:5.1f} min")
+            print(f"{name:18s} {voice:12s} " + (f"{secs/60:5.1f} min" if secs else "partial (resume)"))

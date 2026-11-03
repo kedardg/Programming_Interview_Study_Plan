@@ -117,7 +117,63 @@
 </ul>
 
 
-<h2 id="data">8. What 109 architectures say: the data</h2>
+<h2 id="paradigms">8. Generation paradigms and thinking modes: CLM, masked and diffusion LMs, System 1 vs System 2</h2>
+<p>Everything above assumed one way of producing text: predict the next token, left to right, one forward pass per token. That is a <em>choice</em>, and it is worth seeing the alternatives clearly — both because they are now shipping (diffusion language models) and because the biggest capability jump of the last two years came not from a new block but from changing <em>how long</em> the model thinks before it answers.</p>
+
+<h3>8.1 Training objectives as paradigms: CLM, MLM, and the middle ground</h3>
+<p><strong>Causal language modeling (CLM)</strong> is the GPT lineage: a decoder-only transformer with a causal mask, trained to predict token <em>t+1</em> from tokens <em>1…t</em>. It won for generation for three unglamorous reasons. One objective covers every task that can be phrased as text continuation. Every position in every sequence is supervised in a single pass, so no training tokens are wasted. And sampling is trivial: the training-time computation <em>is</em> the inference-time computation, just fed its own outputs. The causal mask also hands you incremental decoding for free — the <a href="inference.html#kv-cache">KV cache</a> exists only because earlier tokens never look at later ones, so their keys and values never change.</p>
+<p><strong>Masked language modeling (MLM)</strong> is the BERT lineage: corrupt ~15% of tokens, let every position attend bidirectionally, predict the masked ones. Bidirectional context makes it a superb <em>encoder</em> — embeddings, classification, retrieval still lean on it — but it is awkward for generation: you must decide how many tokens to emit and iteratively fill them, and only 15% of positions carry loss per pass. <strong>Prefix-LM and encoder–decoder</strong> models (T5, and UL2's "mixture of denoisers" that trains span corruption, prefix-LM, and extreme masking together) sit in between: bidirectional over the prompt, causal over the output. They remain strong for sequence-to-sequence tasks and are the shape of most speech and translation systems (the Deepgram encoder–decoder in <a href="hardware.html">Ch. 15</a> is one).</p>
+<table class="cmp">
+<tr><th>Paradigm</th><th>Attention mask</th><th>Best at</th><th>Serving profile</th></tr>
+<tr><td><strong>CLM</strong> (GPT, Llama, every chat model)</td><td>Causal (lower-triangular) everywhere</td><td>Open-ended generation, in-context learning, agents</td><td>Prefill + incremental decode with a KV cache; one forward pass per output token</td></tr>
+<tr><td><strong>MLM</strong> (BERT, RoBERTa, ModernBERT)</td><td>Fully bidirectional</td><td>Embeddings, classification, rerankers</td><td>One parallel pass over the input; no generation loop, no cache</td></tr>
+<tr><td><strong>Prefix-LM / encoder–decoder</strong> (T5, UL2, Whisper, NLLB)</td><td>Bidirectional over input, causal over output</td><td>Translation, summarization, speech-to-text</td><td>Encoder once; decoder cached like CLM plus cross-attention to encoder states</td></tr>
+<tr><td><strong>Masked diffusion LM</strong> (LLaDA, Dream, Mercury)</td><td>Fully bidirectional over a fixed-length canvas</td><td>Parallel generation, infilling, editing</td><td>T denoising passes over the whole canvas; no KV cache; latency ≈ T × one full pass</td></tr>
+</table>
+<p>The serving column is the one to memorize: <strong>only CLM gets incremental decoding for free.</strong> Bidirectional models recompute every position every pass. That is why the engines in <a href="inference.html">Ch. 11</a> are built around CLM, and why diffusion LMs need their own serving stack.</p>
+
+<h3>8.2 Diffusion language models: generating a whole canvas at once</h3>
+<p>Diffusion for text comes in two families, and the acronym <strong>CDM</strong> is used for two different things, so keep the terms straight:</p>
+<ul>
+<li><strong>Discrete / masked diffusion</strong> (LLaDA, Dream, Mercury, Gemini Diffusion, LLaDA2/MoE variants): the "noise" is masking. Training masks a random <em>fraction</em> of tokens (uniformly from 0 to 100%, not a fixed 15%) and predicts them with a bidirectional transformer; the objective is a weighted MLM averaged over mask ratios, and it is a proper likelihood bound. Generation starts from an all-masked canvas and, over <em>T</em> steps, unmasks the tokens the model is most confident about, optionally re-masking low-confidence ones so later steps can revise them. Several tokens are revealed per step, so the number of forward passes is <em>T</em>, not the sequence length.</li>
+<li><strong>Continuous diffusion models (CDM)</strong> (Diffusion-LM, CDCD, Plaid, and the embedding-space line): add Gaussian noise to token <em>embeddings</em> (or logits) and denoise in continuous space exactly as image diffusion does; the hard part is the final "rounding" from a continuous vector back to a discrete token, which is where most quality is lost. The other reading of CDM — a <strong>conditional diffusion model</strong>, any diffusion model conditioned on text, class, or an image, as in Stable Diffusion — is a statement about <em>conditioning</em>, not about the data being continuous. When a paper says CDM, check which it means.</li>
+</ul>
+<p>The serving profile is the mirror image of CLM. A diffusion LM produces an entire block of tokens in parallel, in a fixed number of passes that you choose at inference time (fewer steps = faster, rougher), with no KV cache and no sequential dependency — which makes it excellent for infilling and editing (it sees both sides of the gap) and for latency-sensitive short generations (Mercury reports thousands of tokens per second on H100s). The known weaknesses are exact long-range coherence over long outputs, reliable variable-length generation, and the loss of the free incremental cache. <strong>Block diffusion</strong> (BD3-LM style) is the hybrid: generate block by block autoregressively, but denoise each block in parallel — reclaiming a KV cache across blocks while keeping parallel decoding within them, much as speculative decoding verifies a block of drafts at once (<a href="inference.html#speculative">Ch. 11</a>).</p>
+
+<div class="card">
+<h3>Interactive: masked-diffusion unmasking vs autoregressive decoding</h3>
+<canvas id="dlmViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="dlmPlay">▶ Play</button>
+  <button class="btn secondary" id="dlmStep">Step</button>
+  <button class="btn secondary" id="dlmReset">Reset</button>
+  <label class="ctl">Denoising steps T <input type="range" id="dlmT" min="2" max="24" value="6"> <span id="dlmTLabel">6</span></label>
+  <span class="dim" id="dlmStats"></span>
+</div>
+<p class="caption">Top: a 24-token canvas starts fully masked; each step the diffusion model reveals its most confident tokens (green) and may re-mask a low-confidence one (orange flash) to revise it later. Bottom: the autoregressive baseline reveals exactly one token per forward pass. Drag T: at T = 6 the diffusion model finishes in six passes where AR needs twenty-four; at T = 24 it has spent the same passes for no speed gain. Fewer steps means more tokens committed at once — the quality/latency trade in one slider.</p>
+</div>
+
+<h3>8.3 System 1 and System 2: fast pattern completion vs deliberate computation</h3>
+<p>Kahneman's split between <strong>System 1</strong> (fast, automatic, pattern-matching) and <strong>System 2</strong> (slow, effortful, sequential) maps cleanly onto language models. A standard CLM answering directly is pure System 1: one forward pass per token, a fixed amount of computation regardless of how hard the question is, and an answer that is a <em>pattern completion</em> of the prompt. Nothing in the architecture lets the model spend more compute on a harder problem.</p>
+<p><strong>System 2 behavior is test-time compute.</strong> The cheapest version is prompting: <em>chain-of-thought</em> makes the model write intermediate steps, so each later token conditions on scratch work — compute scales with the length of the reasoning. <em>Self-consistency</em> samples several chains and votes. Search and verification (tree search over partial solutions, a verifier or process-reward model scoring steps, best-of-N with a checker) spend still more. And the <strong>reasoning models</strong> — o1/o3, DeepSeek-R1, Qwen3 in thinking mode, Gemini's thinking variants — bake the behavior in: they are trained with <a href="rl-systems.html">RL on verifiable rewards</a> to produce long private "thinking" before the visible answer, and their accuracy rises with the number of thinking tokens they are allowed (<a href="training.html">Ch. 13</a> covers the GRPO recipe). Architecturally these are ordinary CLMs; what changed is the policy, and the serving bill: thousands of decode tokens per query, which pushes load firmly decode-ward (<a href="inference.html">Ch. 11</a>).</p>
+<p>Three refinements matter in practice. <strong>Thinking budgets</strong> cap the private tokens (an explicit latency/accuracy dial per request), and <strong>hybrid thinking modes</strong> ship one model that can run either way — Qwen3's <code>/think</code> and <code>/no_think</code>, Claude's extended thinking, Gemini's thinking budgets — so a product routes easy requests to System 1 and hard ones to System 2. <strong>Latent reasoning</strong> moves the deliberation out of the token stream: Coconut ("chain of continuous thought") feeds the last hidden state back as the next input embedding so the model reasons in vector space without decoding words, and the <em>looped / depth-recurrent</em> models from the developments table (Ouro's four passes over one stack, Nanbeige's two) do System 2 <em>inside</em> the forward pass by iterating the same layers until a learned exit gate fires — compute that scales with difficulty, with no visible chain at all.</p>
+<p>Finally, the loop closes with <strong>System 2 distillation</strong>: run the slow method, keep the outputs that pass a check, and fine-tune the model to produce them directly ("Distilling System 2 into System 1", Yu et al. 2024; DeepSeek's R1-distilled small models are the production example, and <a href="customization.html">Ch. 14</a> treats this as a customization rung). It compiles deliberation back into fast pattern completion — with limits: distillation transfers the <em>answers</em> the teacher reached, not the ability to search for new ones, so held-out hard problems regress toward the student's System 1 ceiling.</p>
+
+<div class="card">
+<h3>Interactive: accuracy vs inference cost across thinking modes (illustrative)</h3>
+<canvas id="s2Viz" class="viz" width="900" height="340"></canvas>
+<div class="controls">
+  <label class="ctl"><input type="checkbox" id="s2cot" checked> chain-of-thought</label>
+  <label class="ctl"><input type="checkbox" id="s2sc" checked> self-consistency, k = <input type="range" id="s2k" min="1" max="32" value="8"> <span id="s2kLabel">8</span></label>
+  <label class="ctl"><input type="checkbox" id="s2rm" checked> reasoning model, thinking budget <input type="range" id="s2b" min="0" max="16000" step="250" value="4000"> <span id="s2bLabel">4,000</span> tok</label>
+</div>
+<p class="caption">Illustrative curves shaped like the published test-time-compute scaling results (not measurements): x is tokens generated per query on a log scale, y is accuracy on a hard benchmark. Direct answering is a single cheap point; chain-of-thought buys a step up; self-consistency climbs with k but with diminishing returns and linear cost; a reasoning model's curve keeps rising with its thinking budget until it saturates. The dashed marker is the distilled System 1 student: the teacher's accuracy at a fraction of the cost — on problems like the ones it was distilled on.</p>
+</div>
+
+<h3>8.4 The non-autoregressive frontier (research)</h3>
+<p>Beyond masked diffusion, three lines are trying to make whole-sequence generation competitive with CLM and are best read as research rather than tooling: <strong>flow-matching</strong> text models that learn a straight-line transport from noise to token embeddings (the same objective π0 uses for robot actions in <a href="robot-learning.html">Ch. 17</a>); <strong>consistency</strong>-style models that collapse many denoising steps into one or two; and <strong>energy-based</strong> formulations that score whole sequences and sample by iterative refinement. All promise parallel, revisable generation; none has yet matched CLM at frontier scale on long-form coherence, which is why the practical answer today is "CLM for the backbone, diffusion for infilling and low-latency niches, System 2 via RL-trained thinking."</p>
+
+<h2 id="data">9. What 109 architectures say: the data</h2>
 <p>Narratives drift; counts don't. The chart below is computed live from the <a href="gallery.html">Architecture Gallery</a> dataset vendored in this repo (Sebastian Raschka's metadata for every notable open-weight model, 2019–2026): for each release year, the share of models using each component. Read it as adoption curves.</p>
 <div class="card">
 <h3>Component adoption by release year</h3>
@@ -125,7 +181,7 @@
 <p class="caption">Share of models released each year that use the component (detected from the dataset's attention, layer-mix, and highlight fields; 2019 is GPT-2 alone, 2024 has six models, so weight the 2025–2026 columns most). GQA is near-universal; MoE crossed half the field; hybrids with SSM/linear-attention layers and sliding-window ratios went from rare to mainstream in one year; MLA, MTP, QK-norm, and NoPE follow. Open the gallery to filter the models behind any bar.</p>
 </div>
 
-<h2 id="recent">9. 2025–2026 developments, model by model</h2>
+<h2 id="recent">10. 2025–2026 developments, model by model</h2>
 <p>Beyond the big families above, the last two years added a layer of refinements that now appear in most new releases. Each one below is grounded in specific gallery entries; click through to the <a href="gallery.html">gallery</a> for the fact sheets and config files.</p>
 <table class="cmp">
 <tr><th>Development</th><th>What it is</th><th>Seen in (gallery)</th></tr>
@@ -147,10 +203,12 @@
 </table>
 <p>Step back and the pattern of <a href="#lineage">Section 1</a> still holds: <strong>cheaper mixers (DeltaNet, sliding windows, sparse indexers) take most layers; exact attention becomes rationed; residual streams and norms get re-engineered for stability; and inference hooks (MTP, KV sharing, index caches) ship inside the architecture</strong>. If you can explain those four sentences with two model examples each, you understand the 2026 frontier.</p>
 
-<h2 id="reading">10. Where to go deeper</h2>
+<h2 id="reading">11. Where to go deeper</h2>
 <ul>
 <li><a href="https://arxiv.org/abs/2405.04434">DeepSeek-V2</a> (MLA) and <a href="https://arxiv.org/html/2412.19437">DeepSeek-V3</a> (fine-grained MoE, aux-loss-free balancing, MTP) — the densest single sources of modern architecture ideas.</li>
 <li><a href="https://arxiv.org/abs/2312.00752">Mamba</a> and <a href="https://arxiv.org/abs/2405.21060">Mamba-2/SSD</a>; <a href="https://arxiv.org/abs/2502.11089">Native Sparse Attention</a>.</li>
+<li>Paradigms: <a href="https://arxiv.org/abs/1810.04805">BERT</a>, <a href="https://arxiv.org/abs/1910.10683">T5</a> and <a href="https://arxiv.org/abs/2205.05131">UL2</a>; diffusion LMs: <a href="https://arxiv.org/abs/2205.14217">Diffusion-LM</a> (Li et al. 2022), <a href="https://arxiv.org/abs/2502.09992">LLaDA</a> (2025), <a href="https://www.inceptionlabs.ai/">Mercury</a>, the <a href="https://deepmind.google/models/gemini-diffusion/">Gemini Diffusion</a> post.</li>
+<li>System 2: <a href="https://arxiv.org/abs/2407.06023">Distilling System 2 into System 1</a> (Yu et al. 2024), <a href="https://arxiv.org/abs/2412.06769">Coconut</a> (Hao et al. 2024), the <a href="https://openai.com/index/openai-o1-system-card/">OpenAI o1 system card</a> and <a href="https://arxiv.org/abs/2501.12948">DeepSeek-R1</a>.</li>
 <li>Sebastian Raschka's annual <a href="https://magazine.sebastianraschka.com/p/the-big-llm-architecture-comparison">Big LLM Architecture Comparison</a> — the best running catalog of exactly this chapter.</li>
 <li>Steps 12, 14–16 of the <a href="../index.html">plan</a>; the <a href="flashcards.html">Architectures deck</a>; and the <a href="vendor/mm/index.html">mm visualizer</a>'s attention and MLP presets to see these shapes in 3D.</li>
 </ul>
@@ -307,7 +365,113 @@ draw();
 new MutationObserver(()=>draw()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 
-// ---------- 8. adoption chart from gallery data ----------
+
+// ---------- 8a. masked diffusion vs AR ----------
+(function(){
+const cv=document.getElementById('dlmViz');if(!cv)return;const ctx=cv.getContext('2d');
+const WORDS='the kernel stages a tile of keys into shared memory then streams values through the tensor cores while the running max rescales the softmax'.split(' ').slice(0,24);
+const tSl=document.getElementById('dlmT'),tLab=document.getElementById('dlmTLabel');
+let T=parseInt(tSl.value),step=0,timer=null,conf=[],revealed=[],ar=0,flash=[];
+function init(){T=parseInt(tSl.value);tLab.textContent=T;step=0;ar=0;flash=[];conf=WORDS.map(()=>Math.random());revealed=WORDS.map(()=>false);draw();}
+function tick(){
+  if(step>=T&&ar>=24){stop();return;}
+  if(step<T){
+    step++;
+    // confidence grows each pass; reveal top chunk among masked
+    conf=conf.map(c=>Math.min(1,c+0.25*Math.random()));
+    const target=Math.round(24*step/T);
+    const masked=[...WORDS.keys()].filter(i=>!revealed[i]).sort((a,b)=>conf[b]-conf[a]);
+    const need=Math.max(0,target-revealed.filter(Boolean).length);
+    masked.slice(0,need).forEach(i=>revealed[i]=true);
+    flash=[];
+    if(step<T){ // remask the least confident revealed token with some probability
+      const rev=[...WORDS.keys()].filter(i=>revealed[i]).sort((a,b)=>conf[a]-conf[b]);
+      if(rev.length&&Math.random()<0.5){const i=rev[0];revealed[i]=false;conf[i]=0.3;flash=[i];}
+    } else {revealed=revealed.map(()=>true);}
+  }
+  if(ar<24)ar++;
+  draw();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc2=css('--accent2'),acc=css('--accent');
+  const cw=34,ch=26,x0=24;
+  ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillStyle=txt;
+  ctx.fillText('Masked diffusion LM — pass '+step+' of '+T+' ('+revealed.filter(Boolean).length+'/24 tokens committed)',x0,24);
+  WORDS.forEach((w,i)=>{const x=x0+i*(cw+2),y=36;
+    if(flash.includes(i)){ctx.fillStyle='#f2a65a';}else if(revealed[i]){ctx.fillStyle=acc2;}else{ctx.fillStyle='rgba(128,128,128,0.25)';}
+    ctx.fillRect(x,y,cw,ch);ctx.strokeStyle=bd;ctx.strokeRect(x,y,cw,ch);
+    ctx.fillStyle=revealed[i]||flash.includes(i)?'#fff':dim;ctx.font='9px monospace';ctx.textAlign='center';
+    ctx.fillText(revealed[i]?w.slice(0,5):'[M]',x+cw/2,y+17);
+    if(!revealed[i]){ctx.fillStyle=acc;ctx.globalAlpha=0.6;ctx.fillRect(x,y+ch+3,cw*conf[i],3);ctx.globalAlpha=1;}
+  });
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('blue bar = model confidence for still-masked positions; orange = re-masked for revision',x0,86);
+  ctx.font='bold 13px sans-serif';ctx.fillStyle=txt;
+  ctx.fillText('Autoregressive CLM — pass '+ar+' of 24 ('+ar+'/24 tokens)',x0,130);
+  WORDS.forEach((w,i)=>{const x=x0+i*(cw+2),y=142;
+    ctx.fillStyle=i<ar?acc:'rgba(128,128,128,0.25)';ctx.fillRect(x,y,cw,ch);ctx.strokeStyle=bd;ctx.strokeRect(x,y,cw,ch);
+    ctx.fillStyle=i<ar?'#fff':dim;ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText(i<ar?w.slice(0,5):'·',x+cw/2,y+17);
+  });
+  // comparison bars
+  ctx.textAlign='left';ctx.font='12px sans-serif';ctx.fillStyle=dim;
+  ctx.fillText('forward passes to finish:',x0,205);
+  ctx.fillStyle=acc2;ctx.fillRect(x0,214,Math.max(4,T*14),14);ctx.fillStyle=txt;ctx.fillText('diffusion: '+T+' passes, each over all 24 positions (no KV cache)',x0+T*14+8,225);
+  ctx.fillStyle=acc;ctx.fillRect(x0,236,24*14,14);ctx.fillStyle=txt;ctx.fillText('autoregressive: 24 passes, each over 1 new token + cached KV',x0+24*14+8,247);
+  ctx.fillStyle=dim;ctx.fillText('speedup in passes: '+(24/T).toFixed(1)+'× — but each diffusion pass is a full bidirectional sweep, and fewer steps commit more tokens blind',x0,278);
+  document.getElementById('dlmStats').textContent='';
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('dlmPlay').textContent='▶ Play';}}
+document.getElementById('dlmPlay').onclick=function(){if(timer){stop();return;}if(step>=T&&ar>=24)init();this.textContent='⏸ Pause';timer=setInterval(tick,520);};
+document.getElementById('dlmStep').onclick=()=>{stop();tick();};
+document.getElementById('dlmReset').onclick=()=>{stop();init();};
+tSl.oninput=()=>{stop();init();};
+init();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 8b. System 1 vs System 2 accuracy/cost ----------
+(function(){
+const cv=document.getElementById('s2Viz');if(!cv)return;const ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+const kSl=$('s2k'),bSl=$('s2b');
+function fmt(n){return n.toLocaleString();}
+// illustrative models
+const DIRECT={cost:60,acc:0.42};
+function cotAcc(){return 0.58;}const COT_COST=400;
+function scAcc(k){return 0.58+0.16*(1-Math.exp(-(k-1)/6));}
+function rmAcc(b){return 0.50+0.38*(1-Math.exp(-b/3500));}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2');
+  const k=parseInt(kSl.value),b=parseInt(bSl.value);$('s2kLabel').textContent=k;$('s2bLabel').textContent=fmt(b);
+  const x0=70,y0=H-50,pw=W-x0-40,ph=H-90;
+  const xmin=Math.log10(30),xmax=Math.log10(40000);
+  const X=c=>x0+pw*(Math.log10(Math.max(30,c))-xmin)/(xmax-xmin),Y=a=>y0-ph*(a-0.3)/0.65;
+  ctx.strokeStyle=bd;ctx.lineWidth=1;ctx.font='11px sans-serif';ctx.fillStyle=dim;
+  [0.3,0.4,0.5,0.6,0.7,0.8,0.9].forEach(a=>{const y=Y(a);ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x0+pw,y);ctx.stroke();ctx.textAlign='right';ctx.fillText(Math.round(a*100)+'%',x0-8,y+4);});
+  [50,100,300,1000,3000,10000,30000].forEach(c=>{const x=X(c);ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y0-ph);ctx.stroke();ctx.textAlign='center';ctx.fillText(fmt(c),x,y0+16);});
+  ctx.textAlign='center';ctx.fillText('tokens generated per query (log scale) — illustrative',x0+pw/2,H-10);
+  ctx.save();ctx.translate(16,y0-ph/2);ctx.rotate(-Math.PI/2);ctx.fillText('accuracy on a hard benchmark',0,0);ctx.restore();
+  function dot(c,a,color,label,dash){ctx.fillStyle=color;ctx.beginPath();ctx.arc(X(c),Y(a),6,0,7);ctx.fill();ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText(label,X(c)+10,Y(a)+4);}
+  // reasoning model curve
+  if($('s2rm').checked){ctx.strokeStyle='#b07cff';ctx.lineWidth=2.5;ctx.beginPath();for(let bb=0;bb<=16000;bb+=250){const x=X(bb+60),y=Y(rmAcc(bb));bb===0?ctx.moveTo(x,y):ctx.lineTo(x,y);}ctx.stroke();
+    dot(b+60,rmAcc(b),'#b07cff','reasoning model @ '+fmt(b)+' thinking tokens');}
+  // self-consistency curve
+  if($('s2sc').checked){ctx.strokeStyle=acc2;ctx.lineWidth=2.5;ctx.beginPath();for(let kk=1;kk<=32;kk++){const x=X(COT_COST*kk),y=Y(scAcc(kk));kk===1?ctx.moveTo(x,y):ctx.lineTo(x,y);}ctx.stroke();
+    dot(COT_COST*k,scAcc(k),acc2,'self-consistency, k = '+k);}
+  if($('s2cot').checked)dot(COT_COST,cotAcc(),acc,'chain-of-thought');
+  dot(DIRECT.cost,DIRECT.acc,'#f2a65a','System 1: direct answer');
+  // distilled student
+  const teacher=$('s2rm').checked?rmAcc(b):($('s2sc').checked?scAcc(k):cotAcc());
+  const sa=Math.min(teacher,0.42+0.8*(teacher-0.42));
+  ctx.setLineDash([5,4]);ctx.strokeStyle=dim;ctx.beginPath();ctx.moveTo(X(90),Y(sa));ctx.lineTo(X(30000),Y(sa));ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=txt;ctx.beginPath();ctx.arc(X(90),Y(sa),6,0,7);ctx.stroke();ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=dim;
+  ctx.fillText('distilled System 1 student (~'+Math.round(sa*100)+'% at ~90 tokens, on in-distribution problems)',X(90)+10,Y(sa)-10);
+}
+['s2cot','s2sc','s2rm','s2k','s2b'].forEach(id=>$(id).oninput=draw);draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 9. adoption chart from gallery data ----------
 (function(){
 const cv=document.getElementById('adoptViz');if(!cv||!window.ADOPTION)return;const ctx=cv.getContext('2d');
 const A=window.ADOPTION;const years=A.years.filter(y=>A.totals[y]>=1);
