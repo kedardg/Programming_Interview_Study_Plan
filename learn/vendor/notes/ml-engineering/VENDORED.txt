@@ -1,0 +1,1 @@
+Vendored from https://github.com/stas00/ml-engineering (CC BY-SA 4.0, Stas Bekman). Markdown copied verbatim; rendered to learn/notes/ml-engineering/ by scripts/build_notes.py.

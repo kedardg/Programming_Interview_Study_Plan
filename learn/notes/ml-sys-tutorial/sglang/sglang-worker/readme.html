@@ -1,0 +1,922 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walk Through SGLang / VLLM Worker</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/sglang-worker/readme.md</div>
+<article class="note"><h1 id="walk-through-sglang-vllm-worker">Walk Through SGLang / VLLM Worker</h1>
+<h2 id="english-version"><a href="../../sglang/sglang-worker/readme.html">English version</a> | <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/sglang-worker/readme-CN.md">简体中文</a></h2>
+<p>To enable SGLang to support OpenRLHF interfaces, we need to implement two <a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/trainer/ray/vllm_worker_wrap.py">interfaces</a> in SGLang:
+- <code>init_process_group</code>
+- <code>update_weight</code></p>
+<details>
+<summary>OpenRLHF's VLLM Worker Wrap</summary>
+
+
+<pre><code class="language-python">class WorkerWrap(Worker):
+    def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend=&quot;nccl&quot;):
+        &quot;&quot;&quot;Init torch process group for model weights update&quot;&quot;&quot;
+        assert torch.distributed.is_initialized(), f&quot;default torch process group must be initialized&quot;
+        assert group_name != &quot;&quot;, f&quot;group name must not be empty&quot;
+
+        rank = torch.distributed.get_rank() + rank_offset
+        self._model_update_group = init_process_group(
+            backend=backend,
+            init_method=f&quot;tcp://{master_address}:{master_port}&quot;,
+            world_size=world_size,
+            rank=rank,
+            group_name=group_name,
+        )
+        print(
+            f&quot;init_process_group: master_address={master_address}, master_port={master_port}, &quot;,
+            f&quot;rank={rank}, world_size={world_size}, group_name={group_name}&quot;,
+        )
+
+    def update_weight(self, name, dtype, shape, empty_cache=False):
+        &quot;&quot;&quot;Broadcast weight to all vllm workers from source rank 0 (actor model)&quot;&quot;&quot;
+        if torch.distributed.get_rank() == 0:
+            print(f&quot;update weight: {name}, dtype: {dtype}, shape: {shape}&quot;)
+
+        assert dtype == self.model_config.dtype, f&quot;mismatch dtype: src {dtype}, dst {self.model_config.dtype}&quot;
+        weight = torch.empty(shape, dtype=dtype, device=&quot;cuda&quot;)
+        torch.distributed.broadcast(weight, 0, group=self._model_update_group)
+
+        self.model_runner.model.load_weights(weights=[(name, weight)])
+</code></pre>
+
+
+</details>
+
+<p>The <code>WorkerWrap</code> class inherits from and wraps vllm's <code>Worker</code> class, implementing the <code>init_process_group</code> and <code>update_weight</code> methods. While these two interfaces are straightforward, we can use this opportunity to understand the code modules of SGLang and VLLM, as part of our SGLang code walk-through. Therefore, this article will first introduce the code from vllm's <code>Worker</code>, <code>Executor</code>, and <code>LLMEngine</code>, then proceed with a simple code walk-through of SGLang.</p>
+<p>Here's an architectural diagram of SGLang to guide us through this article. This image is from <a href="https://github.com/sgl-project/sgl-learning-materials/blob/main/slides/lmsys_1st_meetup_sglang.pdf">slides/lmsys_1st_meetup_sglang.pdf</a>. We welcome everyone to check out our <a href="https://github.com/sgl-project/sgl-learning-materials">learning materials</a>:</p>
+<p><img alt="SGLang Architecture" src="../../../../vendor/notes/ml-sys-tutorial/sglang/sglang-worker/SGLang-Archi.png"></p>
+<h1 id="vllm">vllm</h1>
+<h2 id="worker">Worker</h2>
+<p>The code can be found at <a href="https://github.com/vllm-project/vllm/blob/main/vllm/worker/worker.py">vllm/vllm/worker/worker.py</a>. The <code>Worker</code> class has clear documentation:</p>
+<pre><code class="language-python">    &quot;&quot;&quot;A worker class that executes (a partition of) the model on a GPU.
+
+    Each worker is associated with a single GPU. The worker is responsible for
+    maintaining the KV cache and executing the model on the GPU. In case of
+    distributed inference, each worker is assigned a partition of the model.
+    &quot;&quot;&quot;
+</code></pre>
+<p>As we can see, the <code>Worker</code> class is responsible for managing a single GPU, maintaining the KV cache, and executing model inference. Let's examine the <code>Worker</code> class methods by category:</p>
+<ol>
+<li><strong>Initialization</strong></li>
+</ol>
+<pre><code class="language-python">def __init__(self, vllm_config, local_rank, rank, distributed_init_method, ...)
+def init_device(self) -&gt; None  # Initialize GPU device
+def load_model(self)  # Load model
+def initialize_cache(self, num_gpu_blocks: int, num_cpu_blocks: int) -&gt; None  # Initialize KV cache
+</code></pre>
+<ol start="2">
+<li><strong>Memory Management</strong></li>
+</ol>
+<pre><code class="language-python">def determine_num_available_blocks(self) -&gt; Tuple[int, int]  # Determine available KV cache blocks
+def get_cache_block_size_bytes(self) -&gt; int  # Get cache block size
+</code></pre>
+<ol start="3">
+<li><strong>Inference</strong></li>
+</ol>
+<pre><code class="language-python">def prepare_worker_input(self, execute_model_req: ExecuteModelRequest) -&gt; WorkerInput
+def execute_worker(self, worker_input: WorkerInput) -&gt; None
+def _execute_model_spmd(self, execute_model_req, intermediate_tensors) -&gt; Optional[List[SamplerOutput]]
+</code></pre>
+<ol start="4">
+<li><strong>LoRA</strong></li>
+</ol>
+<pre><code class="language-python">def add_lora(self, lora_request: LoRARequest) -&gt; bool
+def remove_lora(self, lora_id: int) -&gt; bool
+def pin_lora(self, lora_id: int) -&gt; bool
+def list_loras(self) -&gt; Set[int]
+</code></pre>
+<ol start="5">
+<li><strong>Prompt Adapter</strong></li>
+</ol>
+<pre><code class="language-python">def add_prompt_adapter(self, prompt_adapter_request: PromptAdapterRequest) -&gt; bool
+def remove_prompt_adapter(self, prompt_adapter_id: int) -&gt; bool
+def pin_prompt_adapter(self, prompt_adapter_id: int) -&gt; bool
+def list_prompt_adapters(self) -&gt; Set[int]
+</code></pre>
+<ol start="6">
+<li><strong>State Saving</strong></li>
+</ol>
+<pre><code class="language-python">def save_sharded_state(self, path: str, pattern: Optional[str], max_size: Optional[int])
+def save_tensorized_model(self, tensorizer_config: TensorizerConfig)
+</code></pre>
+<ol start="7">
+<li><strong>Profiling</strong></li>
+</ol>
+<pre><code class="language-python">def start_profile(self)
+def stop_profile(self)
+</code></pre>
+<ol start="8">
+<li><strong>Property Access</strong></li>
+</ol>
+<pre><code class="language-python">@property
+def do_metadata_broadcast(self) -&gt; bool
+@property
+def kv_cache(self) -&gt; Optional[List[List[torch.Tensor]]]
+@property
+def max_model_len(self) -&gt; int
+@property
+def vocab_size(self) -&gt; int
+</code></pre>
+<p>The implementation is quite comprehensive, covering virtually every aspect of managing a single GPU.</p>
+<h2 id="executorbase"><code>ExecutorBase</code></h2>
+<p>The <code>Worker</code> class is responsible for managing a single GPU, so it naturally follows to look at a higher-level management class above the <code>Worker</code> class.  <code>ExecutorBase</code> is responsible for serving as an abstract management base class (the base class for various Executors), defining interface specifications for different Executors.</p>
+<ol>
+<li>
+<p><strong>Interface Definitions</strong>:
+- Model execution (<code>execute_model</code>)
+- KV cache management (<code>initialize_cache</code>, <code>determine_num_available_blocks</code>)
+- LoRA and Prompt Adapter management
+- Service status checks</p>
+</li>
+<li>
+<p><strong>Concrete Executor Subclasses</strong>:
+- <a href="https://github.com/vllm-project/vllm/blob/main/vllm/executor/gpu_executor.py">GPUExecutor</a>: Single GPU executor, creates and uses one Worker internally
+- <a href="https://github.com/vllm-project/vllm/blob/main/vllm/executor/multiproc_gpu_executor.py">MultiprocessingGPUExecutor</a>: Uses multiprocessing to manage multiple Workers
+- <a href="https://github.com/vllm-project/vllm/blob/main/vllm/executor/ray_gpu_executor.py">RayGPUExecutor</a>: Uses Ray framework to manage distributed Workers</p>
+</li>
+</ol>
+<h2 id="llmengine">LLMEngine</h2>
+<p><a href="https://github.com/vllm-project/vllm/blob/main/vllm/engine/llm_engine.py#L136">LLMEngine</a>: This is the management class above <code>ExecutorBase/Executor</code>, responsible for handling user requests and selecting appropriate <code>Executor</code> based on configuration.</p>
+<ol>
+<li><strong>Initialization</strong></li>
+</ol>
+<pre><code class="language-python">def __init__(self, vllm_config: VllmConfig, executor_class: Type[ExecutorBase], ...):
+    # Manage various configurations: model, cache, parallel, scheduling, etc.
+    self.model_config = vllm_config.model_config
+    self.cache_config = vllm_config.cache_config
+    self.parallel_config = vllm_config.parallel_config
+    # ...
+
+    # Initialize key components
+    self.tokenizer = self._init_tokenizer()
+    self.input_preprocessor = InputPreprocessor(...)
+    self.model_executor = executor_class(vllm_config=vllm_config)
+    self.scheduler = [Scheduler(...) for _ in range(parallel_config.pipeline_parallel_size)]
+</code></pre>
+<ol start="2">
+<li><strong>Request Processing</strong></li>
+</ol>
+<pre><code class="language-python">def add_request(self, request_id: str, prompt: PromptType, params: Union[SamplingParams, PoolingParams], ...):
+    # Handle new generation requests
+    # Preprocess input
+    # Create sequence groups
+    # Add request to scheduler
+</code></pre>
+<ol start="3">
+<li><strong>Execution Scheduling and Generation</strong></li>
+</ol>
+<pre><code class="language-python">def step(self) -&gt; List[Union[RequestOutput, EmbeddingRequestOutput]]:
+    # Core execution loop
+    # Schedule sequence groups
+    # Execute model forward pass
+    # Process output
+    # Update sequence states
+</code></pre>
+<ol start="4">
+<li><strong>Resource Management</strong></li>
+</ol>
+<pre><code class="language-python">def _initialize_kv_caches(self):
+    # Initialize KV cache
+    num_gpu_blocks, num_cpu_blocks = self.model_executor.determine_num_available_blocks()
+    self.model_executor.initialize_cache(num_gpu_blocks, num_cpu_blocks)
+</code></pre>
+<ol start="5">
+<li><strong>LoRA and Prompt Adapter Management</strong></li>
+</ol>
+<pre><code class="language-python">def add_lora(self, lora_request: LoRARequest) -&gt; bool
+def remove_lora(self, lora_id: int) -&gt; bool
+def add_prompt_adapter(self, prompt_adapter_request: PromptAdapterRequest) -&gt; bool
+</code></pre>
+<ol start="6">
+<li><strong>Monitoring and Statistics</strong></li>
+</ol>
+<pre><code class="language-python">def do_log_stats(self, scheduler_outputs: Optional[SchedulerOutputs] = None, ...):
+    # Record performance metrics
+    # Track resource usage
+    # Monitor request status
+</code></pre>
+<ol start="7">
+<li><strong>Request Status Management</strong></li>
+</ol>
+<pre><code class="language-python">def abort_request(self, request_id: Union[str, Iterable[str]]):
+    # Abort specified requests
+
+def has_unfinished_requests(self) -&gt; bool:
+    # Check for unfinished requests
+</code></pre>
+<p>As we can see, <code>LLMEngine</code> is vLLM's core coordination class, responsible for the overall workflow:</p>
+<ul>
+<li>Request management and scheduling</li>
+<li>Resource allocation and management</li>
+<li>Execution process coordination</li>
+<li>Status monitoring and statistics</li>
+</ul>
+<p>It has several main components:
+   - <code>Executor</code> for computation
+   - <code>Scheduler</code> for scheduling
+   - <code>Tokenizer</code> for text processing
+   - <code>InputPreprocessor</code> for input processing</p>
+<h1 id="sglang">SGLang</h1>
+<p>Compared to vllm's all-in-one <code>Worker</code> class, SGLang splits the model management on a single GPU into <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/tp_worker.py">TpModelWorker</a> and <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/model_executor/model_runner.py">ModelRunner</a> classes:</p>
+<ul>
+<li><code>TpModelWorker</code>: Similar to vllm's Worker, also manages model on a single GPU. However, its functionality is relatively simpler, mainly responsible for initializing model and distributed environment, managing memory pool, executing model's forward propagation, and handling embedding and generation tasks.</li>
+<li><code>ModelRunner</code>: Responsible for executing model inference and providing interfaces for <code>TpModelWorker</code> to call.</li>
+</ul>
+<p>Comparing the two:</p>
+<ul>
+<li>SGLang's <code>TpModelWorker</code> is more similar to vllm's <code>Worker</code>, both being high-level model managers</li>
+<li>SGLang separates specific model execution logic into <code>ModelRunner</code>, while vllm keeps most of this logic in the <code>Worker</code> class</li>
+<li>SGLang's design is more modular, separating model execution and management into two classes</li>
+<li>vllm's <code>Worker</code> has richer functionality, including support for more advanced features, but is more complex to maintain and extend</li>
+</ul>
+<h2 id="tpmodelworker">TpModelWorker</h2>
+<p>Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/tp_worker.py">sglang/sglang/srt/managers/tp_worker.py</a></p>
+<ol>
+<li><strong>Initialization</strong></li>
+</ol>
+<pre><code class="language-python">def __init__(self, server_args, gpu_id, tp_rank, dp_rank, nccl_port)
+</code></pre>
+<ul>
+<li>Initialize model configuration and <code>ModelRunner</code></li>
+<li>Initialize <code>Tokenizer</code></li>
+<li>Set memory and request-related parameters</li>
+<li>Synchronize random seeds between multiple GPUs (<code>TpModelWorker</code> only manages a single GPU)</li>
+</ul>
+<ol start="2">
+<li><strong>Reading Work Status</strong></li>
+</ol>
+<pre><code class="language-python">def get_worker_info(self)  # Return worker key parameters
+def get_pad_input_ids_func(self)  # Get padding function
+def get_tp_cpu_group(self)  # Get tensor parallel CPU group
+def get_memory_pool(self)  # Get memory pool
+</code></pre>
+<ol start="3">
+<li><strong>Forward Computation</strong></li>
+</ol>
+<pre><code class="language-python">def forward_batch_generation(self, model_worker_batch)  # Generation tasks
+def forward_batch_embedding(self, model_worker_batch)  # Embedding tasks
+</code></pre>
+<ol start="4">
+<li><strong>Model Updates</strong></li>
+</ol>
+<pre><code class="language-python">def update_weights(self, recv_req)  # Update model weights
+</code></pre>
+<p>Note that many of these requests actually call <code>ModelRunner</code> interfaces. For example:</p>
+<ol>
+<li><code>forward_batch_generation</code> and <code>forward_batch_embedding</code> both call <code>ModelRunner</code>'s <code>forward</code> method</li>
+<li><code>update_weights</code> calls <code>ModelRunner</code>'s <code>update_weights</code> method, which is a key interface for OpenRLHF</li>
+</ol>
+<p>From this, we can see that OpenRLHF's <a href="https://github.com/OpenRLHF/OpenRLHF/blob/main/openrlhf/trainer/ray/vllm_worker_wrap.py">two interfaces</a> added to vllm's <code>Worker</code> should be implemented in <code>TpModelWorker</code>.</p>
+<h2 id="modelrunner"><code>ModelRunner</code></h2>
+<p>The <code>ModelRunner</code> class is responsible for actual model inference and provides interfaces for <code>TpModelWorker</code> to call.</p>
+<p>Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/model_executor/model_runner.py">sglang/sglang/srt/model_executor/model_runner.py</a></p>
+<ol>
+<li>Responsible for specific model execution logic</li>
+<li>Manages model's memory and compute resources</li>
+<li>Handles model's forward computation and sampling</li>
+<li>Optimizes computation performance (CUDA graphs, attention backend, etc.)</li>
+<li>
+<p>Supports dynamic model weight updates</p>
+</li>
+<li>
+<p><strong>Initialization</strong></p>
+</li>
+</ol>
+<pre><code class="language-python">def __init__(self, model_config, mem_fraction_static, gpu_id, tp_rank, tp_size, nccl_port, server_args)
+</code></pre>
+<ul>
+<li>Initialize model configuration and devices</li>
+<li>Set distributed training parameters</li>
+<li>Initialize memory pool and attention backend</li>
+<li>Configure CUDA Graphs</li>
+</ul>
+<ol start="2">
+<li><strong>Model Loading and Updates</strong></li>
+</ol>
+<pre><code class="language-python">def load_model(self)  # Load model weights
+def update_weights(self, model_path, load_format)  # Update model weights
+</code></pre>
+<ol start="3">
+<li><strong>Forward Computation</strong></li>
+</ol>
+<pre><code class="language-python">def forward(self, forward_batch)  # Execute forward computation
+def forward_decode(self, forward_batch)  # Forward computation in decoding phase
+def forward_extend(self, forward_batch)  # Forward computation in extension phase
+</code></pre>
+<ol start="4">
+<li><strong>Sampling and Logits Processing</strong></li>
+</ol>
+<pre><code class="language-python">def sample(self, logits_output, forward_batch)  # Sample next token
+def apply_logits_bias(self, logits, sampling_info)  # Apply logits bias and penalties
+</code></pre>
+<ol start="5">
+<li><strong>Memory Management</strong></li>
+</ol>
+<pre><code class="language-python">def profile_max_num_token(self, total_gpu_memory)  # Calculate maximum token count
+def init_memory_pool(self, total_gpu_memory, max_num_reqs, max_total_tokens)  # Initialize memory pool
+</code></pre>
+<ol start="6">
+<li><strong>CUDA and Performance Optimization</strong></li>
+</ol>
+<pre><code class="language-python">def init_cublas(self)  # Initialize cuBLAS
+def init_cuda_graphs(self)  # Initialize CUDA graphs
+def init_attention_backend(self)  # Initialize attention backend
+</code></pre>
+<h2 id="tpmodelworkerclient"><code>TpModelWorkerClient</code></h2>
+<p>While vllm wraps its <code>Worker</code> class with an <code>Executor</code> layer (both managing a single GPU), and then wraps <code>Executor</code> with <code>LLMEngine</code> to manage various parallel strategies across multiple cards, SGLang takes a different approach.</p>
+<p>In SGLang, above <code>ModelRunner</code> is wrapped by <code>TpModelWorker</code>, which is then wrapped by <code>TpModelWorkerClient</code>. Note that this is not a multi-GPU management class, but rather an asynchronous wrapper for <code>TpModelWorker</code>, supporting SGLang 0.3.5's (upcoming) overlap optimization, achieving computation and data transfer overlap through multi-threading. Therefore, <code>TpModelWorkerClient</code> remains on the same level as <code>TpModelWorker</code>.</p>
+<p>Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/tp_worker_overlap_thread.py">sglang/sglang/srt/managers/tp_worker_client.py</a></p>
+<ol>
+<li>Implements computation and data transfer overlap through multi-threading</li>
+<li>Uses future token mechanism to handle dependencies</li>
+<li>Supports asynchronous batch processing</li>
+<li>Optimizes GPU-CPU data transfer</li>
+<li>
+<p>Maintains compatibility with <code>TpModelWorker</code> interfaces</p>
+</li>
+<li>
+<p><strong>Initialization</strong></p>
+</li>
+</ol>
+<pre><code class="language-python">def __init__(self, server_args, gpu_id, tp_rank, dp_rank, nccl_port)
+</code></pre>
+<ul>
+<li>Create underlying TpModelWorker</li>
+<li>Initialize future token mapping</li>
+<li>Launch forward computation and data copy threads</li>
+</ul>
+<ol start="2">
+<li><strong>Asynchronous Computation Thread</strong></li>
+</ol>
+<pre><code class="language-python">def forward_thread_func(self)  # Forward computation thread entry
+def forward_thread_func_(self)  # Actual computation logic
+</code></pre>
+<ul>
+<li>Get batch data from input queue</li>
+<li>Parse future tokens</li>
+<li>Execute model forward computation</li>
+<li>Update future token mapping</li>
+<li>Asynchronously copy results to CPU</li>
+</ul>
+<ol start="3">
+<li><strong>Data Copy Thread</strong></li>
+</ol>
+<pre><code class="language-python">def copy_thread_func(self)  # Data copy thread
+</code></pre>
+<ul>
+<li>Wait for GPU computation completion</li>
+<li>Copy results from GPU to CPU</li>
+<li>Process logprobs</li>
+<li>Put results in output queue</li>
+</ul>
+<ol start="4">
+<li><strong>Batch Processing Interface</strong></li>
+</ol>
+<pre><code class="language-python">def forward_batch_generation(self, model_worker_batch)  # Generation tasks
+def forward_batch_embedding(self, model_worker_batch)  # Embedding tasks
+</code></pre>
+<ul>
+<li>Submit batch to input queue</li>
+<li>Allocate future token IDs</li>
+<li>Return placeholder results</li>
+</ul>
+<ol start="5">
+<li><strong>Result Retrieval</strong></li>
+</ol>
+<pre><code class="language-python">def resolve_batch_result(self, bid)  # Get computation results
+</code></pre>
+<ul>
+<li>Get results from output queue</li>
+<li>Wait for batch launch completion</li>
+<li>Return actual results</li>
+</ul>
+<p>The <code>TpModelWorkerClient</code> code is not large and still manages a single card, so what's next up?</p>
+<h2 id="scheduler"><code>Scheduler</code></h2>
+<p>The <code>Scheduler</code> is still managing a single card, this time for scheduling <code>TpModelWorker/TpModelWorkerClient</code>. It is indeed a scheduler.</p>
+<p>Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/scheduler.py">sglang/sglang/srt/managers/scheduler.py</a></p>
+<ol>
+<li><strong>Initialization and Configuration</strong></li>
+</ol>
+<pre><code class="language-python">def __init__(self, server_args, port_args, gpu_id, tp_rank, dp_rank)
+</code></pre>
+<ul>
+<li>Initialize inter-process communication (ZMQ sockets)</li>
+<li>Create tokenizer and model config</li>
+<li>Initialize TpModelWorker/TpModelWorkerClient based on overlap features</li>
+<li>Initialize memory pool and cache system</li>
+<li>Set scheduling strategies and batch processing parameters</li>
+</ul>
+<ol start="2">
+<li><strong>Request Management</strong></li>
+</ol>
+<ul>
+<li>Maintain request queue (waiting_queue)</li>
+<li>Manage currently running batches (running_batch)</li>
+<li>Handle request lifecycle (add, execute, complete)</li>
+<li>Support request abortion and withdrawal</li>
+</ul>
+<ol start="3">
+<li><strong>Batch Scheduling</strong></li>
+</ol>
+<pre><code class="language-python">def event_loop_normal(self)  # Normal scheduling loop
+def event_loop_overlap(self)  # Overlap scheduling loop
+</code></pre>
+<ul>
+<li>Implement two scheduling modes: normal and overlap</li>
+<li>Dynamic batch size management</li>
+<li>Request priority processing</li>
+<li>Load balancing</li>
+</ul>
+<ol start="4">
+<li><strong>Memory Management</strong></li>
+</ol>
+<ul>
+<li>Manage token pool and KV cache</li>
+<li>Implement RadixCache and ChunkCache</li>
+<li>Support cache refresh and reset</li>
+<li>Memory usage optimization</li>
+</ul>
+<ol start="5">
+<li><strong>Performance Optimization</strong></li>
+</ol>
+<ul>
+<li>Support chunked prefill</li>
+<li>Implement grammar cache</li>
+<li>Provide performance metrics collection</li>
+<li>Support profiling</li>
+</ul>
+<ol start="6">
+<li><strong>Result Processing</strong></li>
+</ol>
+<ul>
+<li>Handle batch processing results</li>
+<li>Manage token generation</li>
+<li>Process logprobs</li>
+<li>Update request status</li>
+</ul>
+<ol start="7">
+<li><strong>Monitoring and Maintenance</strong></li>
+</ol>
+<ul>
+<li>Watchdog thread monitoring</li>
+<li>Metrics collection and statistics</li>
+<li>Error handling and recovery</li>
+<li>Logging</li>
+</ul>
+<h2 id="dataparallelcontroller"><code>DataParallelController</code></h2>
+<p>Starting with <code>DataParallelController</code>, we finally reach the multi-GPU controller. So far, we've covered:</p>
+<pre><code class="language-python">ModelRunner -&gt; TpModelWorker / TpModelWorkerClient -&gt; Scheduler
+</code></pre>
+<p>Until now, all the components have focused on Tensor Parallelism (TP) on a single card. Why do we suddenly jump to Data Parallelism (DP) across multiple cards? Intuitively, DP is clearly a higher level than TP, so why doesn't SGLang have a <code>TensorParallelController</code> before moving directly to <code>DataParallelController</code>?</p>
+<p><strong>In fact, SGLang's <code>DataParallelController</code> manages both TP and DP simultaneously. TP doesn't require much management, as everyone is consistent - just handle <code>broadcast input</code> and <code>allreduce activations</code>. Therefore, <code>DataParallelController</code> unifies TP management with higher-level DP management at this layer. In other words, this is a multi-level parallel controller.</strong></p>
+<p>Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/data_parallel_controller.py">sglang/sglang/srt/managers/data_parallel_controller.py</a></p>
+<ol>
+<li><strong>Multi-level Parallel Architecture Management</strong></li>
+</ol>
+<pre><code class="language-python">def __init__(self, server_args, port_args):
+    # Initialize multi-level parallel structure
+    self.workers = []  # DP workers
+    for dp_rank in range(server_args.dp_size):
+        # Each DP worker contains multiple TP workers
+        self.launch_tensor_parallel_group(...)
+</code></pre>
+<ul>
+<li>Manage Data Parallel (DP) and Tensor Parallel (TP) multi-level structure</li>
+<li>Allocate independent GPU resource blocks for each DP group</li>
+<li>Support multi-node distributed deployment</li>
+</ul>
+<ol start="2">
+<li><strong>Load Balancing</strong></li>
+</ol>
+<pre><code class="language-python">class LoadBalanceMethod(Enum):
+    ROUND_ROBIN = auto()
+    SHORTEST_QUEUE = auto()
+</code></pre>
+<ul>
+<li>Implement multiple load balancing strategies</li>
+<li>Distribute requests among DP workers</li>
+<li>Dynamically adjust workload</li>
+</ul>
+<p>The current DP router implementation is still naive, but more efficient cache-aware DP scheduling will be implemented later, please see <a href="https://github.com/sgl-project/sglang/tree/main/sgl-router">rust router</a>.</p>
+<ol start="3">
+<li><strong>Inter-process Communication</strong></li>
+</ol>
+<ul>
+<li>Use ZMQ to manage complex inter-process communication</li>
+<li>Handle request forwarding from tokenizer to worker</li>
+<li>Support control message broadcasting</li>
+</ul>
+<ol start="4">
+<li><strong>Request Scheduling</strong></li>
+</ol>
+<pre><code class="language-python">def event_loop(self):
+    # Request distribution and processing
+    if isinstance(recv_req, (TokenizedGenerateReqInput, TokenizedEmbeddingReqInput)):
+        self.dispatching(recv_req)
+</code></pre>
+<ul>
+<li>Receive and distribute inference requests</li>
+<li>Handle special control messages</li>
+<li>Maintain request lifecycle</li>
+</ul>
+<ol start="5">
+<li><strong>Resource Coordination</strong></li>
+</ol>
+<ul>
+<li>Coordinate GPU resource allocation</li>
+<li>Manage process startup and synchronization</li>
+<li>Ensure resource isolation between parallel groups</li>
+</ul>
+<ol start="6">
+<li><strong>Error Handling and Monitoring</strong></li>
+</ol>
+<ul>
+<li>Exception catching and logging</li>
+<li>Process liveness monitoring</li>
+<li>Support graceful error recovery</li>
+</ul>
+<ol start="7">
+<li><strong>Performance Optimization</strong></li>
+</ol>
+<ul>
+<li>Support flexible load balancing strategies</li>
+<li>Optimize cross-process communication efficiency</li>
+<li>Provide performance monitoring mechanisms</li>
+</ul>
+<h2 id="tokenizermanager"><code>TokenizerManager</code></h2>
+<p>So far, we've covered:</p>
+<pre><code class="language-python">ModelRunner -&gt; TpModelWorker / TpModelWorkerClient -&gt; Scheduler -&gt; DataParallelController
+</code></pre>
+<p>This path has essentially described the TP control from bottom to top. We're not far from building a complete SGLang Architecture. Let's continue with the remaining components: <code>RunTime, Engine, TokenizerManager, DetokenizerManager</code>.</p>
+<p><code>TokenizerManager</code> is the frontend processor of the entire inference system. Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/tokenizer_manager.py">sglang/sglang/srt/managers/tokenizer_manager.py</a></p>
+<ol>
+<li><strong>Text Preprocessing</strong></li>
+</ol>
+<pre><code class="language-python">async def _tokenize_one_request(self, obj):
+    # Handle input text and images
+    input_text = obj.text
+    if obj.input_ids is None:
+        input_ids = self.tokenizer.encode(input_text)
+
+    if self.is_generation:
+        image_inputs = await self.image_processor.process_images_async(...)
+</code></pre>
+<ol start="2">
+<li><strong>Request Distribution and Result Aggregation</strong></li>
+</ol>
+<pre><code class="language-python">def __init__(self, server_args, port_args):
+    # Initialize inter-process communication
+    self.recv_from_detokenizer = get_zmq_socket(...)
+    self.send_to_scheduler = get_zmq_socket(...)
+</code></pre>
+<ol start="3">
+<li><strong>Model Update Coordination</strong></li>
+</ol>
+<pre><code class="language-python">async def update_weights(self, obj: UpdateWeightReqInput, request: Optional[fastapi.Request] = None):
+    async with self.model_update_lock:
+        # Wait for existing requests to complete
+        while len(self.rid_to_state) &gt; 0:
+            await asyncio.sleep(0.001)
+
+        # Broadcast update request to downstream
+        self.send_to_scheduler.send_pyobj(obj)
+</code></pre>
+<p>For the OpenRLHF interface, we pay special attention to the <code>update_weights</code> interface. Clearly, there are <code>update_weights</code> interfaces from top to bottom.</p>
+<ol>
+<li><strong>TokenizerManager's update_weights</strong>:</li>
+</ol>
+<ul>
+<li>Acts as frontend controller</li>
+<li>Responsible for coordinating the update process</li>
+<li>Ensures no requests are being processed during update</li>
+<li>Broadcasts update instructions to all downstream components</li>
+</ul>
+<ol start="2">
+<li><strong>TpModelWorker's update_weights</strong>:</li>
+</ol>
+<ul>
+<li>Acts as actual executor</li>
+<li>Responsible for actually loading new model weights</li>
+<li>Manages GPU memory</li>
+<li>Executes specific model update operations</li>
+</ul>
+<p>This is a typical controller-executor pattern:
+- TokenizerManager: Controller, coordinates the entire update process
+- TpModelWorker: Executor, actually executes model updates</p>
+<h2 id="detokenizermanager">DetokenizerManager</h2>
+<p><code>DetokenizerManager</code> handles the conversion of model output token ids to text, especially handling incremental decoding. Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/managers/detokenizer_manager.py">sglang/sglang/srt/managers/detokenizer_manager.py</a></p>
+<ol>
+<li><strong>Incremental Decoding State Management</strong></li>
+</ol>
+<pre><code class="language-python">@dataclasses.dataclass
+class DecodeStatus:
+    &quot;&quot;&quot;Store incremental decoding status&quot;&quot;&quot;
+    vid: int                # version id, for tracking decode version
+    decoded_text: str       # decoded text
+    decode_ids: List[int]   # decoded token ids
+    surr_offset: int        # surrogate offset
+    read_offset: int        # read offset
+</code></pre>
+<ol start="2">
+<li><strong>Batch Processing Decoding</strong></li>
+</ol>
+<pre><code class="language-python">def event_loop(self):
+    while True:
+        recv_obj = self.recv_from_scheduler.recv_pyobj()
+
+        # Handle special request types
+        if isinstance(recv_obj, (BatchEmbeddingOut, UpdateWeightReqOutput, GetMemPoolSizeReqOutput)):
+            self.send_to_tokenizer.send_pyobj(recv_obj)
+            continue
+
+        # Handle normal token decoding requests
+        bs = len(recv_obj.rids)
+        read_ids, surr_ids = [], []
+        for i in range(bs):
+            # ... prepare batch decoding data ...
+</code></pre>
+<ol start="3">
+<li><strong>Incremental Text Generation</strong></li>
+</ol>
+<pre><code class="language-python"># Incremental decoding processing
+if recv_obj.finished_reason[i] is None:
+    # Stream output: update decode status
+    if len(new_text) &gt; 0 and not new_text.endswith(&quot;�&quot;):
+        s.decoded_text = s.decoded_text + new_text
+        s.surr_offset = s.read_offset
+        s.read_offset = len(s.decode_ids)
+        new_text = &quot;&quot;
+    else:
+        new_text = find_printable_text(new_text)
+</code></pre>
+<ol start="4">
+<li><strong>EOS (End of Sequence) Processing</strong></li>
+</ol>
+<pre><code class="language-python">def trim_eos(self, output: Union[str, List[int]], finished_reason, no_stop_trim):
+    if no_stop_trim:
+        return output
+
+    # Handle stop strings
+    if isinstance(finished_reason, FINISH_MATCHED_STR) and isinstance(output, str):
+        pos = output.find(finished_reason.matched)
+        return output[:pos] if pos != -1 else output
+</code></pre>
+<ol start="5">
+<li><strong>Cache Management</strong></li>
+</ol>
+<pre><code class="language-python">class LimitedCapacityDict(OrderedDict):
+    &quot;&quot;&quot;Limited capacity cache dictionary&quot;&quot;&quot;
+    def __init__(self, capacity=1 &lt;&lt; 15, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.capacity = capacity
+
+    def __setitem__(self, key, value):
+        if len(self) &gt;= self.capacity:
+            self.popitem(last=False)  # Remove oldest element
+        super().__setitem__(key, value)
+</code></pre>
+<p>Workflow:</p>
+<ol>
+<li>Receive token ids from <code>Scheduler</code></li>
+<li>Maintain decoding status for each request</li>
+<li>Perform batch decoding</li>
+<li>Handle special characters and EOS</li>
+<li>Send decoded text back to <code>TokenizerManager</code></li>
+</ol>
+<h2 id="engine">Engine</h2>
+<p>Engine is a pure inference engine implementation without HTTP service. Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/server.py">sglang/sglang/srt/server.py</a></p>
+<p>Core implementation:</p>
+<pre><code class="language-python">class Engine:
+    &quot;&quot;&quot;SRT Engine without an HTTP server layer&quot;&quot;&quot;
+    def __init__(self, *args, **kwargs):
+        # 1. Initialize configuration
+        server_args = ServerArgs(*args, **kwargs)
+
+        # 2. Launch engine core components
+        launch_engine(server_args=server_args)
+
+    def generate(self, prompt: Optional[Union[List[str], str]] = None, ...):
+        # Construct request object
+        obj = GenerateReqInput(
+            text=prompt,
+            input_ids=input_ids,
+            sampling_params=sampling_params,
+            ...
+        )
+
+        # Directly call generation function
+        loop = asyncio.get_event_loop()
+        ret = loop.run_until_complete(generate_request(obj, None))
+</code></pre>
+<p>Component Integration Process:</p>
+<ol>
+<li><strong>Initialization Phase</strong> (<code>launch_engine</code>):</li>
+</ol>
+<pre><code class="language-python">def launch_engine(server_args):
+    # 1. Launch compute nodes based on dp_size
+    if server_args.dp_size == 1:
+        # Directly launch TP workers
+        for tp_rank in tp_rank_range:
+            proc = mp.Process(
+                target=run_scheduler_process,  # Each scheduler manages a group of TpModelWorkers
+                args=(server_args, port_args, gpu_id, tp_rank, None, writer)
+            )
+    else:
+        # Manage through DP controller
+        proc = mp.Process(
+            target=run_data_parallel_controller_process,
+            args=(server_args, port_args, writer)
+        )
+
+    # 2. Launch Detokenizer
+    detoken_proc = mp.Process(
+        target=run_detokenizer_process,
+        args=(server_args, port_args)
+    )
+
+    # 3. Initialize TokenizerManager
+    tokenizer_manager = TokenizerManager(server_args, port_args)
+</code></pre>
+<p>Here we can see that when dp size is 1, it bypasses the <code>DataParallelController</code> and directly launches the <code>Scheduler</code>.</p>
+<ol start="2">
+<li><strong>Request Processing Flow</strong>:</li>
+</ol>
+<pre><code class="language-mermaid">graph TD
+    A[Engine.generate] --&gt; B[TokenizerManager]
+    B --&gt;|ZMQ| C[Scheduler/DPController]
+    C --&gt;|Manage| D[TpModelWorker]
+    D --&gt;|Computation Results| C
+    C --&gt;|ZMQ| E[DetokenizerManager]
+    E --&gt;|ZMQ| B
+    B --&gt; A
+</code></pre>
+<ol start="3">
+<li><strong>Inter-process Communication</strong>:</li>
+</ol>
+<pre><code class="language-python"># Communication initialization in TokenizerManager
+def __init__(self, server_args, port_args):
+    self.recv_from_detokenizer = get_zmq_socket(...)
+    self.send_to_scheduler = get_zmq_socket(...)
+</code></pre>
+<p>Key Features:</p>
+<ol>
+<li>
+<p><strong>Direct Integration</strong>
+- No HTTP layer, direct inter-process communication
+- Lower latency and higher performance
+- Suitable for embedding into other Python programs</p>
+</li>
+<li>
+<p><strong>Async Support</strong></p>
+</li>
+</ol>
+<pre><code class="language-python">async def async_generate(self, prompt, ...):
+    obj = GenerateReqInput(...)
+    ret = await generate_request(obj, None)
+</code></pre>
+<ol start="3">
+<li><strong>Stream Processing</strong></li>
+</ol>
+<pre><code class="language-python">def generate(self, ..., stream=False):
+    if stream:
+        def generator_wrapper():
+            while True:
+                chunk = loop.run_until_complete(generator.__anext__())
+                if chunk.startswith(STREAM_END_SYMBOL):
+                    break
+                yield json.loads(chunk[len(STREAM_CHUNK_START_SYMBOL):])
+        return generator_wrapper()
+</code></pre>
+<ol start="4">
+<li><strong>Resource Management</strong></li>
+</ol>
+<pre><code class="language-python">def shutdown(self):
+    kill_child_process()  # Clean up all child processes
+</code></pre>
+<h2 id="runtime">Runtime</h2>
+<p><code>Runtime</code> is SGLang's entry point, which can be understood as an HTTP-wrapped <code>Engine</code>, responsible for initializing and managing the entire inference system. Source code: <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/runtime.py">sglang/sglang/srt/runtime.py</a></p>
+<ol>
+<li><strong>Initialization Process</strong>:</li>
+</ol>
+<pre><code class="language-python">class Runtime:
+    def __init__(self, log_level: str = &quot;error&quot;, *args, **kwargs):
+        # 1. Initialize configuration
+        self.server_args = ServerArgs(*args, log_level=log_level, **kwargs)
+
+        # 2. Allocate ports
+        for port in range(10000, 40000):
+            if is_port_available(port):
+                break
+        self.server_args.port = port
+        self.url = self.server_args.url()
+
+        # 3. Launch server process
+        pipe_reader, pipe_writer = mp.Pipe(duplex=False)
+        proc = mp.Process(
+            target=launch_server,  # Note this is launch_server not launch_engine
+            args=(self.server_args, pipe_writer)
+        )
+
+        # 4. Create HTTP client
+        self.endpoint = RuntimeEndpoint(self.url)
+</code></pre>
+<ol start="2">
+<li><strong>HTTP Service Wrapper</strong>:</li>
+</ol>
+<pre><code class="language-python"># FastAPI application
+app = FastAPI()
+app.add_middleware(CORSMiddleware, ...)
+
+# API endpoints
+@app.get(&quot;/health&quot;)
+async def health() -&gt; Response:
+    return Response(status_code=200)
+
+@app.post(&quot;/generate&quot;)
+async def generate(obj: GenerateReqInput, request: Request):
+    return await tokenizer_manager.generate_request(obj, request)
+</code></pre>
+<ol start="3">
+<li><strong>Client Interface</strong>:</li>
+</ol>
+<pre><code class="language-python">class Runtime:
+    def generate(self, prompt: Union[str, List[str]], ...):
+        # Synchronous call
+        response = requests.post(
+            self.url + &quot;/generate&quot;,
+            json=json_data,
+        )
+        return json.dumps(response.json())
+
+    async def async_generate(self, prompt: str, ...):
+        # Asynchronous call
+        async with session.post(self.generate_url, json=json_data) as response:
+            async for chunk in response.content.iter_chunks():
+                # Handle streaming response
+</code></pre>
+<ol start="4">
+<li><strong>Component Integration Architecture</strong>:</li>
+</ol>
+<pre><code class="language-mermaid">graph TD
+    A[Runtime Client] --&gt;|HTTP| B[FastAPI Server]
+    B --&gt; C[TokenizerManager]
+    C --&gt;|ZMQ| D[Scheduler/DPController]
+    D --&gt;|Manage| E[TpModelWorker]
+    E --&gt;|Results| D
+    D --&gt;|ZMQ| F[DetokenizerManager]
+    F --&gt;|ZMQ| C
+    C --&gt; B
+    B --&gt;|HTTP| A
+</code></pre>
+<p>Key Features:</p>
+<ol>
+<li>
+<p><strong>Multi-layer Encapsulation</strong>
+- HTTP layer: FastAPI server
+- Client layer: RuntimeEndpoint
+- Inter-process communication layer: Same architecture as Engine</p>
+</li>
+<li>
+<p><strong>Request Processing Flow</strong>:</p>
+</li>
+</ol>
+<pre><code>Client Request (HTTP)
+    ↓
+FastAPI Server
+    ↓
+TokenizerManager
+    ↓
+Scheduler/DP Controller
+    ↓
+TpModelWorker(s)
+    ↓
+DetokenizerManager
+    ↓
+TokenizerManager
+    ↓
+FastAPI Response (HTTP)
+</code></pre>
+<ol start="3">
+<li><strong>Flexible Interface Support</strong>:
+- Synchronous/Asynchronous API
+- Stream output
+- OpenAI-compatible interface</li>
+</ol>
+<p>Compared to <code>Engine</code>, <code>Runtime</code> adds an HTTP service layer, provides more complete API interfaces, supports remote calls, and is more suitable for deployment as an independent service.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/sglang-worker/readme.md">sglang/sglang-worker/readme.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

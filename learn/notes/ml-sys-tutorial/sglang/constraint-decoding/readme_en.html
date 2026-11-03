@@ -1,0 +1,97 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Understanding Constraint Decoding: Concepts, Methods, and Optimizations</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/constraint-decoding/readme_en.md</div>
+<article class="note"><h1 id="understanding-constraint-decoding-concepts-methods-and-optimizations">Understanding Constraint Decoding: Concepts, Methods, and Optimizations</h1>
+<p>【<a href="../../sglang/constraint-decoding/readme_en.html">English</a> | <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/constraint-decoding/readme.md">中文</a>】
+This article was written as study notes while developing SGLang's <a href="https://docs.sglang.ai/backend/structured_outputs.html">constraint decoding tutorial</a> with <a href="https://shuaills.github.io/">Shuai Shi</a>. While SGLang's documentation focuses on usage, this article elaborates on the concrete concepts and optimization methods behind constraint decoding.</p>
+<h2 id="concepts">Concepts</h2>
+<p>Constraint decoding and structured output represent two sides of the same coin:<br>
+- <strong>Structured output</strong> describes the desired outcome – model outputs adhering to specific formats<br>
+- <strong>Constraint decoding</strong> refers to the implementation method – applying structural constraints during generation  </p>
+<p>While early implementations focused narrowly on "JSON decoding," modern constraint decoding theoretically supports any <a href="https://en.wikipedia.org/wiki/Context-free_grammar">Context-Free Grammar (CFG)</a>, whose expressive power far exceeds JSON. CFGs enable precise structural constraints for various scenarios (SQL, formal schemas, etc.), making post-generation parsing significantly easier.</p>
+<h2 id="basic-principles">Basic Principles</h2>
+<p>The simplest implementation involves token probability masking during decoding:
+1. <strong>Define Rules</strong>: Create CFG or custom logic rules<br>
+2. <strong>Generate Candidates (Decoding)</strong>: LLM produces candidate tokens<br>
+3. <strong>Constraint Check</strong>: Validate tokens against rules<br>
+4. <strong>Mask Invalid Tokens</strong>: Set invalid token probabilities near zero<br>
+5. <strong>Sample</strong>: Select tokens from filtered distribution<br>
+6. <strong>Repeat</strong>: Continue until text completion  </p>
+<p>While straightforward, this naive approach faces scalability issues. For models like Llama-3 (128K token vocabulary), full vocabulary validation at each step is computationally prohibitive. Though sorting tokens by likelihood reduces average checking iterations, asymptotic complexity remains problematic.</p>
+<h2 id="x-grammar-optimization">X-Grammar Optimization</h2>
+<p>SGLang's X-Grammar framework introduces major improvements in both <strong>rule expressiveness</strong> and <strong>system efficiency</strong>. <a href="https://docs.sglang.ai/backend/structured_outputs.html">Full implementation details</a> are available in SGLang's docs.</p>
+<h3 id="key-advantages-vs-basic-methods">Key Advantages vs. Basic Methods</h3>
+<ol>
+<li>
+<p><strong>Enhanced Expressiveness</strong><br>
+   CFGs enable complex nested structures impossible in JSON (e.g., SQL/Cypher queries) via <a href="https://www.wikiwand.com/en/Extended_Backus%E2%80%93Naur_form">EBNF syntax</a> with <a href="https://www.wikiwand.com/en/Pushdown_automaton">Pushdown Automaton (PDA)</a> implementations.</p>
+</li>
+<li>
+<p><strong>Algorithmic Improvements</strong>
+   - <strong>Context-Free Token Caching</strong><br>
+     Example JSON rule:<br>
+<code>bash
+     bool_value -&gt; "true" | "false"  # Token validity depends only on current state</code><br>
+     X-Grammar precompiles these state-specific valid tokens into an <strong>Adaptive Token Mask Cache</strong>, eliminating runtime validation for 75%+ tokens.</p>
+</li>
+</ol>
+<ul>
+<li><strong>Context-Dependent Handling</strong><br>
+     Example CFG:<br>
+<code>bash
+     S -&gt; ( S ) S  # ')' validity depends on '(' matching via PDA stack</code><br>
+     Stack-dependent tokens are validated through PDA state traversal.</li>
+</ul>
+<ol start="3">
+<li>
+<p><strong>Persistent Execution Stack</strong><br>
+   Traditional stack snapshotting (for backtracking/branching) requires costly duplication. X-Grammar uses tree-based stack management with node reuse, reducing memory copies by 90%.</p>
+</li>
+<li>
+<p><strong>PDA Inlining and Context Expansion</strong><br>
+   - <strong>State Inlining</strong>: Embed simple non-terminals into parent rules:<br>
+<code>bash
+     Original:  A → B; B → "token"  
+     Inlined:   A → "token"</code><br>
+   - <strong>Equivalent State Merging</strong>: Combine identical PDA states.<br>
+   - <strong>Context Inference</strong>: Analyze forward/backward context to:  </p>
+<ul>
+<li>Convert stack-dependent tokens → context-free where possible<br>
+<em>Example</em>:<br>
+<code>bash
+ Rule: S → "(" S ")" S | ε</code><br>
+ A <code>")"</code> with no prior unmatched <code>"("</code> is rejected during compilation.  </li>
+</ul>
+</li>
+</ol>
+<h3 id="system-optimizations">System Optimizations</h3>
+<ol>
+<li>Parallel Grammar Compilation</li>
+</ol>
+<p>During preprocessing, grammar compilation tasks (including PDA construction and context-free token caching) are distributed across multi-core CPUs. This parallelization significantly speeds up preprocessing for large grammars (e.g., full JSON grammar, SQL, JSON Schema+ extensions).</p>
+<ol start="2">
+<li>Overlapping with GPU Computation</li>
+</ol>
+<p>X-Grammar interfaces with the inference runtime to overlap CPU-based grammar processing with subsequent GPU computations, reducing overall overhead.</p>
+<ol start="3">
+<li>Speculative Decoding Support</li>
+</ol>
+<p>To accommodate inference engines using speculative decoding or jumpahead decoding (which require token rollback or jump-forward operations), X-Grammar provides APIs for:<br>
+- Immediate state rollback when invalid branches are detected<br>
+- Direct state advancement<br>
+This further reduces validation overhead during accelerated decoding scenarios.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/constraint-decoding/readme_en.md">sglang/constraint-decoding/readme_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

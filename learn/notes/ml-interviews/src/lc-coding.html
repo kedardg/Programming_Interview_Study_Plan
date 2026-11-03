@@ -1,0 +1,171 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>&lt;a name=&quot;coding&quot;&gt;&lt;/a&gt; General Coding Interview (Algorithms and Data Structures) :computer:</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/lc-coding.md</div>
+<article class="note"><h1 id="general-coding-interview-algorithms-and-data-structures-computer"><a name="coding"></a> General Coding Interview (Algorithms and Data Structures) :computer:</h1>
+<p>ML engineers are expected to have a solid understanding of software engineering fundamentals, particularly algorithms, data structures, complexity analysis, and writing correct, readable code.</p>
+<p>Depending on the company and seniority level, an interview loop usually includes one or two general coding rounds. These rounds are similar to software engineering coding interviews. Interviewers typically evaluate whether you can:</p>
+<ul>
+<li>Clarify an ambiguous problem and state assumptions</li>
+<li>Select appropriate data structures and algorithms</li>
+<li>Explain time and space complexity</li>
+<li>Turn an initial solution into a more efficient one</li>
+<li>Write readable, testable code without relying heavily on an IDE</li>
+<li>Communicate your reasoning and test edge cases</li>
+</ul>
+<h2 id="preparation-approach">Preparation approach</h2>
+<p>Use patterns to organize your preparation instead of memorizing isolated solutions:</p>
+<ol>
+<li>Learn the core data structures and the signals associated with each pattern.</li>
+<li>Solve a small set of representative problems with full explanations.</li>
+<li>Revisit missed problems until you can derive the solution independently.</li>
+<li>Mix patterns so the problem type is not revealed in advance.</li>
+<li>Finish with timed, interview-style practice and company-targeted sets.</li>
+</ol>
+<p>For each practice session:</p>
+<ul>
+<li><strong>Time-box each problem to about 15-20 minutes.</strong> If you are stuck, study the solution, tag the problem for review, and re-attempt it within 48 hours without looking at the answer.</li>
+<li><strong>Track your work in a sheet:</strong> problem, pattern, difficulty, status (solved or redo), and time spent. Use the results to identify weak patterns for later review and timed mocks.</li>
+<li><strong>Prioritize quality over raw count.</strong> Solving 300 problems with strong pattern recall is more useful than completing 400 that are only half-understood. Pair this practice with <a href="../src/MLC/ml-coding.html">Chapter 2: ML Coding</a> so both coding-round formats are covered.</li>
+</ul>
+<h2 id="leetcode-problem-volume-and-difficulty">LeetCode problem volume and difficulty</h2>
+<p><a href="https://leetcode.com/">LeetCode</a> remains one of the most useful platforms for coding interview practice. I practiced around 350 problems. A reasonable target is <strong>300-400 well-reviewed problems</strong>, with <strong>about 350</strong> as a strong reference point. Quality of review matters more than maximizing the raw count.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Target total</th>
+<th style="text-align: right;">Easy (35%)</th>
+<th style="text-align: right;">Medium (55%)</th>
+<th style="text-align: right;">Hard (15%*)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">300</td>
+<td style="text-align: right;">~105</td>
+<td style="text-align: right;">~165</td>
+<td style="text-align: right;">~45</td>
+</tr>
+<tr>
+<td style="text-align: right;"><strong>350 (recommended)</strong></td>
+<td style="text-align: right;"><strong>~120</strong></td>
+<td style="text-align: right;"><strong>~190</strong></td>
+<td style="text-align: right;"><strong>~50</strong></td>
+</tr>
+<tr>
+<td style="text-align: right;">400</td>
+<td style="text-align: right;">~140</td>
+<td style="text-align: right;">~220</td>
+<td style="text-align: right;">~60</td>
+</tr>
+</tbody>
+</table>
+<p>* The 35/55/15 split totals approximately 105%, so treat these counts as directional rather than exact quotas. Most preparation should center on Medium problems; use Easy problems to build fluency and Hard problems to deepen patterns that are relevant to your target roles.</p>
+<p>You can find examples of questions I practiced in <a href="https://docs.google.com/spreadsheets/d/1Ry_JLeOp1fw9mSbbp4ji5l3CZNiCwf8Atevpp0YML6E/edit?usp=sharing">My Leet Sheet</a>.</p>
+<h2 id="core-coding-patterns">Core coding patterns</h2>
+<table>
+<thead>
+<tr>
+<th>Pattern focus</th>
+<th>Common signals and techniques</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Arrays, strings, and hashing</td>
+<td>Frequency counting, lookup tables, prefix sums, sorting</td>
+</tr>
+<tr>
+<td>Two pointers and sliding window</td>
+<td>Contiguous ranges, pairs, deduplication, expanding or shrinking windows</td>
+</tr>
+<tr>
+<td>Stack and monotonic stack</td>
+<td>Matching delimiters, next greater element, expression evaluation</td>
+</tr>
+<tr>
+<td>Binary search</td>
+<td>Sorted data, monotonic answer spaces, boundary finding</td>
+</tr>
+<tr>
+<td>Linked lists</td>
+<td>Pointer manipulation, fast and slow pointers, reversal, cycle detection</td>
+</tr>
+<tr>
+<td>Intervals</td>
+<td>Merge, overlap, scheduling, sweep line</td>
+</tr>
+<tr>
+<td>Trees (BFS, DFS, BST)</td>
+<td>Traversal, recursion, path problems, ordering properties</td>
+</tr>
+<tr>
+<td>Tries, heaps, and priority queues</td>
+<td>Prefix lookup, top-k, streaming minima or maxima</td>
+</tr>
+<tr>
+<td>Backtracking</td>
+<td>Combinations, permutations, subsets, constraint search</td>
+</tr>
+<tr>
+<td>Graphs</td>
+<td>Matrix traversal, BFS/DFS, topological sort, union-find</td>
+</tr>
+<tr>
+<td>Advanced graphs and greedy</td>
+<td>Shortest paths, minimum spanning trees, locally optimal choices</td>
+</tr>
+<tr>
+<td>1-D dynamic programming</td>
+<td>State transitions over sequences, take/skip decisions</td>
+</tr>
+<tr>
+<td>2-D dynamic programming</td>
+<td>Grids, two-sequence problems, multi-variable state</td>
+</tr>
+<tr>
+<td>Math, geometry, and bit manipulation</td>
+<td>Invariants, coordinates, masks, XOR, bitwise state</td>
+</tr>
+</tbody>
+</table>
+<p>Do not practice these only in separate blocks. Once the foundations are stable, use mixed sets so you must recognize the pattern from the problem statement.</p>
+<h2 id="company-targeted-and-timed-practice">Company-targeted and timed practice</h2>
+<ul>
+<li>Use company-tagged problems for your target company, emphasizing questions reported in the <strong>last 6-12 months</strong>.</li>
+<li>Prioritize recurring patterns and frequently reported questions over one-off reports.</li>
+<li>Practice under the target company's expected format: fixed time, no hints, and executable or whiteboard-style code as appropriate.</li>
+<li>Run mixed timed mocks rather than selecting a known topic in advance.</li>
+<li>After each mock, classify misses by pattern, implementation, complexity, communication, or testing, then redo the weakest areas.</li>
+<li>Avoid memorizing company-tagged answers. You should be able to explain why the approach works and adapt it when constraints change.</li>
+</ul>
+<h2 id="during-the-interview">During the interview</h2>
+<ol>
+<li>Restate the problem and clarify inputs, outputs, constraints, and edge cases.</li>
+<li>Describe a correct baseline before optimizing, unless the optimal approach is immediately clear.</li>
+<li>Explain the chosen data structure, algorithm, and complexity before coding.</li>
+<li>Write in small, verifiable steps and keep the interviewer informed.</li>
+<li>Test normal cases, boundaries, empty inputs, duplicates, and failure cases.</li>
+</ol>
+<h2 id="educativeio">Educative.io</h2>
+<p><a href="https://www.educative.io/">Educative.io</a> provides interactive, text-based explanations and visualizations that are useful for learning interview patterns. Relevant coding resources include:</p>
+<ul>
+<li><a href="https://www.educative.io/courses/grokking-coding-interview">Grokking the Coding Interview Patterns</a></li>
+<li><a href="https://www.educative.io/courses/grokking-dynamic-programming-interview">Grokking Dynamic Programming Patterns for Coding Interviews</a></li>
+<li><a href="https://www.educative.io/courses/grokking-the-machine-learning-system-design-interview">Grokking the Machine Learning System Design Interview</a></li>
+</ul>
+<p>For LLM, RAG, agentic AI, and GenAI system-design courses, see <a href="../src/genai-resources.html">GenAI Learning Resources</a>.</p></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/lc-coding.md">src/lc-coding.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

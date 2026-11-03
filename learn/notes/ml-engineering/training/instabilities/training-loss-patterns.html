@@ -1,0 +1,98 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Understanding Training Loss Patterns</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › training/instabilities/training-loss-patterns.md</div>
+<article class="note"><h1 id="understanding-training-loss-patterns">Understanding Training Loss Patterns</h1>
+<p>Training loss plot is similar to the heart beat pattern - there is the good, the bad and you-should-worry one. After studying many training loss trajectories one develops an intuition to explain various loss behaviors during one's training and how to act on those.</p>
+<p>I warn you that the "Understanding" in the title of this section is overloaded since very often we don't really understand why certain types of spikes happen. Here "understanding" refers to recognizing various patterns. We then usually have techniques to overcome the bad patterns and bring the training successfully to the finish line.</p>
+<p>Thus you will find here a gallery of training loss patterns sometimes with real explanations, but more often than not educated guesses to what might be happening.</p>
+<p>Please excuse the plot snapshots looking wildly different from each other as they have come from many sources over multiple years.</p>
+<h2 id="the-good-the-bad-and-the-unexpected">The good, the bad and the unexpected</h2>
+<p>Let's look at some good, bad and unusual patterns.</p>
+<h3 id="a-very-failed-training">A very failed training</h3>
+<p>Prior to starting BLOOM-176B training we did multiple experiments with the <a href="https://github.com/bigscience-workshop/bigscience/tree/master/train/tr8-104B-wide">104B model</a>. We failed to figure out how to not diverge very early on.</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/pre-bloom-104B-en-fail.png"></p>
+<p>As you can see many attempts were made, many techniques were applied (see <a href="https://github.com/bigscience-workshop/bigscience/blob/master/train/tr8-104B-wide/chronicles.md">chronicles</a>. We think the 2 main obstacles were using fp16 and data that had a lot of garbage in it. For BLOOM-176B we switched to bf16, used much cleaner data and also added an embedding layer-norm and that made all the difference.</p>
+<h3 id="an-almost-perfect-training">An almost perfect training</h3>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/bloom-176B-success.png"></p>
+<p>The <a href="https://github.com/bigscience-workshop/bigscience/tree/master/train/tr11-176B-ml">BLOOM-176B</a> training had a close to perfect training loss trajectory, with a single spike that has recovered in 200 steps.</p>
+<p>You can inspect the <a href="https://huggingface.co/bigscience/tr11-176B-logs/tensorboard">TB</a> to zoom in and check other plots.</p>
+<p>This was the almost perfect training indeed. Lots of hard work was put into achieving this.</p>
+<h3 id="the-grokking-moment">The grokking moment</h3>
+<p>Some time back I was doing performance testing and run a tiny global batch size of 8 on an 8×A100 node, training llama-2-7b from scratch. (w/ DeepSpeed ZeRO-3 DP using HF Transformers <a href="https://github.com/huggingface/transformers/tree/main/src/transformers/models/llama">Llama</a> implementation)</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/llama-7b-grokking-no-zoom.png"></p>
+<p>Here one can observe a rapid loss improvement from 4 to 2.5 in just 480 samples after a very steady much slower improvements. My colleague <a href="https://github.com/gmittal">Gautam Mittal</a> called it the <a href="https://en.wikipedia.org/wiki/Grok">grokking</a> moment. In just a handful of steps the model suddenly generalized to much better predict the next tokens.</p>
+<p>Normally one doesn't see such a dramatic improvement when using a much larger batch size.</p>
+<p>If we zoom in it took about 60 8-sample per iteration steps:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/llama-7b-grokking.png"></p>
+<h2 id="main-types-of-loss-spikes">Main types of loss spikes</h2>
+<p>In general there are 3 types of loss spikes:</p>
+<ol>
+<li>Fast recovering spikes</li>
+<li>Slow recovering spikes</li>
+<li>Not fully recovering spikes</li>
+</ol>
+<p>The spikes usually happen because of a bad data pocket, either due to badly shuffled data or because it hasn't been cleaned from some garbage scraped from the websites.</p>
+<p>While one would suspect that the batch before the spike was the trigger, but if you were to study that batch's contents you are likely to find nothing unusual - quite often the problem starts developing many steps before and then most of the sudden it happens. But also it might not be easy to study the batch, since it could amount to a size of a book when the global batch size and the sequence lengths are huge.</p>
+<h3 id="fast-recovering-spikes">Fast recovering spikes</h3>
+<p>Loss spikes can happen often and as long as they quickly bounce back to where they left off the training usually continues as if nothing happened:</p>
+<p>Here is an example of <a href="https://github.com/bigscience-workshop/bigscience/tree/master/train/tr1-13B-base">the 13B pre-BLOOM training experiment</a>:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/pre-bloom-tr1-13B-glitch-1-2.png"></p>
+<p>As you can see there are many spikes, some of a huge magnitude but they have all quickly recovered.</p>
+<h3 id="slow-recovering-spikes">Slow recovering spikes</h3>
+<p>Here is a slow recovering spike from the <a href="https://github.com/huggingface/m4-logs/blob/master/tr-190-80b/chronicles.md">IDEFICS-80B</a> training:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/idefics-80b-tr-190-01-spike-recover-2023-05-30.png"></p>
+<h3 id="not-fully-recovering-spikes">Not fully recovering spikes</h3>
+<p>This <a href="https://github.com/bigscience-workshop/bigscience/tree/master/train/tr8-104B-wide">104B model attempt</a> spiked, started recovering but decided to not recover fully and instead started diverging</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/pre-bloom-tr8-104B-glitch-1.png"></p>
+<p>Here is another example from the <a href="https://github.com/huggingface/m4-logs/blob/master/tr-190-80b/chronicles.md">IDEFICS-80B</a> training:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/idefics-80b-tr-190-01-spike-2023-05-27.png"></p>
+<h3 id="non-spike-diverging">Non-spike diverging</h3>
+<p>Here are a few examples of diverging that didn't go through a spike</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/pre-bloom-tr8-104B-glitch-5.png"></p>
+<p>and here are a few more:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/pre-bloom-tr8-104B-glitch-7-10.png"></p>
+<p>as you can see each restart makes a bit of progress and then the model diverges.</p>
+<p>All these are from the <a href="https://github.com/bigscience-workshop/bigscience/tree/master/train/tr8-104B-wide">104B model attempts</a>.</p>
+<h3 id="multiple-datasets-spikes">Multiple datasets spikes</h3>
+<p>During the <a href="https://github.com/huggingface/m4-logs/blob/master/tr-190-80b/chronicles.md">IDEFICS-80B</a> training we were using 2 different dataset types mixed together:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/idefics-80b-tr-190-01-losses-2023-06-04.png"></p>
+<p>Legend: cm4 (high), average (mid) and pmd (low)</p>
+<p>You can see that the loss spikes were sometimes happening simultaneously on both datasets and at other times only one of the datasets loss would spike.</p>
+<p>Here the model was learning two different data distributions and as you can see it was not reporting the same loss and the spike behaviors on both data distributions. The pmd datasets loss was much easier for the model than the cm4 one.</p>
+<h2 id="resume-related-spikes">Resume-related spikes</h2>
+<p>Training resume due to a hardware crash or because a need to rollback to an earlier checkpoint due to encountering a divergence is pretty much guaranteed to happen. If your training software doesn't resume perfectly so that the model doesn't notice there was a resume various problems could be encountered.</p>
+<p>The most complicated challenge of resume is restoring various RNGs, getting to the DataLoader index where the previous training was restored, and dealing with various other requirements if you use complex DataLoaders that are specific to your setup.</p>
+<h3 id="datasampler-related-issues">DataSampler related issues</h3>
+<p>During <a href="https://github.com/huggingface/m4-logs/blob/master/tr-190-80b/chronicles.md">IDEFICS-80B</a> training we had a very complicated DataLoader which was suffering from image to text ratio fluctuations when the DataLoader was getting restored on resume, so we ended up having a small spike on each resume which would then recover:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/idefics-80b-tr-190-01-image2text.png"></p>
+<p>You can see the loss and ratio plots correlation here. As we had to resume about a dozen times we saw a lot of those spikes.</p>
+<h3 id="impacts-of-repeat-data">Impacts of repeat data</h3>
+<p>I was training a variation of Llama2 and saw this super unusual spike that didn't diverge or recover but which switched to a new higher loss level:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/ptl-repeat-data-p1.png"></p>
+<p>I rolled back to just before the weird behavior occurred and restarted. The loss training progressed at the same loss level for a bit and then again spiked and shifted to a higher loss.</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/ptl-repeat-data-p2.png"></p>
+<p>I have never seen this type of divergence before. I was scratching my head for a while and then decided to look at the bigger picture.</p>
+<p><a href="https://wandb.ai/">wandb</a> didn't handle resume data plotting correctly if a rollback was performed, that is it ignored all new data after the rollback until the steps of the old data have been overcome. This forced us to start a new wandb plot for every resume with a rollback so that new data is shown. And if you need to see the whole plot you have to stitch them together, which includes dead data points that are no longer true. So I did the stitching and saw this puzzle:</p>
+<p><img alt="" src="../../../../vendor/notes/ml-engineering/training/instabilities/images/ptl-repeat-data-p3.png"></p>
+<p>footnote: as of 2025 wandb can do this properly - <a href="https://docs.wandb.ai/models/runs/rewind">rewinding a run</a> with <code>wandb.init(resume_from="&lt;run_id&gt;?_step=N")</code> truncates the history at step <code>N</code> and lets you log forward under the same run id, and <code>fork_from</code> does the same while leaving the original run intact (wandb SDK 0.17.1+; wandb recommends forking over rewinding for performance). Two catches: it's cloud-only - Multi-tenant and Dedicated Cloud, not Self-Managed - and it needs monotonically increasing steps, so it won't work alongside a non-monotonic <code>define_metric()</code>. Self-hosting, the stitching above is still the way.</p>
+<p>There was no real spike in the two earlier runs. The loss never went up in the first place. In both resumes it was under-reporting loss due to an exactly repeated data and then it reached data it hasn't seen before and started reporting correctly. In other words it was overfitting and reporting a false loss.</p>
+<p>The cause of the problem is data repetition, and since it clearly memorised some of it, it was reporting a better loss.</p>
+<p>The problem came from <a href="https://github.com/Lightning-AI/pytorch-lightning">pytorch-lightning</a> not handling resumes correctly wrt DataSampler automatically - basically every time you resume you start your data stream from scratch. This, of course, requires a user to somehow fix the situation. You could change the seed to somewhat ameliorate the situation and avoid the exact data sequence, but it still leaves you with repeat data, which isn't what you want for any serious training (or ablation experiments, since your observation will be invalid, if they assume <a href="https://en.wikipedia.org/wiki/Independent_and_identically_distributed_random_variables">IID data distribution</a>).</p>
+<p>footnote: I discussed <a href="https://github.com/Lightning-AI/pytorch-lightning/issues/18780">this issue with the PTL developers</a> and they said that they tried hard to come up with a generic solution but it wasn't meant to be. So the user needs to figure it out.</p>
+<p>Make sure to check your training framework documentation whether it handles the DataSampler resuming correctly. Make sure you didn't discover this problem after the training has finished and you ended up training 6x times the same 50B of tokens from the planned 300B tokens seen only once each.</p>
+<p>Doing a couple of resumes early on before embarking on the real training should also expose if there is a problem. Albeit, if the data gets reshuffled on each resume you are unlikely to see it. It'll only be seen if the seed is the same.</p></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/training/instabilities/training-loss-patterns.md">training/instabilities/training-loss-patterns.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

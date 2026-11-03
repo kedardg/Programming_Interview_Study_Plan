@@ -1,0 +1,241 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search-R1 &amp; veRL-SGLang：Train LLMs with Multi-Turn RL to Reason and Call a Search Engine</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/tool_examples/verl-multiturn-searchR1-like.md</div>
+<article class="note"><h1 id="search-r1-verl-sglangtrain-llms-with-multi-turn-rl-to-reason-and-call-a-search-engine">Search-R1 &amp; veRL-SGLang：Train LLMs with Multi-Turn RL to Reason and Call a Search Engine</h1>
+<p>Hello everyone, the SGLang community, in collaboration with the Search R1 team, has quickly reproduced Search-R1: Training LLMs to Reason and Leverage Search Engines with Reinforcement Learning based on the previously open-sourced <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/release_log/verl-multiturn-rollout-Release.md">multi-turn RL</a>. We welcome you to get hands-on experience and develop together. Specifically, we have implemented the following features:</p>
+<ul>
+<li>The SGLang community had already implemented tool calling, supporting the model to invoke specific tools during the Actor rollout and seamlessly integrate the returned results into the training process.</li>
+<li>We have further added a search tool calling function to Multi-Turn RL, enabling the model to initiate retrieval requests during Actor rollout and directly use retrieval results for training. <strong>We support using a local dense retriever as the retrieval tool, as well as integrating with your own local retrieval engine.</strong></li>
+<li>We provide the community with a brand new reproduction solution for Search R1, already integrated into the verl upstream and continuously maintained and updated. In addition, the latest efficiency-optimization features of verl (such as FSDP2 and Megatron) can be used directly. This is a huge advantage compared to other efforts not maintained on the main branch.</li>
+</ul>
+<p><a href="https://github.com/volcengine/verl/pull/1682">PR: volcengine/verl#1682</a></p>
+<p><a href="https://wandb.ai/lingchang-ustc/search_async_rl/workspace?nw=nwuserlingchang">Training curves on wandb</a></p>
+<p>Thanks to the SGLang team and the authors of searchR1 for their efficient support!</p>
+<p>Project Member:</p>
+<ul>
+<li>Ling Chang (Author)</li>
+<li>Bowen Jin (Advisor on Training)</li>
+<li>Xiaocheng Wang (Advisor on Implementation)</li>
+<li>Nan Jiang (Reproduce)</li>
+<li>Chenyang Zhao (PM)</li>
+<li>Xiang Long (Reviewer, PM)</li>
+</ul>
+<p>Thanks for your contributions!</p>
+<h2 id="quick-reproduction">Quick Reproduction</h2>
+<h3 id="create-a-new-docker-container">Create a New Docker Container</h3>
+<pre><code class="language-bash">docker run \
+    -it \
+    --shm-size 32g \
+    --gpus all \
+    -v {Huggingface-Cache-Path}:/root/.cache \
+    --ipc=host \
+    --network=host \
+    --privileged \
+    --name sglang_{your-name} \
+    lmsysorg/sglang:dev \
+    /bin/zsh
+</code></pre>
+<p>If you need to restart after exiting the container:</p>
+<pre><code class="language-bash">docker start -i sglang_{your-name}
+</code></pre>
+<h3 id="update-python-and-configure-the-virtual-environment-using-uv">Update Python and Configure the Virtual Environment using uv</h3>
+<pre><code class="language-bash">apt update
+apt install -y python3.10 python3.10-venv
+
+# Create a virtual environment
+python3 -m venv ~/.python/veRL-multiturn-rollout
+
+# Activate the virtual environment
+source ~/.python/veRL-multiturn-rollout/bin/activate
+
+# Install uv
+python3 -m pip install uv
+</code></pre>
+<h3 id="install-verl-upstream">Install veRL Upstream</h3>
+<pre><code class="language-bash">cd ~
+git clone https://github.com/volcengine/verl.git
+cd verl
+
+# Install verl
+python3 -m uv pip install .
+python3 -m uv pip install -r ./requirements_sglang.txt
+
+# Manually install flash-attn
+python3 -m uv pip install wheel
+python3 -m uv pip install packaging
+python3 -m uv pip install flash-attn --no-build-isolation --no-deps
+</code></pre>
+<h3 id="set-up-a-local-retrieval-engine">Set Up a Local Retrieval Engine</h3>
+<p>If you are using your own local retrieval service, you can skip this step. We chose the local dense retriever provided in the search-R1 example; detailed instructions are in the <a href="https://raw.githubusercontent.com/PeterGriffinJin/Search-R1/refs/heads/main/docs/retriever.md">searchR1 docs</a>. In brief:</p>
+<ul>
+<li>The GPU version offers higher accuracy and speed; each GPU uses about 5–7 GB of memory.</li>
+<li>The CPU version can be used for simple testing but has lower retrieval precision, which will degrade training performance. See the <a href="https://github.com/PeterGriffinJin/Search-R1/blob/main/docs/retriever.md">retriever documentation</a> in search-R1 for details.</li>
+</ul>
+<p><strong>Note</strong>: To start both the training process and the local retrieval service, we launch two separate Python environments. The training uses uv in the veRL-multiturn-rollout environment, while the retriever uses conda to install <code>faiss-gpu</code>.</p>
+<pre><code class="language-bash"># Download the Miniconda installer script
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
+
+# Install to $HOME/miniconda3 in batch mode
+bash ~/miniconda.sh -b -p $HOME/miniconda3
+
+# Activate conda (only in the current shell)
+eval &quot;$($HOME/miniconda3/bin/conda shell.bash hook)&quot;
+
+# (Optional) Add conda to your default shell startup
+conda init
+
+# Reload shell config
+source ~/.bashrc
+
+# Create and activate the retriever environment with Python 3.10
+conda create -n retriever python=3.10 -y
+conda activate retriever
+
+# Install PyTorch (with GPU support) and related libraries
+conda install pytorch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 pytorch-cuda=12.1 -c pytorch -c nvidia -y
+
+# Install other Python packages
+pip install transformers datasets pyserini huggingface_hub
+
+# Install the GPU version of faiss
+conda install faiss-gpu=1.8.0 -c pytorch -c nvidia -y
+
+# Install the API service framework
+pip install uvicorn fastapi
+</code></pre>
+<h3 id="download-the-indexing-and-corpus">Download the Indexing and Corpus</h3>
+<p>The local retrieval files are large—prepare sufficient disk space. Downloading is about 60–70 GB, and uncompressed takes about 132 GB:</p>
+<pre><code class="language-bash">conda activate retriever
+
+save_path=/the/path/to/save
+python examples/sglang_multiturn/search_r1_like/local_dense_retriever/download.py --save_path $save_path
+cat $save_path/part_* &gt; $save_path/e5_Flat.index
+gzip -d $save_path/wiki-18.jsonl.gz
+</code></pre>
+<h3 id="start-the-local-flat-e5-retrieval-server">Start the Local flat e5 Retrieval Server</h3>
+<ol>
+<li>The first startup will download models and load the index.</li>
+<li>Apart from the download, startup takes about 1–2 minutes.</li>
+<li>After startup, each GPU uses about 5–7 GB of memory, leaving the rest for multi-turn RL training.</li>
+</ol>
+<pre><code class="language-bash">conda activate retriever
+
+index_file=$save_path/e5_Flat.index
+corpus_file=$save_path/wiki-18.jsonl
+retriever_name=e5
+retriever_path=intfloat/e5-base-v2
+
+python examples/sglang_multiturn/search_r1_like/local_dense_retriever/retrieval_server.py \
+  --index_path $index_file \
+  --corpus_path $corpus_file \
+  --topk 3 \
+  --retriever_name $retriever_name \
+  --retriever_model $retriever_path \
+  --faiss_gpu
+</code></pre>
+<h3 id="set-up-wandb_api_key">Set Up WANDB_API_KEY</h3>
+<p>If you don’t know how to get an API key, please refer to <a href="https://community.wandb.ai/t/where-can-i-find-the-api-token-for-my-project/7914">this link</a>.</p>
+<pre><code class="language-bash">export WANDB_API_KEY={YOUR_WANDB_API_KEY}
+
+# Define a timestamp function
+function now() {
+    date '+%Y-%m-%d-%H-%M'
+}
+</code></pre>
+<h3 id="preprocess-the-dataset"><strong>Preprocess the Dataset</strong></h3>
+<blockquote>
+<p><strong>Note:</strong> The following data processing and training commands must be run in the veRL-multiturn-rollout environment.</p>
+</blockquote>
+<pre><code class="language-bash">python3 examples/data_preprocess/preprocess_search_r1_dataset.py
+</code></pre>
+<h3 id="testing-on-8-x-h20">Testing on 8 x H20</h3>
+<pre><code class="language-bash"># Ensure the now() function is defined
+# Create a logs directory
+mkdir -p logs
+
+# Set GPUs and run with a suitable log path
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+nohup bash examples/sglang_multiturn/search_r1_like/run_qwen2.5-3b_instruct_search_multiturn.sh \
+  trainer.experiment_name=qwen2.5-3b-it_rm-searchR1-like-sgl-multiturn-$(now) \
+  &gt; logs/searchR1-like$(now).log 2&gt;&amp;1 &amp;
+</code></pre>
+<h2 id="notes">Notes</h2>
+<ol>
+<li>
+<p>The total training time is about 27 hours; meanwhile, the validation dataset is very large (51 k), and each validation takes about 6000 s. (Therefore, <code>val_before_train=False</code> by default)</p>
+</li>
+<li>
+<p>Training performance may fluctuate within a reasonable range compared to the original paper. We analyzed the reasons with the search-R1 authors:</p>
+</li>
+</ol>
+<ul>
+<li>Special tokens (such as <code>&lt;tool_call&gt;</code>, <code>&lt;tool_response&gt;</code>) are not fully aligned and await future development</li>
+<li>We modified the EM reward in the initial search-R1 implementation and added penalties for overly many <code>\&lt;answer&gt;\</code>, <code>\&lt;/answer&gt;\</code> in the response</li>
+<li>A few hyperparameters are difficult to fully align; limited computing resources; awaiting community contributions</li>
+</ul>
+<ol start="3">
+<li>Please control the <code>micro_batch_size_per_gpu</code> during training; too large may cause OOM.</li>
+</ol>
+<h2 id="custom-search-configuration">Custom Search Configuration</h2>
+<p>To enable multi-turn reasoning, set the following fields in your config:</p>
+<pre><code class="language-yaml">actor_rollout_ref:
+  rollout:
+    name: &quot;sglang_async&quot;
+    multi_turn:
+      enable: True
+</code></pre>
+<p>You must specify <code>retrieval_service_url</code> in <code>examples/sglang_multiturn/config/tool_config/search_tool_config.yaml</code>, and configure concurrency:</p>
+<pre><code class="language-yaml">tools:
+  - class_name: verl.tools.search_tool.SearchTool
+    config:
+      retrieval_service_url: http://127.0.0.1:8000/retrieve
+      num_workers: 120
+      rate_limit: 120
+      timeout: 30
+</code></pre>
+<p>The retriever input/output formats are as follows. If your service parameters match, only modify <code>retrieval_service_url</code>. You can also customize in <code>search_r1_like_utils.py</code>.</p>
+<pre><code class="language-python">Input format:
+{
+  &quot;queries&quot;: [&quot;What is Python?&quot;, &quot;Tell me about neural networks.&quot;],
+  &quot;topk&quot;: 3,
+  &quot;return_scores&quot;: true
+}
+
+Output format (when return_scores=True, similarity scores are returned):
+{
+    &quot;result&quot;: [
+        [   # Results for each query
+            {
+                &quot;document&quot;: doc, &quot;score&quot;: score
+            },
+            # ... more documents
+        ],
+        # ... results for other queries
+    ]
+}
+</code></pre>
+<h2 id="references">References</h2>
+<p>Thanks to <a href="https://github.com/xxx/search-r1">search-R1</a> for its help and inspiration. If you use our work in your research, please also cite the original project:</p>
+<pre><code class="language-bibtex">@article{jin2025search,
+  title={Search-r1: Training llms to reason and leverage search engines with reinforcement learning},
+  author={Jin, Bowen and Zeng, Hansi and Yue, Zhenrui and Yoon, Jinsung and Arik, Sercan and Wang, Dong and Zamani, Hamed and Han, Jiawei},
+  journal={arXiv preprint arXiv:2503.09516},
+  year={2025}
+}
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/tool_examples/verl-multiturn-searchR1-like.md">rlhf/verl/multi-turn/tool_examples/verl-multiturn-searchR1-like.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

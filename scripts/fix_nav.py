@@ -16,8 +16,8 @@ ORDER = [
     ("attention.html", "Attention"), ("architectures.html", "Architectures"), ("gallery.html", "Gallery"),
     ("multimodal.html", "Multimodal"), ("gpu.html", "GPU"), ("kernels.html", "Kernels"),
     ("quantization.html", "Quantization"), ("inference.html", "Inference"), ("parallelism.html", "Parallelism"),
-    ("training.html", "Training"), ("robot-learning.html", "RL &amp; Robotics"), ("hardware.html", "Hardware"),
-    ("agents.html", "Agents"), ("system-design.html", "System Design"), ("coding-patterns.html", "Coding Patterns"),
+    ("training.html", "Training"), ("customization.html", "Customization &amp; Evals"), ("rl-systems.html", "RL Systems"), ("frameworks.html", "Frameworks"), ("robot-learning.html", "RL &amp; Robotics"), ("hardware.html", "Hardware"),
+    ("agents.html", "Agents"), ("system-design.html", "System Design"), ("coding-patterns.html", "Coding Patterns"), ("notes.html", "Notes"),
     ("flashcards.html", "Flashcards"),
 ]
 LINKS_RE = re.compile(r'<div class="links">.*?</div>', re.S)

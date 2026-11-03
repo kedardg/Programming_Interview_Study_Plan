@@ -1,0 +1,674 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>&lt;a name=&quot;ml-sys&quot;&gt;&lt;/a&gt;  4. Machine Learning System Design</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/ml-system-design.md</div>
+<article class="note"><h1 id="4-machine-learning-system-design"><a name="ml-sys"></a>  4. Machine Learning System Design</h1>
+<table>
+<thead>
+<tr>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. <a href="#1-the-9-step-ml-system-design-formula-template">The 9-Step ML System Design Formula</a></td>
+</tr>
+<tr>
+<td>2. <a href="#2-ml-system-design-sample-questions">ML System Design Sample Questions</a></td>
+</tr>
+<tr>
+<td>3. <a href="#3-ml-system-design-topics">ML System Design Topics</a></td>
+</tr>
+<tr>
+<td>4. <a href="#4-ml-at-big-tech-companies">ML at big tech companies</a></td>
+</tr>
+<tr>
+<td>5.  <a href="https://github.com/alirezadir/Agentic-AI-Systems.git">Agentic AI System Design (2025)</a></td>
+</tr>
+<tr>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h3 id="designing-ml-systems-for-production">Designing ML systems for production</h3>
+<p>Deploying deep learning models in production can be challenging, and it is beyond training models with good performance. Several distinct components need to be designed and developed in order to deploy a production level deep learning system.</p>
+<p align="center">
+<img src="../imgs/components.png" title="" width="90%" height="80%">
+</p>
+
+<p>Approaching an ML system design problem follows a similar logical flow to the generic software system design. (
+For more insight on general system design interview you can e.g. check out <a href="https://www.educative.io/courses/grokking-the-system-design-interview">Grokking the System Design Interview
+</a>
+and <a href="https://github.com/donnemartin/system-design-primer">System design primer</a>.). However, there are certain components in the design of an ML based system that needs to be addressed and need special attention, as you will see below in ML System Design Flow.</p>
+<h3 id="ml-system-design-interview">ML System Design Interview</h3>
+<ul>
+<li>In an ML system design interview you are exposed to open ended questions with no single correct answer.</li>
+<li>The goal of ML system design interview is evaluate your your ability to zoom out and design a production-level ML system that can be deployed as a service within a company's ML infrastructure.</li>
+</ul>
+<h1 id="1-the-9-step-ml-system-design-formula-template">1. The 9-Step ML System Design Formula (<a href="../../src/MLSD/mlsd-template.html">Template</a>)</h1>
+<p>In order to design a solid ML system for real world applications, it is important to follow a design flow.
+I recommend using the following <strong>9-Step ML System Design Formula</strong>to design SW system solutions for ML-relevant business problems both at work and during interviews:</p>
+<!-- <p align="center">
+<img src="https://user-images.githubusercontent.com/5262877/219497742-f70eca2a-4338-4362-8a6a-ec83057a3230.png" title="" width="40%" height="40%">
+</p> -->
+
+<center>
+
+| | |
+| --- | ---|
+| Step 1| [Problem Formulation](#1-problem-formulation) |
+| Step 2 |[Metrics (Offline and Online)](#2-metrics-offline-and-online) |
+| Step 3 |[Architectural Components (MVP Logic)](#3-architectural-components-mvp-logic)|
+| Step 4 |[Data Collection and Preparation](#4-data-collection-and-preparation) |
+| Step 5 |[Feature Engineering](#5-feature-engineering) |
+| Step 6 |[Model Development and Offline Evaluation](#6-model-development-and-offline-evaluation) |
+| Step 7 |[Prediction Service](#7-prediction-service) |
+| Step 8 |[Online Testing and Deployment](#8-online-testing-and-model-deployment)  |
+| Step 9 |[Scaling, Monitoring, and Updates](#9-scaling-monitoring-and-updates) |
+| | |
+
+</center>
+
+<p>Note: Remember when using this design flow during an interview to be flexible. According to the needs of the interview or the interests of the interviewer, you may skip some of these components or spend more time for a deep dive in one or two components.  </p>
+<h2 id="1-problem-formulation">1. Problem Formulation</h2>
+<ul>
+<li>Clarifying questions</li>
+<li>Use case(s) and business goal</li>
+<li>Requirements</li>
+<li>Scope (features needed), scale, and personalization</li>
+<li>Performance: prediction latency, scale of prediction</li>
+<li>Constraints</li>
+<li>Data: sources and availability  </li>
+<li>
+<p>Assumptions</p>
+</li>
+<li>
+<p>Translate an abstract problem into an ML problem</p>
+</li>
+<li>ML objective,</li>
+<li>ML I/O,</li>
+<li>ML category (e.g.  binary classification, multi-classification, unsupervised learning, etc)</li>
+<li>Do we need ML to solve this problem?</li>
+<li>Trade off between impact and cost<ul>
+<li>Costs: Data collection, data annotation, compute</li>
+<li>if Yes, we choose an ML system to design. If No, follow a general system design flow.  </li>
+<li>Note: in an ML system design interview we can assume we need ML.</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-metrics-offline-and-online">2. Metrics (Offline and Online)</h2>
+<ul>
+<li>Offline metrics (e.g. classification, relevance metrics)  </li>
+<li>Classification metrics<ul>
+<li>Precision, Recall, F1, ROC AUC, P/R AUC, mAP, log-loss, etc</li>
+<li>Imbalanced data</li>
+</ul>
+</li>
+<li>Retrieval and ranking metrics<ul>
+<li>Precision@k, Recall@k (do not consider ranking quality)</li>
+<li>mAP, MRR, nDCG</li>
+</ul>
+</li>
+<li>Regression metrics: MSE, MAE, </li>
+<li>Problem specific metrics<ul>
+<li>Language: BLEU, BLEURT, GLUE, ROUGE, etc </li>
+<li>ads: CPE, etc  </li>
+</ul>
+</li>
+<li>Latency</li>
+<li>Computational cost (in particular for on-device)</li>
+<li>Online metrics</li>
+<li>CTR</li>
+<li>Task/session success/failure rate,</li>
+<li>Task/session total (e.g. watch) times, </li>
+<li>Engagement rate (like rate, comment rate)</li>
+<li>Conversion rate</li>
+<li>Revenue lift </li>
+<li>Reciprocal rank of first click, etc,</li>
+<li>Counter metrics: direct negative feedback (hide, report)</li>
+<li>Trade-offs b/w metrics</li>
+</ul>
+<h2 id="3-architectural-components-mvp-logic">3. Architectural Components (MVP Logic)</h2>
+<ul>
+<li>High level architecture and main components</li>
+<li>Non-ML components:<ul>
+<li>user, app server, DBs, KGs, etc and their interactions</li>
+</ul>
+</li>
+<li>ML components:<ul>
+<li>Modeling modules (e.g. candidate generator, ranker, ect)</li>
+<li>Train data generator<br>
+... </li>
+</ul>
+</li>
+<li>Modular architecture design<ul>
+<li>Model 1 architecture  (e.g. candidate generation)</li>
+<li>Model 2 architecture (e.g. ranker, filter)</li>
+<li>...</li>
+</ul>
+</li>
+</ul>
+<h2 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h2>
+<ul>
+<li>Data needs</li>
+<li>target variable</li>
+<li>big actors in signals (e.g. users, items, etc)</li>
+<li>type (e.g. image, text, video, etc) and volume</li>
+<li>Data Sources</li>
+<li>availability and cost</li>
+<li>implicit (logging), explicit (e.g. user survey)</li>
+<li>Data storage</li>
+<li>ML Data types</li>
+<li>structured <ul>
+<li>numerical (discrete, continuous)</li>
+<li>categorical (ordinal, nominal),</li>
+</ul>
+</li>
+<li>unstructured(e.g. image, text, video, audio)</li>
+<li>Labelling (for supervised)</li>
+<li>Labeling methods<ul>
+<li>Natural labels (extracted from data e.g. clicks, likes, purchase, etc)</li>
+<li>Missing negative labels (not clicking is not a negative label):<ul>
+<li>Negative sampling</li>
+</ul>
+</li>
+<li>Explicit user feedback</li>
+<li>Human annotation (super costly, slow, privacy issues)</li>
+</ul>
+</li>
+<li>Handling lack of labels</li>
+<li>Programmatic labeling methods (noisy, pros: cost, privacy, adaptive)<ul>
+<li>Semi-supervised methods (from an initial smaller set of labels e.g. perturbation based)</li>
+<li>Weak supervision (encode heuristics e.g. keywords, regex, db, output of other ML models)</li>
+</ul>
+</li>
+<li>Transfer learning:<ul>
+<li>pre-train on cheap large data (e.g. GPT-3),</li>
+<li>zero-shot or fine-tune for downstream task  </li>
+</ul>
+</li>
+<li>Active learning</li>
+<li>Labeling cost and trade-offs</li>
+<li>Data augmentation</li>
+<li>Data Generation Pipeline </li>
+<li>Data collection/ingestion (offline, online)</li>
+<li>Feature generation (next)</li>
+<li>Feature transform</li>
+<li>Label generation</li>
+<li>Joiner</li>
+</ul>
+<h2 id="5-feature-engineering">5. Feature Engineering</h2>
+<ul>
+<li>Choosing features</li>
+<li>Define big actors (e.g. user, item, document, query, ad, context),</li>
+<li>Define actor specific features (current, historic)<ul>
+<li>Example user features: user profile, user history, user interests </li>
+<li>Example text features: n-grams (uni,bi), intent, topic, frequency, length, embeddings   </li>
+</ul>
+</li>
+<li>Define cross features (e.g. user-item, or query-document features)<ul>
+<li>Example query-document features: tf-idf</li>
+<li>Example user-item features: user-video watch history, user search history, user-ad interactions(view, like)</li>
+</ul>
+</li>
+<li>Privacy constraints</li>
+<li>Feature representation</li>
+<li>One hot encoding</li>
+<li>Embeddings<ul>
+<li>e.g. for text, image, graphs, users (how), stores, etc</li>
+<li>how to generate/learn?</li>
+<li>pre-compute and store</li>
+</ul>
+</li>
+<li>Encoding categorical features (one hot, ordinal, count, etc)</li>
+<li>Positional embeddings</li>
+<li>Scaling/Normalization (for numerical features)</li>
+<li>Preprocessing features </li>
+<li>Needed for unstructured data <ul>
+<li>Text: Tokenize (Normalize, pre-tokenize, tokenizer model (ch/word/subword level), post-process (add special tokens))</li>
+<li>Images: Resize, normalize</li>
+<li>Video: Decode frames, sample, resize, scale and normalize</li>
+</ul>
+</li>
+<li>Missing Values</li>
+<li>Feature importance</li>
+<li>Featurizer (raw data -&gt; features)</li>
+<li>Static (from feature store) vs dynamic (computed online) features </li>
+</ul>
+<h2 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h2>
+<ul>
+<li>Model selection (MVP)</li>
+<li>Heuristics -&gt; simple model -&gt; more complex model -&gt; ensemble of models<ul>
+<li>Pros and cons, and decision</li>
+<li>Note: Always start as simple as possible (KISS) and iterate over
+<!-- - More on Model Selection (TODO) --></li>
+</ul>
+</li>
+<li>Typical modeling choices: <ul>
+<li>Logistic Regression </li>
+<li>Decision tree variants</li>
+<li>GBDT (XGBoost) and RF 
+<!-- - SVM --></li>
+<li>Neural networks </li>
+<li>FeedForward </li>
+<li>CNN</li>
+<li>RNN </li>
+<li>Transformers</li>
+</ul>
+</li>
+<li>Decision Factors <ul>
+<li>Complexity of the task </li>
+<li>Data: Type of data (structured, unstructured), amount of data, complexity of data </li>
+<li>Training speed </li>
+<li>Inference requirements: compute, latency, memory </li>
+<li>Continual learning  </li>
+<li>Interpretability </li>
+</ul>
+</li>
+<li>
+<p><a href="../../src/MLSD/mlsd-modeling-popular-archs.html">Popular NN architectures</a></p>
+</li>
+<li>
+<p>Dataset </p>
+</li>
+<li>Sampling<ul>
+<li>Non-probabilistic sampling</li>
+<li>Probabilistic sampling methods</li>
+<li>random, stratified, reservoir, importance sampling</li>
+</ul>
+</li>
+<li>
+<p>Data splits (train, dev, test)</p>
+<ul>
+<li>Portions</li>
+<li>Splitting time-correlated data (split by time)</li>
+<li>seasonality, trend  </li>
+<li>Data leakage:</li>
+<li>scale after split,</li>
+<li>use only train split for stats, scaling, and missing vals</li>
+</ul>
+</li>
+<li>
+<p>Class Imbalance </p>
+<ul>
+<li>Resampling</li>
+<li>weighted loss fcn</li>
+<li>combining classes  </li>
+</ul>
+</li>
+<li>
+<p>Model training </p>
+</li>
+<li>Loss functions <ul>
+<li>MSE, Binary/Categorical CE, MAE, Huber loss, Hinge loss, Contrastive loss, etc</li>
+</ul>
+</li>
+<li>Optimizers<ul>
+<li>SGD, AdaGrad, RMSProp, Adam, etc</li>
+</ul>
+</li>
+<li>Model training <ul>
+<li>Training from scratch or fine-tune  </li>
+</ul>
+</li>
+<li>Model validation  </li>
+<li>Debugging <!-- - More on Debugging (TODO) --></li>
+<li>
+<p>Offline vs online training  </p>
+</li>
+<li>
+<p>Model offline evaluation</p>
+</li>
+<li>
+<p>Hyper parameter tuning </p>
+<ul>
+<li>Grid search </li>
+</ul>
+</li>
+<li>
+<p>Iterate over MVP model</p>
+<ul>
+<li>Model Selection</li>
+<li>Data augmentation</li>
+<li>Model update frequency</li>
+</ul>
+</li>
+<li>Model calibration</li>
+</ul>
+<h2 id="7-prediction-service">7. Prediction Service</h2>
+<ul>
+<li>Data processing and verification</li>
+<li>Web app and serving system</li>
+<li>Prediction service</li>
+<li>Batch vs Online prediction</li>
+<li>Batch: periodic, pre-computed and stored, retrieved as needed - high throughput</li>
+<li>Online: predict as request arrives - low latency</li>
+<li>Hybrid: e.g. Netflix: batch for titles, online for rows</li>
+<li>Nearest Neighbor Service</li>
+<li>Approximate NN <ul>
+<li>Tree based, LSH, Clustering based </li>
+</ul>
+</li>
+<li>ML on the Edge (on-device AI)</li>
+<li>Network connection/latency, privacy, cheap</li>
+<li>Memory, compute power, energy constraints  </li>
+<li>Model Compression<ul>
+<li>Quantization</li>
+<li>Pruning</li>
+<li>Knowledge distillation</li>
+<li>Factorization</li>
+</ul>
+</li>
+</ul>
+<h2 id="8-online-testing-and-model-deployment">8. Online Testing and Model Deployment</h2>
+<ul>
+<li>A/B Experiments</li>
+<li>How to A/B test?<ul>
+<li>what portion of users?</li>
+<li>control and test groups</li>
+<li>null hypothesis</li>
+</ul>
+</li>
+<li>Bandits</li>
+<li>Shadow deployment</li>
+<li>Canary release</li>
+</ul>
+<h2 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h2>
+<ul>
+<li>Scaling for increased demand (same as in distributed systems)</li>
+<li>Scaling general SW system (distributed servers, load balancer, sharding, replication, caching, etc)<ul>
+<li>Train data / KB partitioning</li>
+</ul>
+</li>
+<li>Scaling ML system<ul>
+<li>Distributed ML </li>
+<li>Data parallelism (for training)</li>
+<li>Model parallelism (for training, inference)<ul>
+<li>Asynchronous SGD </li>
+<li>Synchronous SGD </li>
+</ul>
+</li>
+<li><a href="">Distributed training</a></li>
+<li>Data parallel DT, RPC based DT   </li>
+<li>Scaling data collection </li>
+<li><a href="https://arxiv.org/abs/2205.03983">MT for 1000 languages</a></li>
+<li><a href="https://research.facebook.com/publications/no-language-left-behind/">NLLB</a></li>
+<li>Monitoring, failure tolerance, updating (below)</li>
+<li>Auto ML (soft: HP tuning, hard: arch search (NAS))</li>
+</ul>
+</li>
+<li>Monitoring:</li>
+<li>Logging<ul>
+<li>Features, predictions, metrics, events</li>
+</ul>
+</li>
+<li>Monitoring metrics<ul>
+<li>SW system metrics</li>
+<li>ML metrics (accuracy related, predictions, features)</li>
+<li>Online and offline metric dashboards  </li>
+</ul>
+</li>
+<li>Monitoring data distribution shifts<ul>
+<li>Types: Covariate, label and concept shifts</li>
+<li>Detection (stats, hypothesis testing)</li>
+<li>Correction</li>
+</ul>
+</li>
+<li>System failures</li>
+<li>SW system failure<ul>
+<li>dependency, deployment, hardware, downtime</li>
+</ul>
+</li>
+<li>ML system failure<ul>
+<li>data distribution difference (test vs online)</li>
+<li>feedback loops</li>
+<li>edge cases (e.g. invalid/junk input)</li>
+<li>data distribution changes</li>
+</ul>
+</li>
+<li>Alarms<ul>
+<li>failures (data pipeline, training, deployment), low metrics, etc</li>
+</ul>
+</li>
+<li>Updates: Continual training</li>
+<li>Model updates<ul>
+<li>train from scratch or a base model</li>
+<li>how often? daily, weekly, monthly, etc</li>
+</ul>
+</li>
+<li>Auto update models </li>
+<li>Active learning </li>
+<li>Human in the loop ML  </li>
+</ul>
+<h3 id="other-topics">Other topics:</h3>
+<ul>
+<li>Extensions: </li>
+<li>Iterations over the base design to add a new functional feature </li>
+<li>Bias in training data</li>
+<li>Bias introduced by human labeling </li>
+<li>Freshness, Diversity</li>
+<li>Privacy and security </li>
+</ul>
+<h1 id="2-ml-system-design-sample-questions">2. ML System Design Sample Questions</h1>
+<p>Below are the most common ML system design questions for ML engineering interviews: </p>
+<h3 id="generative-ai-llm-systems-2026">Generative AI / LLM Systems (2026)</h3>
+<blockquote>
+<p>Increasingly common as a <strong>separate round</strong> (often called <em>GenAI / LLM system design</em>). The same 9-step formula applies, but with a GenAI lens — see <a href="#genai--llm-system-design-2026">§ GenAI / LLM System Design</a> below and the <a href="https://github.com/alirezadir/Agentic-AI-Systems.git">Agentic AI Systems repo</a>.
+- <strong>RAG document Q&amp;A / "chat with your docs"</strong> (retrieval + grounded generation)
+- <strong>LLM-powered customer-support chatbot</strong> (with guardrails, fallback to human)
+- <strong>Agentic workflow / AI assistant</strong> (planning, tool use, memory)
+- <strong>Enterprise / semantic search with LLM answers</strong> (retrieval + synthesis + citations)
+- <strong>Code assistant / coding agent</strong> (RAG over repo + tool use + verification)
+- <strong>Content generation / summarization at scale</strong> (batch + safety filtering)
+- <strong>LLM-based recommendation / personalization</strong> (LLM as ranker or feature generator)</p>
+</blockquote>
+<h3 id="recommendation-systems">Recommendation Systems</h3>
+<ul>
+<li><strong><a href="../../src/MLSD/mlsd-video-recom.html">Video/Movie recommendation</a></strong>(Netflix, Youtube)</li>
+<li><strong><a href="../../src/MLSD/mlsd-pymk.html">Friends / follower recommendation</a></strong>(Facebook, Twitter, LinkedIn)</li>
+<li><strong><a href="../../src/MLSD/mlsd-event-recom.html">Event recommendation system</a></strong> (Eventbrite)</li>
+<li><strong><a href="../../src/MLSD/mlsd-game-recom.html">Game recommendation</a></strong></li>
+<li><strong>Replacement product recommendation</strong> (Instacart)</li>
+<li><strong>Rental recommendation</strong> (Airbnb)</li>
+<li><strong>Place recommendation</strong> </li>
+</ul>
+<h3 id="search-systems-retrieval-ranking">Search systems (retrieval, ranking)</h3>
+<ul>
+<li><strong>Document search</strong><ul>
+<li><strong><a href="../../src/MLSD/mlsd-search.html">Text query search</a></strong> (full text, semantic), </li>
+<li><strong><a href="../../src/MLSD/mlsd-image-search.html">Image/Video search</a></strong>, </li>
+<li><strong><a href="../../src/MLSD/mlsd-mm-video-search.html">Multimodal search</a></strong> (MM Query)
+<!-- - Semantic Search system  --></li>
+</ul>
+</li>
+</ul>
+<h3 id="ranking-systems">Ranking systems</h3>
+<ul>
+<li><strong><a href="../../src/MLSD/mlsd-newsfeed.html">Newsfeed system</a></strong> (ranking)  </li>
+<li><strong>Ads serving system</strong> (retrieval, ranking)</li>
+<li><strong><a href="../../src/MLSD/mlsd-ads-ranking.html">Ads click prediction</a></strong> (ranking)</li>
+</ul>
+<h3 id="nlp">NLP</h3>
+<ul>
+<li><strong>Named entity linking system (NLP tagging, reasoning)</strong></li>
+<li><strong>Autocompletion / typeahead suggestion system</strong></li>
+<li><strong>Sentiment analysis system</strong></li>
+<li><strong>Language identification system</strong></li>
+<li><strong>Chatbot system</strong></li>
+<li><strong><a href="">Question answering system</a></strong></li>
+</ul>
+<h3 id="cv">CV</h3>
+<ul>
+<li><strong>Image blurring system</strong></li>
+<li><strong>OCR/Text recognition system</strong> </li>
+</ul>
+<h3 id="av">AV</h3>
+<ul>
+<li><strong>Self-driving car</strong></li>
+<li>Perception, Prediction, and Planning</li>
+<li><a href="../../src/MLSD/mlsd-av.html">Pedestrian jaywalking detection</a></li>
+<li><strong>Ride matching system</strong></li>
+</ul>
+<h2 id="other">Other</h2>
+<ul>
+<li><strong>Proximity service / Yelp</strong></li>
+<li><strong>Food delivery time  approximation</strong></li>
+<li><strong>Harmful content / Spam detection system</strong></li>
+<li><a href="../../src/MLSD/mlsd-harmful-content.html">Multimodal harmful content detection</a>  </li>
+<li>Fraud detection system</li>
+<li><strong>Healthcare diagnosis system</strong></li>
+</ul>
+<h1 id="3-ml-system-design-topics">3. ML System Design Topics</h1>
+<p>I observed there are certain sets of topics that are frequently brought up or can be used as part of the logic of the system. Here are some of the important ones:</p>
+<h3 id="recommendation-systems_1">Recommendation Systems</h3>
+<ul>
+<li>Candidate generation </li>
+<li>Collaborative Filtering (CF)<ul>
+<li>User based, item based</li>
+<li>Matrix factorization</li>
+<li>Two-tower approach</li>
+</ul>
+</li>
+<li>Content based filtering</li>
+<li>Ranking </li>
+<li>Learning to rank (LTR)</li>
+<li>point-wise (simplest), pairwise, list-wise </li>
+</ul>
+<h3 id="search-and-ranking-ads-newsfeed-etc">Search and Ranking (Ads, newsfeed, etc)</h3>
+<ul>
+<li>Search systems </li>
+<li>Query search (keyword search, <a href="https://txt.cohere.ai/what-is-semantic-search/?utm_source=linkedin&amp;utm_medium=paidsocial&amp;utm_campaign=contentpromotion_bloglookalikes">semantic search</a>) </li>
+<li>Visual search </li>
+<li>Video search </li>
+<li>Two stage model <ul>
+<li>document selection</li>
+<li>document ranking </li>
+</ul>
+</li>
+<li>Ranking </li>
+<li>Newsfeed ranking system</li>
+<li>
+<p>Ads ranking system 
+  <!-- - Ranking by relevance --></p>
+</li>
+<li>
+<p>Ranking as classification </p>
+</li>
+<li>Multi-stage ranking + blender + filter
+  <!-- - Information Retrieval -->
+</li>
+</ul>
+<h3 id="nlp_1">NLP</h3>
+<ul>
+<li>Feature engineering </li>
+<li>Preprocessing (tokenization)</li>
+<li>Text Embeddings</li>
+<li>Word2Vec, GloVe, Elmo, BERT</li>
+<li>NLP Tasks:</li>
+<li>Text classification<ul>
+<li>Sentiment analysis</li>
+<li>Topic modeling</li>
+</ul>
+</li>
+<li>Sequence tagging  <ul>
+<li>Named entity recognition</li>
+<li>Part of speech tagging</li>
+<li>POS HMM</li>
+<li>Viterbi algorithm, beam search</li>
+</ul>
+</li>
+<li>
+<p>Text generation </p>
+<ul>
+<li>Language modeling</li>
+<li>N-grams vs deep learning models (trade-offs)
+  <!-- - Out of vocabulary problem --></li>
+<li>Decoding</li>
+</ul>
+</li>
+<li>
+<p>Sequence 2 Sequence models</p>
+<ul>
+<li>Machine Translation</li>
+<li>Seq2seq models, NMT, Transformers</li>
+</ul>
+</li>
+<li>Question Answering </li>
+<li>
+<p>[Adv] Dialog and chatbots</p>
+<ul>
+<li><a href="http://tts.speech.cs.cmu.edu/courses/11492/slides/chatbots_shrimai.pdf">CMU lecture on chatbots</a></li>
+<li><a href="http://tts.speech.cs.cmu.edu/courses/11492/slides/sds_components.pdf">CMU lecture on spoken dialogue systems</a></li>
+</ul>
+</li>
+<li>
+<p>Speech Recognition Systems</p>
+<ul>
+<li>Feature extraction, MFCCs</li>
+<li>Acoustic modeling</li>
+<li>HMMs for AM</li>
+<li>CTC algorithm (advanced)</li>
+</ul>
+</li>
+</ul>
+<h3 id="computer-vision">Computer Vision</h3>
+<ul>
+<li>Image classification</li>
+<li>VGG, ResNET</li>
+<li><a href="https://viso.ai/deep-learning/object-detection/">Object detection</a> </li>
+<li>Two stage models (R-CNN, Fast R-CNN, Faster R-CNN)</li>
+<li>One stage models  (YOLO, SSD)</li>
+<li><a href="https://viso.ai/deep-learning/vision-transformer-vit/">Vision Transformer (ViT)</a></li>
+<li>NMS algorithm </li>
+<li>Object Tracking</li>
+</ul>
+<!-- - Popular architectures (AlexNet, VGG, ResNET, R-CNN, YOLO) -->
+
+<h3 id="graph-problems">Graph problems</h3>
+<ul>
+<li>People you may know </li>
+</ul>
+<!-- ### Personalization -->
+
+<h3 id="genai-llm-system-design-2026">GenAI / LLM System Design (2026)</h3>
+<p>The single most important addition to the modern ML system design interview. In 2026, <em>"evaluation methodology is the new system design"</em> — and interviewers care more about <strong>cost, latency, guardrails, and monitoring</strong> than about the architecture diagram. A recurring framing: know <strong>where the LLM fits and where deterministic systems should take over</strong>.</p>
+<ul>
+<li><strong>Knowledge / context strategy</strong> (key tradeoff): <strong>RAG vs fine-tuning vs long-context vs tools/memory</strong></li>
+<li>RAG when knowledge is large / changing / needs citations; fine-tune for behavior, format, or domain style; long-context for whole-doc reasoning; combine in practice (instruction-tuned base + light LoRA + RAG)</li>
+<li><strong>RAG pipeline</strong> (the most common pattern):</li>
+<li>Ingestion: <strong>chunking</strong> (size/overlap, semantic vs fixed), <strong>embedding model</strong>, <strong>vector DB / ANN index</strong> (HNSW, IVF-PQ)</li>
+<li>Retrieval: dense vs <strong>hybrid (dense + BM25/keyword)</strong>, metadata filtering, <strong>re-ranking</strong> (cross-encoder), query rewriting / HyDE</li>
+<li>Generation: grounded prompt, <strong>citations</strong>, context-window budgeting, handling "no answer"</li>
+<li>Advanced: multi-hop / agentic RAG, GraphRAG, <strong>caching</strong> (prompt/embedding/semantic cache)</li>
+<li><strong>Agentic systems</strong>: planning (ReAct, plan-and-execute), <strong>tool/function calling</strong>, <strong>memory</strong> (short-term context, long-term store), multi-agent orchestration, <strong>failure modes</strong> (loops, hallucinated tools, error recovery), human-in-the-loop</li>
+<li><strong>Serving &amp; scaling</strong>: inference API design, <strong>KV cache</strong>, continuous batching (vLLM), <strong>quantization</strong>, speculative decoding; model routing (small vs large), <strong>self-host vs API</strong> tradeoffs</li>
+<li><strong>Reliability (production LLM eng)</strong>: rate limits, <strong>retries / timeouts / idempotency</strong>, fallbacks, queues, <strong>circuit breakers</strong>, graceful degradation</li>
+<li><strong>Guardrails &amp; safety</strong>: input/output filtering, <strong>prompt-injection &amp; jailbreak</strong> defense, PII redaction, grounding/hallucination checks, content moderation, refusal handling</li>
+<li><strong>Evaluation (emphasize this!)</strong>: build a <strong>golden set</strong>, <strong>LLM-as-judge</strong>, pairwise win-rate, <strong>RAG triad</strong> (faithfulness, answer relevance, context relevance), retrieval metrics (recall@k, MRR, nDCG), <strong>offline eval + online A/B + regression testing</strong> before ship</li>
+<li><strong>Cost &amp; latency</strong>: token accounting, prompt/context optimization, caching, batching, streaming (TTFT vs total latency), small-model routing</li>
+<li><strong>Monitoring</strong>: track quality drift, hallucination rate, retrieval hit rate, latency/cost per request, user feedback loops; trace/observability (per-step logging for agents)</li>
+</ul>
+<h1 id="4-ml-at-big-tech-companies">4. ML at big tech companies</h1>
+<p>Once you learn about the basics, I highly recommend checking out different companies blogs on ML systems. You can refer to some of those resources in the <a href="../../src/MLSD/ml-companies.html">ML at Companies</a> section.</p>
+<h1 id="more-resources">More resources</h1>
+<ul>
+<li>For more insight on different components above you can check out the following resources):</li>
+<li><a href="https://fall2019.fullstackdeeplearning.com/">Full Stack Deep Learning course</a></li>
+<li><a href="https://github.com/alirezadir/Production-Level-Deep-Learning">Production Level Deep Learning</a></li>
+<li><a href="https://github.com/chiphuyen/machine-learning-systems-design">Machine Learning Systems Design</a></li>
+<li><a href="https://online.stanford.edu/courses/cs329s-machine-learning-systems-design">Stanford course on ML system design</a></li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/ml-system-design.md">src/MLSD/ml-system-design.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,239 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ads Click Prediction</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-ads-ranking.md</div>
+<article class="note"><h1 id="ads-click-prediction">Ads Click Prediction</h1>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<ul>
+<li>Clarifying questions</li>
+<li>What is the primary business objective of the click prediction system?</li>
+<li>What types of ads are we predicting clicks for (e.g., display ads, video ads, sponsored content)?</li>
+<li>Are there specific user segments or contexts we should consider (e.g., user demographics, browsing history)?</li>
+<li>How will we define and measure the success of click predictions (e.g., click-through rate, conversion rate)?</li>
+<li>Do we have negative feedback features (such as hide ad, block, etc)?</li>
+<li>Do we have fatigue period (where ad is no longer shown to the users where there is no interest, for X days)?</li>
+<li>What type of user-ad interaction data do we have access to can we use it for training our models? </li>
+<li>Do we need continual training? </li>
+<li>
+<p>How do we collect negative samples? (not clicked, negative feedback). </p>
+</li>
+<li>
+<p>Use case(s) and business goal</p>
+</li>
+<li>use case: predict which ads a user is likely to click on when presented with multiple ad options.</li>
+<li>business objective: maximize ad revenue by delivering more relevant ads to users, improving click-through rates, and maximizing the value of ad inventory.</li>
+<li>Requirements;<ul>
+<li>Real-time prediction capabilities to serve ads dynamically.</li>
+<li>Scalability to handle a large number of ad impressions.</li>
+<li>Integration with ad serving platforms and data sources.</li>
+<li>Continuous model training and updating.</li>
+</ul>
+</li>
+<li>Constraints:<ul>
+<li>Privacy and compliance with data protection regulations.</li>
+<li>Latency requirements for real-time ad serving.</li>
+<li>Limited user attention, as users may quickly decide whether to click on an ad.</li>
+</ul>
+</li>
+<li>Data: Sources and Availability:<ul>
+<li>Data sources include user interaction logs, ad content data, user profiles, and contextual information.</li>
+<li>Historical click and impression data for model training and evaluation.</li>
+<li>Availability of labeled data for supervised learning.</li>
+</ul>
+</li>
+<li>
+<p>Assumptions:</p>
+<ul>
+<li>Users' click behavior is influenced by factors that can be learned from historical data.</li>
+<li>Ad content and relevance play a significant role in click predictions.</li>
+<li>The click behavior can be modeled as a classification problem.</li>
+</ul>
+</li>
+<li>
+<p>ML Formulation:</p>
+<ul>
+<li>Ad click prediction is a ranking problem </li>
+</ul>
+</li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<ul>
+<li>Offline metrics </li>
+<li>CE </li>
+<li>NCE (normalized over baseline)</li>
+<li>Online metrics </li>
+<li>CTR (#clicks/#impressions)</li>
+<li>Conversion rate (#conversion/#impression)</li>
+<li>Revenue lift (increase in revenue over time)</li>
+<li>Hide rate (#hidden ads/#impression)</li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<ul>
+<li>High level architecture </li>
+<li>We can use point-wise learning to rank (LTR) <ul>
+<li>The a binary classification task, where the goal is to predict whether a user will click (1) or not click (0) on a given ad impression -&gt; given a pair of <user, ad> as input -&gt; click or no click </li>
+<li>Features can include user demographics, ad characteristics, context (e.g., device, location), and historical behavior.</li>
+<li>Machine learning models, such as logistic regression, decision trees, gradient boosting, or deep neural networks, can be used for prediction.</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<ul>
+<li>Data Sources</li>
+<li>Users, </li>
+<li>Ads, </li>
+<li>User-ad interaction </li>
+<li>ML Data types</li>
+<li>Labelling</li>
+</ul>
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<ul>
+<li>Feature selection </li>
+<li>Ads: <ul>
+<li>IDs </li>
+<li>categories </li>
+<li>Image/videos</li>
+<li>No of impressions / clicks (ad, adv, campaign)</li>
+</ul>
+</li>
+<li>User: <ul>
+<li>ID, username</li>
+<li>Demographics (Age, gender, location)</li>
+<li>Context (device, time of day, etc)</li>
+<li>Interaction history (e.g. user ad click rate, total clicks, etc)</li>
+</ul>
+</li>
+<li>User-Ad interaction: <ul>
+<li>IDs(user, Ad), interaction type, time, location, dwell time </li>
+</ul>
+</li>
+<li>Feature representation / preparation</li>
+<li>sparse features <ul>
+<li>IDs: embedding layer (each ID type its own embedding layer)</li>
+</ul>
+</li>
+<li>Dense features: <ul>
+<li>Engagement feats: No of clicks, impressions, etc </li>
+<li>use directly </li>
+</ul>
+</li>
+<li>Image / Video: <ul>
+<li>preprocess </li>
+<li>use e.g. SimCLR to convert -&gt; feature vector </li>
+</ul>
+</li>
+<li>Category: Textual data <ul>
+<li>normalization, tokenization, encoding </li>
+</ul>
+</li>
+</ul>
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<ul>
+<li>Model selection </li>
+<li>LR </li>
+<li>Feature crossing + LR <ul>
+<li>feature crossing: combine 2/more features into new feats (e.g. sum, product)</li>
+<li>pros: capture nonlin interactions b/w feats </li>
+<li>cons: manual process, and domain knowledge needed </li>
+</ul>
+</li>
+<li>GBDT <ul>
+<li>pros: interpretable</li>
+<li>cons: inefficient for continual training, can't train embedding layers </li>
+</ul>
+</li>
+<li>GBDT + LR <ul>
+<li>GBDT for feature selection and/or extraction, LR for classific</li>
+</ul>
+</li>
+<li>NN<ul>
+<li>Two options: single network, two tower network (user tower, ad tower)</li>
+<li>Cons for ads prediction: </li>
+<li>sparsity of features, huge number of them </li>
+<li>hard to capture pairwise interactions (large no of them)</li>
+<li>Not a good choice here. </li>
+</ul>
+</li>
+<li>Deep and cross network (DCN)<ul>
+<li>finds feature interactions automatically </li>
+<li>two parallel networks: deep network (learns complex features) and cross network (learns interactions)</li>
+<li>two types: stacked, and parallel </li>
+</ul>
+</li>
+<li>Factorization Machine <ul>
+<li>embedding based model, improves LR by automatically learning feature interactions (by learning embeddings for features) </li>
+<li>w0  + \sum (w_i.x_i) + \sum\sum <v_i, v_j> x_i.x_j</li>
+<li>cons: can't learn higher order interactions from features unlike NN</li>
+</ul>
+</li>
+<li>Deep factorization machine (DFM)<ul>
+<li>combines a NN (for complex features) and a FM (for pairwise interactions)</li>
+</ul>
+</li>
+<li>
+<p>start with LR to form a baseline, then experiment with DCN &amp; DeepFM </p>
+</li>
+<li>
+<p>Model Training </p>
+</li>
+<li>Loss function: <ul>
+<li>binary classification: CE </li>
+<li>Dataset </li>
+<li>labels: positive: user clicks the ad &lt; t seconds after ad is shown, negative: no click within t secs  </li>
+</ul>
+</li>
+<li>Model eval and HP tuning </li>
+<li>Iterations </li>
+</ul>
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<ul>
+<li>Data Prep pipeline</li>
+<li>static features (e.g. ad img, category) -&gt; batch feature compute (daily, weekly) -&gt; feature store</li>
+<li>dynamic features: # of ad impressions, clicks. </li>
+<li>Prediction pipeline </li>
+<li>two stage (funnel) architecture <ul>
+<li>candidate generation </li>
+<li>use ad targeting criteria by advertiser (age, gender, location, etc)</li>
+<li>ranking </li>
+<li>features -&gt; model -&gt; click prob. -&gt; sort </li>
+<li>re-ranking: business logic (e.g. diversity)</li>
+</ul>
+</li>
+<li>Continual learning pipeline </li>
+<li>fine tune on new data, eval, and deploy if improves metrics  </li>
+</ul>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<ul>
+<li>A/B Test </li>
+<li>Deployment and release </li>
+</ul>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3>
+<ul>
+<li>Scaling (SW and ML systems)</li>
+<li>Monitoring </li>
+<li>Updates </li>
+</ul>
+<h3 id="10-other-topics">10. Other topics</h3>
+<ul>
+<li>calibration: </li>
+<li>fine-tuning predicted probabilities to align them with actual click probabilities </li>
+<li>data leakage: </li>
+<li>info from the test or eval dataset influences the training process</li>
+<li>target leakage, data contamination (from test to train set)</li>
+<li>catastrophic forgetting </li>
+<li>model trained on new data loses its ability to perform well on previously learned tasks </li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-ads-ranking.md">src/MLSD/mlsd-ads-ranking.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,167 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Harmful content detection on social media</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-harmful-content.md</div>
+<article class="note"><h1 id="harmful-content-detection-on-social-media">Harmful content detection on social media</h1>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<ul>
+<li>Clarifying questions</li>
+<li>What types of harmful content are we aiming to detect? (e.g., hate speech, explicit images, cyberbullying)?</li>
+<li>What are the potential sources of harmful content? (e.g., social media, user-generated content platforms)</li>
+<li>Are there specific legal or ethical considerations for content moderation</li>
+<li>What is the expected volume of content to be analyzed daily?</li>
+<li>What are supported languages? </li>
+<li>Are there human annotators available for labeling? </li>
+<li>Is there a feature for users to report harmful content? (click, text, etc). </li>
+<li>
+<p>Is explainablity important here? </p>
+</li>
+<li>
+<p>Integrity deals with: </p>
+<ul>
+<li>Harmful content (focus here)</li>
+<li>Harmful act/actors  </li>
+</ul>
+</li>
+<li>Goal: monitor posts, detect harmful content, and demote/remove </li>
+<li>Examples harmful content categories: violence, nudity, hate speech </li>
+<li>ML objective: predict if a post is harmful </li>
+<li>Input: Post (MM: text, image, video) </li>
+<li>Output:  P(harmful) or P(violent), P(nude), P(hate), etc</li>
+<li>ML Category: Multimodal (Multi-label) classification </li>
+<li>Data: 500M posts / day (about 10K annotated)</li>
+<li>Latency: can vary for different categories </li>
+<li>Able to explain the reason to the users (category) </li>
+<li>support different languages? Yes </li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<ul>
+<li>Offline </li>
+<li>F1 score, PR-AUC, ROC-AUC </li>
+<li>Online </li>
+<li>prevalence (percentage of harmful posts didn't prevent over all posts), harmful impressions, percentage of valid (reversed) appeals, proactive rate (ratio of system detected over system + user detected) </li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<ul>
+<li>Multimodal input (text, image, video, etc): </li>
+<li>Multimodal fusion techniques <ul>
+<li>Early Fusion: modalities combined first, then make a single prediction </li>
+<li>Late Fusion: process modalities independently, fuse predictions</li>
+<li>cons: separate training data for modalities, comb of individually safe content might be harmful </li>
+</ul>
+</li>
+<li>Multi-Label/Multi-Task classification </li>
+<li>Single binary classifier (P(harmful))<ul>
+<li>easy, not explainable </li>
+</ul>
+</li>
+<li>One binary classifier per harm category (p(violence), p(nude), p(hate))<ul>
+<li>multiple models, trained and maintained separately, expensive </li>
+</ul>
+</li>
+<li>Single multi-label classifier <ul>
+<li>complicated task to learn </li>
+</ul>
+</li>
+<li>Multi-task classifier: learn multi tasks simultanously <ul>
+<li>single shared layers (learns similarities between tasks) -&gt; transformed features </li>
+<li>task specific layers: classification heads </li>
+<li>pros: single model, shared layers prevent redundancy, train data for each task can be used for others as well (limited data)</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<ul>
+<li>Main actors for which data is available: </li>
+<li>Users <ul>
+<li>user_id, age, gender, location, contact</li>
+</ul>
+</li>
+<li>Items(Posts) <ul>
+<li>post_id, author_id, text context, images, videos, links, timestamp</li>
+</ul>
+</li>
+<li>User-post interactions <ul>
+<li>user_id, post_id, interaction_type, value, timestamp</li>
+</ul>
+</li>
+</ul>
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<p>Features: 
+Post Content (text, image, video) + Post Interactions (text + structured) + Author info + Context<br>
+* Posts 
+  * Text:<br>
+    * Preprocessing (normalization + tokenization) 
+    * Encoding (Vectorization): 
+      * Statistical (BoW, TF-IDF)
+      * ML based encoders (BERT)
+    * We chose pre-trained ML based encoders (need semantics of the text)
+    * We chose Multilingual Distilled (smaller, faster) version of BERT (need context), DistilmBERT 
+  * Images/ Videos: <br>
+    * Preprocessing: decoding, resize, scaling, normalization
+    * Feature extraction: pre-trained feature extractors 
+      * Images: 
+        * CLIP's visual encoder 
+        * SImCLR 
+      * Videos: 
+        * VideoMoCo
+* Post interactions: 
+  * No. of likes, comments, shares, reports (scale) 
+  * Comments (text): similar to the post text (aggregate embeddings over comments)
+* Users: 
+  * Only use post author's info
+    * demographics (age, gender, location)
+    * account features (No. of followers /following, account age)
+    * violation history (No of violations, No of user reports, profane words rate)
+* Context: 
+  * Time of day, device</p>
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<ul>
+<li>Model selection </li>
+<li>NN: we use NN as it's commonly used for multi-task learning </li>
+<li>HP tuniing: </li>
+<li>No of hidden layers, neurons in layers, act. fcns, learning rate, etc</li>
+<li>grid search commonly used </li>
+<li>Dataset: </li>
+<li>Natural labeling (user reports) - speed </li>
+<li>Hand labeling (human contractors) - accuracy </li>
+<li>we use natural labeling for train set (speed) and manual for eval set (accuracy)</li>
+<li>loss function: </li>
+<li>L = L1 + L2 + L3 ... for each task </li>
+<li>each task is a binary classific so e.g. CE for each task  </li>
+<li>Challenge for MM training: </li>
+<li>overfitting (when one modality e.g. image dominates training)<ul>
+<li>gradient blending and focal loss </li>
+</ul>
+</li>
+</ul>
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<ul>
+<li>3 main components: </li>
+<li>Harmful content detection service </li>
+<li>Demoting service (prob of harm with low confidence)</li>
+<li>violation service (prob of harm with high confidence)</li>
+</ul>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3>
+<h3 id="10-other-topics">10. Other topics</h3>
+<ul>
+<li>biases by human labeling </li>
+<li>use temporal information (e.g. sequence of actions)</li>
+<li>detect fake accounts </li>
+<li>architecture improvement: linear transformers </li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-harmful-content.md">src/MLSD/mlsd-harmful-content.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

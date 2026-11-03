@@ -1,0 +1,85 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Understand Special Tokens and Chat Template in One Article</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › transformers/special_tokens/special_tokens_en.md</div>
+<article class="note"><h1 id="understand-special-tokens-and-chat-template-in-one-article">Understand Special Tokens and Chat Template in One Article</h1>
+<p>【<a href="../../transformers/special_tokens/special_tokens_en.html">English</a> | <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/transformers/special_tokens/special_tokens.md">Chinese</a>】
+Friends who deal with Large Language Models (LLMs) can't avoid the two concepts of special tokens and chat template no matter what. It's quite amazing that since these are concepts we deal with every day, there should be good reference materials, right? However, in order to write this document, my friend and I searched everywhere, and all we could find were some sporadic documents from HuggingFace. Nevertheless, if special tokens and chat template are not handled properly, the performance of the model will be greatly affected, whether during training or inference. Surprisingly, even though the impact is significant, there are no good blogs explaining this matter. So, we will briefly introduce these two concepts here.</p>
+<p>PS: This article was written by me and <a href="https://shuaills.github.io/">Shuai Shi</a> when we were debugging openrlhf, and we also rechecked the token in token out inference mode in SGLang.</p>
+<h2 id="special-tokens">Special Tokens</h2>
+<p>During the pre-training stage, the model is trained on a large amount of continuous text and doesn't actively involve interactive scenarios. In the post-training stage, most models need to learn specific interaction methods, and special tokens are introduced here to divide the stages of the interaction process. Here are some examples of special tokens in Llama 3:</p>
+<ul>
+<li><strong>Mark the beginning and end of a conversation or text</strong>:<ul>
+<li><code>&lt;|begin_of_text|&gt;</code>: The start of a conversation.</li>
+<li><code>&lt;|end_of_text|&gt;</code>: The end of a conversation, which is similar to <code>&lt;|eot_id|&gt;</code>.</li>
+</ul>
+</li>
+<li><strong>Distinguish roles</strong>:<ul>
+<li><code>&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;</code>: The following content is from the <code>user</code>;</li>
+<li><code>&lt;|start_header_id|&gt;assistant&lt;|end_header_id|&gt;</code>: The following content is the answer from the <code>assistant</code>;</li>
+<li><code>&lt;|start_header_id|&gt;system&lt;|end_header_id|&gt;</code>: Indicates the system prompt;</li>
+</ul>
+</li>
+<li>Function calling:<ul>
+<li>Some models use the form of <code>&lt;tool_call&gt;</code>…<code>&lt;/tool_call&gt;</code>, or initiate a function call with a JSON schema;</li>
+</ul>
+</li>
+</ul>
+<p>These special tokens need to be clearly defined and repeatedly appear during the model fine-tuning stage, so that the model can learn their meanings. Conversely, if these special tokens are not used correctly during inference, the performance of the model will be greatly reduced. Fortunately, the <code>add_special_tokens</code> parameter is set to <code>True</code> by default. However, when decoding, the <code>skip_special_tokens</code> parameter is set to <code>False</code> by default, so you can see the following output:</p>
+<pre><code class="language-python">from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(&quot;meta-llama/Llama-3.1-8B-Instruct&quot;)
+text = &quot;what's the wether today in LA?&quot;
+encoded_with_special = tokenizer.encode(text, add_special_tokens=True)
+decoded_with_special = tokenizer.decode(encoded_with_special, skip_special_tokens=False)
+print(&quot;Decoded with special tokens:&quot;, decoded_with_special)
+
+# Decoded with special tokens: &lt;|begin_of_text|&gt;what's the wether today in LA?
+</code></pre>
+<h2 id="chat-template">Chat Template</h2>
+<p>With the concept of special tokens in mind, think about an actual multi-turn conversation. Each turn of interaction between the model and the user forms a list, and there are other contents as well, such as function calls and retrieved documents. As a part of the tokenizer, the chat template is used to concatenate these contents into a single prompt. Naturally, the chat template also needs to be consistent during training and inference.</p>
+<pre><code class="language-python">from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(&quot;meta-llama/Llama-3.1-8B-Instruct&quot;)
+
+chat = [
+    {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;What's the weather today in LA?&quot;},
+    {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;The weather in LA is sunny with a high of 75°F.&quot;},
+    {&quot;role&quot;: &quot;user&quot;, &quot;content&quot;: &quot;Will it rain tomorrow?&quot;},
+    {&quot;role&quot;: &quot;assistant&quot;, &quot;content&quot;: &quot;No, it's expected to be clear with a low of 58°F.&quot;},
+]
+
+encoded_chat = tokenizer.apply_chat_template(chat, tokenize=False)
+print(&quot;Encoded chat:&quot;, encoded_chat)
+
+--------
+
+Encoded chat: &lt;|begin_of_text|&gt;&lt;|start_header_id|&gt;system&lt;|end_header_id|&gt;
+
+Cutting Knowledge Date: December 2023
+Today Date: 26 Jul 2024
+
+&lt;|eot_id|&gt;&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;
+
+What's the weather today in LA?&lt;|eot_id|&gt;&lt;|start_header_id|&gt;assistant&lt;|end_header_id|&gt;
+
+The weather in LA is sunny with a high of 75°F.&lt;|eot_id|&gt;&lt;|start_header_id|&gt;user&lt;|end_header_id|&gt;
+
+Will it rain tomorrow?&lt;|eot_id|&gt;&lt;|start_header_id|&gt;assistant&lt;|end_header_id|&gt;
+
+No, it's expected to be clear with a low of 58°F.&lt;|eot_id|&gt;
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/transformers/special_tokens/special_tokens_en.md">transformers/special_tokens/special_tokens_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

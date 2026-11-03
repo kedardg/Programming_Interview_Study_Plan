@@ -1,0 +1,42 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mlsd_obj_detection</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd_obj_detection.md</div>
+<article class="note"><h2 id="2d-object-detectors">2D object detectors</h2>
+<h3 id="two-stage-detectors">Two stage detectors</h3>
+<p>Two-stage object detectors are a type of deep learning model used for object detection tasks. These models typically consist of two main stages: region proposal and object classification.</p>
+<ul>
+<li>
+<p>In the first stage, the region proposal network (RPN) generates a set of potential object bounding boxes within an image. These proposals are generated based on a set of anchor boxes, which are pre-defined boxes of various sizes and aspect ratios that are placed at different positions within the image. The RPN uses convolutional neural networks (CNNs) to predict the likelihood of an object being present within each anchor box and refines the coordinates of the proposal box accordingly.</p>
+</li>
+<li>
+<p>In the second stage, the object classification network takes the proposed regions from the RPN and classifies them into different object categories. This stage involves further processing of the region proposals, such as resizing them to a fixed size and extracting features using a CNN. The features are then fed into a classifier, typically a fully connected layer followed by a softmax activation function, to predict the object class and confidence score for each proposed region.</p>
+</li>
+</ul>
+<p>Two-stage object detectors, such as Faster R-CNN and R-FCN, are known for their high accuracy and robustness in object detection tasks. However, they can be computationally intensive due to the need for both region proposal and object classification, and can be slower than single-stage detectors.</p>
+<h3 id="one-stage-detectors">One stage detectors</h3>
+<p>One-stage object detectors are a type of deep learning model used for object detection tasks. These models differ from two-stage detectors in that they perform both region proposal and object classification in a single step.</p>
+<p>The most popular one-stage detector is the YOLO (You Only Look Once) family of models. The YOLO model divides the input image into a grid of cells, and each cell predicts bounding boxes, objectness scores, and class probabilities for objects that appear in that cell. The objectness score represents the likelihood that the cell contains an object, and the class probabilities indicate the predicted class of the object.</p>
+<p>Other one-stage detectors, such as SSD (Single Shot Detector) and RetinaNet, use a similar approach but with different architectures. They typically use a series of convolutional layers to extract features from the input image and generate a set of anchor boxes at various scales and aspect ratios. The network then predicts the likelihood of an object being present within each anchor box, and refines the box coordinates accordingly.</p>
+<p>One-stage detectors are known for their speed and efficiency, as they can perform both region proposal and object classification in a single forward pass. However, they may not be as accurate as two-stage detectors, especially for small or highly occluded objects.</p>
+<h3 id="metrics">Metrics</h3>
+<ul>
+<li>Precision </li>
+<li>calculated based on IOU threshold</li>
+<li>AP: avg. across various IOU thresholds </li>
+<li>mAP: mean of AP over C classes </li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd_obj_detection.md">src/MLSD/mlsd_obj_detection.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

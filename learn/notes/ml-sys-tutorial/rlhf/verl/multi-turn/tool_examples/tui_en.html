@@ -1,0 +1,53 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TUI: A Rollout Viewer for Multi-turn RL</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/tool_examples/tui_en.md</div>
+<article class="note"><h1 id="tui-a-rollout-viewer-for-multi-turn-rl">TUI: A Rollout Viewer for Multi-turn RL</h1>
+<p>Thanks to the contributions from Xiaohongshu, we've developed a visualization tool called TUI. Specifically, we've implemented <code>rollout_viewer.py</code>, an interactive JSONL data Browse tool based on <a href="https://textual.textualize.io/">Textual</a>. It displays Rollout log files in rich text format within the terminal, supporting features like pagination, searching, and field filtering.</p>
+<p><strong>Acknowledgements:</strong> Rui Yang (Xiaohongshu), Chengxi Li (CMU), Huapeng Zhou (UW), Chenyang Zhao (Amazon)</p>
+<h2 id="dependencies">Dependencies</h2>
+<pre><code class="language-python">pip install typer==0.16.0
+pip install ujson==5.10.0
+pip install textual==0.52.1
+pip install aiofiles==24.1.0
+</code></pre>
+<h2 id="configuration">Configuration</h2>
+<p>You need to set the <strong>rollout data</strong> (storage directory) in the configuration, for example:</p>
+<pre><code class="language-bash">trainer.rollout_data_dir=$HOME/data/gsm8k/rollout_data
+</code></pre>
+<p><strong>Note:</strong> Currently, TUI does not support agent loops. This is because enabling <code>actor_rollout_ref.rollout.mode=async</code> to start the Agent Loop prevents the request ID from being obtained. This issue will be resolved in a future version.</p>
+<h2 id="how-to-run">How to Run</h2>
+<pre><code class="language-bash"># python scripts/rollout_viewer.py &lt;JSONL_directory_path&gt;
+python scripts/rollout_viewer.py ./data/rollouts
+</code></pre>
+<p>The program will asynchronously load all files with the <code>.jsonl</code> suffix within the specified directory.</p>
+<h2 id="data-format-requirements">Data Format Requirements</h2>
+<ul>
+<li>By default, each <code>*.jsonl</code> file represents a <strong>step</strong>, and the filename must be convertible to an <code>int</code> (e.g., <code>0.jsonl</code>, <code>1.jsonl</code>...).</li>
+<li>The file content should be standard <strong>JSON Lines</strong>, with each line corresponding to a sample.</li>
+<li>Upon loading, a field <code>__IDX</code> will be automatically added to each sample, representing its line number in the current file.</li>
+</ul>
+<p>You can find a data example <a href="https://github.com/volcengine/verl/blob/152c599303dd4364aa8d581d405a84922dc8c713/docs/sglang_multiturn/sandbox_fusion.rst#e2e-tests">here</a>.</p>
+<h2 id="examples">Examples</h2>
+<ol>
+<li>Select an exact step and sample, works well:</li>
+</ol>
+<p><img alt="TUI example" src="../../../../../../vendor/notes/ml-sys-tutorial/rlhf/verl/multi-turn/tool_examples/pics/tui_1.png"></p>
+<ol start="2">
+<li>Select a right <code>request_id</code> to search, works well:</li>
+</ol>
+<p><img alt="TUI example" src="../../../../../../vendor/notes/ml-sys-tutorial/rlhf/verl/multi-turn/tool_examples/pics/tui_2.png"></p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/tool_examples/tui_en.md">rlhf/verl/multi-turn/tool_examples/tui_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

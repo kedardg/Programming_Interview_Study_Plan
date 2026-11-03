@@ -1,0 +1,912 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>verl Parameter Handbook</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/code-walk-through/readme-5-EN.md</div>
+<article class="note"><h1 id="verl-parameter-handbook">verl Parameter Handbook</h1>
+<p>Due to the use of <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/code-walk-through/readme.md#%E8%84%9A%E6%9C%AC%E9%85%8D%E7%BD%AE">Hydra</a>, verl's parameters are scattered throughout the framework, and the official parameter documentation lacks updates. Therefore, our SGLang RL team, in collaboration with the Amazon AGI SF Lab, has compiled a quick look at verl's parameters. Given the large number of parameters, it is difficult for us to guarantee that every interpretation is absolutely correct, but each has been repeatedly reviewed by us. After careful consideration, we decided to share this parameter quick look with the community, hoping it will be helpful to everyone. The contributors to this guide are:</p>
+<p>Ji Li (Ant), Zhuoran Yin (CMU), Changyi Yang (CMU), Chengxi Li (CMU), Xinpeng Wei (Amazon), Chenyang Zhao (Amazon)</p>
+<h2 id="batch-size">Batch Size</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Detailed Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data.train_batch_size</code></td>
+<td><strong>Function</strong>: Defines the number of samples sent to the Rollout Engine in a single training step. This is also the number of prompts sampled from the training dataset at the beginning of each PPO iteration.<br><br><strong>Detailed Explanation</strong>: This value is the fundamental sample count in RL training. For example, setting it to 1024 means that in one iteration:<br>1. 1024 prompts are randomly drawn from the dataset. <br> 2. These 1024 prompts are sent to the current Rollout Engine to generate 1024 complete trajectories (prompt, response).<br>3. Next, these 1024 trajectories undergo experience calculation ("make experience"), which is subsequently used for updating the Actor and Critic models.<br><br><strong>Impact and Trade-offs</strong>: Affects the total number of samples trained.</td>
+</tr>
+<tr>
+<td><code>data.val_batch_size</code> (Deprecated)</td>
+<td><strong>Function</strong>: The batch size used during the validation phase.<br><br><strong>Detailed Explanation</strong>: Similar to <code>train_batch_size</code>, but only used for evaluating model performance and not for training. If set to <code>null</code>, the size of the validation set is used as the default. Note: This has been deprecated. It is recommended to set it to null. In this case, the entire validation dataset is sent to the SGLang engines at once, which will manage memory themselves.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.ppo_mini_batch_size</code> <br> <code>critic.ppo_mini_batch_size</code></td>
+<td><strong>Function</strong>: Defines the mini-batch size for PPO training updates.<br><br><strong>Detailed Explanation</strong>: All the experience data collected with <code>data.train_batch_size</code> will be split into multiple mini-batches, with the size of each being <code>ppo_mini_batch_size</code>. The model performs a parameter update only after processing one mini-batch.<br>For example, if <code>train_batch_size = 1024</code> and <code>ppo_mini_batch_size = 256</code>, the model will perform <code>1024 / 256 = 4</code> parameter updates in one PPO Epoch.<br><br><strong>Impact and Trade-offs</strong>: Increasing the mini-batch size makes the gradients for a single update more stable, but it reduces the update frequency and the total number of updates.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu</code> <br> <code>critic.ppo_micro_batch_size_per_gpu</code></td>
+<td><strong>Function</strong>: Defines the size of data for a single forward/backward pass on a single GPU.<br><br><strong>Detailed Explanation</strong>: This is the core parameter for implementing gradient accumulation. A mini-batch is further divided into several micro-batches. For example, on a single GPU, if <code>ppo_mini_batch_size = 256</code> and <code>ppo_micro_batch_size_per_gpu = 32</code>, the number of gradient accumulation steps is <code>256 / 32 = 8</code>. This means the model will run 8 forward passes to get the loss, then backward passes to get the gradient, processing 32 samples each time, until the gradients for the entire mini-batch are accumulated. Then, the accumulated total gradient is used to update the model parameters once (<code>optimizer.step()</code>). This value must be strictly adjusted based on GPU memory size and is key to preventing OOM (Out of Memory) errors.<br><br><strong>Impact and Trade-offs</strong>: Increasing this value reduces the number of gradient accumulation steps, which can improve training throughput but increases GPU memory consumption.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.ppo_micro_batch_size</code> <br> <code>critic.ppo_micro_batch_size</code> (Deprecated)</td>
+<td><strong>Function</strong>: Deprecated. Replaced by the <code>per_gpu</code> version as it better accommodates distributed training environments.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="dynamic-batch-size">Dynamic Batch Size</h2>
+<p>When sample lengths vary significantly, batching by the number of samples can lead to highly imbalanced computational loads across different batches. Controlling the batch size based on the total number of tokens is a solution to balance the training time for each batch.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Detailed Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.actor.ppo_max_token_len_per_gpu</code> <br> <code>critic.ppo_max_token_len_per_gpu</code></td>
+<td><strong>Function</strong>: Defines the maximum total number of tokens that a single GPU can process in one PPO micro-batch.<br><br><strong>Detailed Explanation</strong>: This is an alternative to <code>ppo_micro_batch_size_per_gpu</code> and is used in conjunction with <code>use_dynamic_bsz</code>. The system automatically packs samples until the total token count (<code>prompt_len + response_len</code>) approaches this threshold, forming a dynamic micro-batch size. This helps stabilize computational efficiency; the computational load for each micro-batch remains relatively constant, regardless of sample length.<br>For example, if <code>actor_rollout_ref.actor.ppo_max_token_len_per_gpu = 16384</code>, the system might pack 16 samples of length 1024 (16 * 1024 = 16384) or 64 samples of length 256 (64 * 256 = 16384).<br><br><strong>Impact and Trade-offs</strong>: Generally more efficient than fixed-sample-count micro-batches, leading to better utilization of computational resources and reducing GPU instability. Typically set to <code>n * ({data.max_prompt_length} + {data.max_response_length})</code>.</td>
+</tr>
+<tr>
+<td><code>reward_model.forward_max_token_len_per_gpu</code> <br> <code>critic.forward_max_token_len_per_gpu</code> <br> <code>actor_rollout_ref.ref.log_prob_max_token_len_per_gpu</code></td>
+<td><strong>Function</strong>: The maximum number of tokens in a micro-batch for models that only perform forward computations.<br><br><strong>Detailed Explanation</strong>: Some models (Reward Model, Critic for value calculation, Reference Model for log probs) only perform forward passes during the "make experience" phase. At this point, the rollout engine has been offloaded, and the training engine has not yet started, resulting in very low GPU memory usage. Therefore, a larger batch size can be set for them to accelerate computation. These parameters are also part of <code>use_dynamic_bsz</code> and are used to optimize the execution efficiency of these specific tasks.</td>
+</tr>
+<tr>
+<td><code>critic.forward_micro_batch_size_per_gpu</code> <br> <code>reward_model.micro_batch_size_per_gpu</code> <br> <code>actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu</code></td>
+<td><strong>Function</strong>: Similarly, sets the micro-batch size for models that only perform forward computations.<br><br><strong>Detailed Explanation</strong>: Same as the parameter in the row above.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.use_dynamic_bsz</code> <br> <code>critic.use_dynamic_bsz</code> <br> <code>reward_model.use_dynamic_bsz</code></td>
+<td><strong>Function</strong>: Whether to enable Dynamic Batch Size.<br><br><strong>Detailed Explanation</strong>: When this is <code>True</code>, the system ignores the sample-based <code>micro_batch_size_per_gpu</code> parameter and instead uses the token-based <code>max_token_len_per_gpu</code> parameter to construct batches.</td>
+</tr>
+<tr>
+<td><code>trainer.balance_batch</code></td>
+<td><strong>Function</strong>: Whether to balance the batch size across different data parallel (dp) ranks in distributed training.<br><br><strong>Detailed Explanation</strong>: Reorders data on a single controller to ensure that each dp rank receives a similar number of tokens.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="rollout-sampling-parameters">Rollout Sampling Parameters</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Function and Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.rollout.temperature</code></td>
+<td>A higher temperature value smooths the probability distribution, leading to more diverse and random generated results. A lower value sharpens the distribution, making the output more deterministic and conservative, favoring high-probability tokens. <code>temperature=0</code> is usually equivalent to Greedy Decoding.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.top_k</code></td>
+<td>At each generation step, only the K most probable tokens are considered for sampling. For example, <code>top_k=50</code> means selecting only from the top 50 most likely tokens.<br>- To disable: Set to <code>0</code> or <code>None</code> in Hugging Face, or <code>-1</code> in SGLang (which samples from the entire vocabulary).</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.top_p</code></td>
+<td>Cumulatively sums the probabilities of the most likely tokens until the total probability reaches P, then samples from this nucleus set of tokens. It is a dynamic method for selecting the sampling range. <code>top_p=1.0</code> means no restriction.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.use_fire_sampling</code></td>
+<td>Whether to use Fire Sampling, from a <a href="https://arxiv.org/abs/2410.21236">paper</a> by ByteDance.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.n</code></td>
+<td>The number of responses generated for each prompt, also known as the group size in GRPO.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.ignore_eos</code></td>
+<td>Whether to ignore the EOS (End-of-Sentence) token. If <code>True</code>, generation continues until <code>max_response_length</code> is reached, even if the model produces an EOS token.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="performance-and-resource-management">Performance and Resource Management</h2>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Function and Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.rollout.prompt_length</code></td>
+<td>The maximum prompt length. Prompts longer than this are truncated.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.response_length</code></td>
+<td>The maximum response length. The SGLang engine will return immediately upon reaching this length.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.dtype</code></td>
+<td>Model data type, e.g., <code>bfloat16</code>, <code>float16</code>. This needs to be aligned with the model type used in the training phase; otherwise, quantization will be required when updating model parameters.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.gpu_memory_utilization</code></td>
+<td>In SGLang, this is the proportion of GPU memory occupied by model parameters and the KV Cache. If using SGLang version 0.4.8.post1 or higher, this can be set to around 0.85. For older versions, it should be set to around 0.5.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.free_cache_engine</code></td>
+<td>Whether to free the engine cache after a rollout. Enabling this option in SGLang triggers the <code>flush_cache()</code> operation, which clears the KV cache pool and marks all slots as available. This releases the logical occupation of the KV Cache without freeing the physical GPU memory. For why flushing the KV cache is needed, see <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/code-walk-through/readme.md#sglangrolloutasyncengine">here</a>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.load_format</code></td>
+<td>Model weight loading mode. E.g., <code>dummy_dtensor</code> (randomly initialized weights for quick debugging), <code>hf</code>, <code>safetensors</code> (recommended for safety and efficiency).</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.tensor_model_parallel_size</code> (TP_SIZE)</td>
+<td>Tensor model parallel size, indicating how many GPUs are used to run a single SGLang engine. For example, <code>TP_SIZE=4</code> means splitting a large model's weights into 4 parts, with 4 GPUs collaborating on inference.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.max_model_len</code></td>
+<td>The maximum total length (prompt + response) the model can handle. If not set, it is usually determined by the model's configuration.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.max_num_seqs</code></td>
+<td>The maximum number of requests the engine can process concurrently, or the maximum number of prompts being inferred simultaneously.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.enable_chunked_prefill</code></td>
+<td>Whether to enable Chunked Prefill. For very long prompts, this can split them into chunks for processing, which reduces peak memory usage at the cost of lower throughput.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.disable_log_stats</code></td>
+<td>Whether to disable the inference engine's statistical logs to reduce console output.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h3 id="sglang-configuration">SGLang Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Function and Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.rollout.engine_kwargs.sglang.attention_backend</code></td>
+<td><strong>The attention backend used by SGLang</strong>. Options like <code>flashinfer</code>, <code>triton</code>, <code>flashmla</code>, <code>null</code> are available to suit different graphics cards.</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h3 id="multi-turn-tool-calling">multi-turn tool calling</h3>
+<p>These parameters are primarily for scenarios requiring multi-turn interactions, such as tool calling or continuous dialogue, supported by the SGLang Engine.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Function and Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.rollout.multi_turn.enable</code></td>
+<td>Whether to enable multi-turn dialogue mode.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.multi_turn.max_turns</code></td>
+<td>The maximum number of tool calling rounds. If null, it defaults to <code>max_model_len // 3</code> to prevent infinite dialogues.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.multi_turn.tool_config_path</code></td>
+<td>The path to the tool configuration file, which defines the external tools the model can call.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.multi_turn.completion_callback</code></td>
+<td>A custom callback function that can execute custom logic after each generation round.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.multi_turn.use_inference_chat_template</code></td>
+<td>Whether to use the model's chat template from the inference phase. <code>True</code> means following the inference-stage template format. <code>False</code> means using the template from pre-training, which may contain a complete token sequence with an additional thought process. For any model, it is crucial to ensure consistent templates are used during post-training and subsequent inference testing stages.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.rollout.multi_turn.enable_tokenization_sanity_check</code></td>
+<td>Whether to perform a tokenization sanity check, verifying that the result of tokenizing turn-by-turn is consistent with tokenizing the entire chat history at once.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="validation-stage-configuration">Validation Stage Configuration</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Function and Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.rollout.val_kwargs.*</code></td>
+<td>Sampling parameters for the validation phase. This allows us to use different sampling parameters during post-training and validation. For example, during validation, it is common to set <code>temperature=0</code> and <code>do_sample=False</code> for greedy decoding to obtain more stable evaluation results.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="dataset">Dataset</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Function and Explanation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>data.tokenizer</code></td>
+<td>The class or path of the tokenizer. If null, it will be automatically inferred from the model.</td>
+</tr>
+<tr>
+<td><code>data.use_shm</code></td>
+<td>Whether to use shared memory (SHM) to load data.</td>
+</tr>
+<tr>
+<td><code>data.train_files</code></td>
+<td>Training set Parquet files. Can be a list or a single file; paths can be local or HDFS paths.</td>
+</tr>
+<tr>
+<td><code>data.val_files</code></td>
+<td>Validation set Parquet files. Can be a list or a single file.</td>
+</tr>
+<tr>
+<td><code>data.prompt_key</code></td>
+<td>The field for the prompt in the dataset. Defaults to <code>prompt</code>.</td>
+</tr>
+<tr>
+<td><code>data.reward_fn_key</code></td>
+<td>The field used to select the reward function (if different reward functions are used for each sample).</td>
+</tr>
+<tr>
+<td><code>data.max_prompt_length</code></td>
+<td>Maximum prompt length. All prompts will be left-padded to this length.</td>
+</tr>
+<tr>
+<td><code>data.return_raw_input_ids</code></td>
+<td>Whether to return the raw <code>input_ids</code> without the chat template applied; used when the reward model's chat template differs from the policy model's.</td>
+</tr>
+<tr>
+<td><code>data.return_raw_chat</code></td>
+<td>Whether to return the raw response without the chat template applied.</td>
+</tr>
+<tr>
+<td><code>data.return_full_prompt</code></td>
+<td>Whether to return the full prompt with the chat template applied.</td>
+</tr>
+<tr>
+<td><code>data.shuffle</code></td>
+<td>Whether to shuffle the data in the DataLoader.</td>
+</tr>
+<tr>
+<td><code>data.validation_shuffle</code></td>
+<td>Whether to shuffle the validation set.</td>
+</tr>
+<tr>
+<td><code>data.filter_overlong_prompts</code></td>
+<td>Whether to filter out overly long prompts.</td>
+</tr>
+<tr>
+<td><code>data.filter_overlong_prompts_workers</code></td>
+<td>The number of worker processes for filtering overly long prompts. Use multiple processes for large datasets to speed up. Defaults to 1.</td>
+</tr>
+<tr>
+<td><code>data.truncation</code></td>
+<td>Truncate if <code>input_ids</code> or <code>prompt</code> exceeds the maximum length.</td>
+</tr>
+<tr>
+<td><code>data.image_key</code></td>
+<td>The field representing images in a multi-modal dataset. Defaults to <code>images</code>.</td>
+</tr>
+<tr>
+<td><code>data.video_key</code></td>
+<td>The field representing videos in a multi-modal dataset.</td>
+</tr>
+<tr>
+<td><code>data.trust_remote_code</code></td>
+<td>Whether to trust the local Hugging Face cache; note, this 'remote' is relative to Hugging Face, so this parameter considers "whether to trust local."</td>
+</tr>
+<tr>
+<td><code>data.custom_cls.path</code></td>
+<td>The file path containing the custom dataset class. If not specified, a pre-implemented default dataset will be used.</td>
+</tr>
+<tr>
+<td><code>data.custom_cls.name</code></td>
+<td>The name of the dataset class in the specified file.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="actor-rollout-reference-worker-configuration">Actor, Rollout &amp; Reference Worker Configuration</h3>
+<p>The parameters for Critic and Actor are very consistent and will not be repeated.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>actor_rollout_ref.hybrid_engine</code></td>
+<td>Currently only supports hybrid engine, which places the actor and rollout models on the same resource group.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.path</code></td>
+<td>Hugging Face model path. Can be a local path or an HDFS path.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.use_shm</code></td>
+<td>Whether to use shared memory (SHM) to accelerate model weight loading.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.external_lib</code></td>
+<td>Additional Python packages for registering Hugging Face models/tokenizers.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.override_config</code></td>
+<td>Used to override the model's original configuration, mainly for dropout.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.enable_gradient_checkpointing</code></td>
+<td>Whether to recompute gradients during actor training, trading time for space.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.enable_activation_offload</code></td>
+<td>Whether to offload activations to the CPU during actor training.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.use_remove_padding</code></td>
+<td>Whether to remove padding tokens from the input during training.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.use_liger</code></td>
+<td>Whether to use the Liger kernel for linear layer fusion.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.use_fused_kernels</code></td>
+<td>Whether to use custom fused kernels (e.g., FlashAttention, fused MLP).</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.fused_kernel_options.impl_backend</code></td>
+<td>The implementation backend for fused kernels, either <code>triton</code> or <code>torch</code>. Must be used with <code>use_fused_kernels</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.model.trust_remote_code</code></td>
+<td>Whether to trust the local Hugging Face cache; note, this 'remote' is relative to Hugging Face, so this parameter considers "whether to trust local."</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.strategy</code></td>
+<td>Training backend: <code>fsdp</code>, <code>fsdp2</code>, or <code>megatron</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.grad_clip</code></td>
+<td>Gradient clipping for Actor updates.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.clip_ratio</code></td>
+<td>PPO clipping ratio.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.clip_ratio_low</code></td>
+<td>The lower bound for asymmetric clipping (for dual-clip PPO).</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.clip_ratio_high</code></td>
+<td>The upper bound for asymmetric clipping (for dual-clip PPO).</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.clip_ratio_c</code></td>
+<td>The constant C in dual-clip PPO; clipping occurs when advantage \&lt; -C.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.loss_agg_mode</code></td>
+<td>Loss aggregation mode: <code>token-mean</code>, <code>seq-mean-token-sum</code>, or <code>seq-mean-token-mean</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.entropy_coeff</code></td>
+<td>The entropy regularization coefficient in the PPO loss.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.use_kl_loss</code></td>
+<td>Whether to use KL loss instead of a KL reward penalty. True for GRPO.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.use_torch_compile</code></td>
+<td>Whether to use <code>torch.compile()</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.kl_loss_coef</code></td>
+<td>The KL loss coefficient when <code>use_kl_loss</code> is enabled, used for GRPO.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.kl_loss_type</code></td>
+<td>The type of KL divergence loss. Options: <code>kl</code>, <code>abs</code>, <code>mse</code>, <code>low_var_kl</code>, <code>full</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.ppo_epochs</code></td>
+<td>The number of PPO epochs.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.shuffle</code></td>
+<td>Shuffle the training data.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.ulysses_sequence_parallel_size</code></td>
+<td>The sequence parallel size for Ulysses-style parallelism.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.entropy_from_logits_with_chunking</code></td>
+<td>Compute entropy via chunking to reduce peak memory usage.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.entropy_checkpointing</code></td>
+<td>Whether to save entropy via checkpointing.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.checkpoint.save_contents</code></td>
+<td>The contents to be included in the saved checkpoint.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.checkpoint.load_contents</code></td>
+<td>The specific contents to load from a checkpoint.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.lr</code></td>
+<td>Learning rate.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.lr_warmup_steps</code></td>
+<td>Number of warmup steps; a negative value means it's determined by <code>lr_warmup_steps_ratio</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.lr_warmup_steps_ratio</code></td>
+<td>The ratio of warmup steps (used when <code>lr_warmup_steps</code> is negative).</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.min_lr_ratio</code></td>
+<td>The minimum learning rate ratio for the cosine scheduler.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.num_cycles</code></td>
+<td>The number of cosine cycles in the learning rate schedule.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.warmup_style</code></td>
+<td>Learning rate warmup style: <code>constant</code> or <code>cosine</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.total_training_steps</code></td>
+<td>Total number of training steps.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.optim.weight_decay</code></td>
+<td>Weight decay coefficient, controlling the strength of L2 regularization applied to weights during training.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.fsdp_config.wrap_policy.min_num_params</code></td>
+<td>The minimum number of parameters to trigger FSDP wrapping for a layer.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.fsdp_config.param_offload</code></td>
+<td>Whether to offload model parameters to the CPU (trading speed for memory).</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.fsdp_config.optimizer_offload</code></td>
+<td>Whether to offload optimizer states to the CPU.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.fsdp_config.offload_policy</code></td>
+<td>For FSDP2 only: Offload parameters/gradients/optimizer during training.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.fsdp_config.reshard_after_forward</code></td>
+<td>For FSDP2 only: Reshard after the forward pass to reduce memory usage.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.fsdp_config.fsdp_size</code></td>
+<td>The number of GPUs in each FSDP sharding group; -1 means automatic.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.fsdp_config.forward_prefetch</code></td>
+<td>For FSDP1 only: Prefetch the all-gather for the next forward pass before the current one completes.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.profiler.discrete</code></td>
+<td><code>True</code> means each task has its own database; <code>False</code> means all tasks share one.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.profiler.all_ranks</code></td>
+<td>Whether to profile all ranks.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.actor.profiler.ranks</code></td>
+<td>The ranks to be profiled. <code>null</code> or <code>[0,1,...]</code>.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.strategy</code></td>
+<td>FSDP configuration for the Reference model, same as the actor.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.fsdp_config.param_offload</code></td>
+<td>Whether to offload parameters in FSDP.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.fsdp_config.reshard_after_forward</code></td>
+<td>For FSDP2 only: Whether to reshard after the model's forward pass to save memory.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.fsdp_config.forward_prefetch</code></td>
+<td>For FSDP1 only: Prefetch the all-gather for the next forward pass before the current one completes.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.fsdp_config.wrap_policy.min_num_params</code></td>
+<td>The minimum number of parameters in an FSDP-wrapped module.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.profiler.discrete</code></td>
+<td><code>True</code> means each task has its own database; <code>False</code> means all tasks share one.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.profiler.all_ranks</code></td>
+<td>Whether to profile all ranks.</td>
+</tr>
+<tr>
+<td><code>actor_rollout_ref.ref.profiler.ranks</code></td>
+<td>The ranks to be profiled. <code>null</code> or <code>[0,1,...]</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="reward-model">Reward Model</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>reward_model.enable</code></td>
+<td>Whether to enable the reward model. If <code>False</code>, rewards are calculated only using user-defined reward functions.</td>
+</tr>
+<tr>
+<td><code>reward_model.strategy</code></td>
+<td>FSDP strategy: <code>fsdp</code>, <code>fsdp2</code>, or <code>megatron</code>.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.input_tokenizer</code></td>
+<td>Input tokenizer. Required if the reward model's chat template is inconsistent with the policy's.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.path</code></td>
+<td>The HDFS or local path to the RM. Only <code>AutoModelForSequenceClassification</code> is supported.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.use_shm</code></td>
+<td>Whether to use shared memory to load the model.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.external_lib</code></td>
+<td>External model implementation (optional).</td>
+</tr>
+<tr>
+<td><code>reward_model.model.use_remove_padding</code></td>
+<td>Use remove padding optimization (saves computation).</td>
+</tr>
+<tr>
+<td><code>reward_model.model.use_fused_kernels</code></td>
+<td>Whether to use fused reward kernels for acceleration.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.trust_remote_code</code></td>
+<td>Whether to allow loading models with remote code, defaults to <code>False</code>.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.fsdp_config.wrap_policy.min_num_params</code></td>
+<td>The minimum number of parameters to trigger FSDP wrapping.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.fsdp_config.param_offload</code></td>
+<td>Whether to offload model parameters to the CPU.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.fsdp_config.reshard_after_forward</code></td>
+<td>For FSDP2 only: Reshard after the forward pass to reduce memory usage.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.fsdp_config.fsdp_size</code></td>
+<td>The number of GPUs in each FSDP sharding group; -1 means automatic.</td>
+</tr>
+<tr>
+<td><code>reward_model.model.fsdp_config.forward_prefetch</code></td>
+<td>For FSDP1 only: Prefetch the all-gather for the next forward pass before the current one completes.</td>
+</tr>
+<tr>
+<td><code>reward_model.reward_manager</code></td>
+<td>Defines the mechanism for calculating rule-based rewards and handling different reward sources.</td>
+</tr>
+<tr>
+<td><code>reward_model.launch_reward_fn_async</code></td>
+<td>Whether to launch custom reward functions asynchronously during the log_prob phase.</td>
+</tr>
+<tr>
+<td><code>reward_model.sandbox_fusion.url</code></td>
+<td>The URL for remote reward functions.</td>
+</tr>
+<tr>
+<td><code>reward_model.sandbox_fusion.max_concurrent</code></td>
+<td>The maximum number of concurrent requests allowed to the sandbox.</td>
+</tr>
+<tr>
+<td><code>reward_model.profiler.discrete</code></td>
+<td><code>True</code> means each task has its own database; <code>False</code> means all tasks share one.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="custom-reward-function">Custom Reward Function</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>custom_reward_function.path</code></td>
+<td>The file path containing the custom reward function.</td>
+</tr>
+<tr>
+<td><code>custom_reward_function.name</code></td>
+<td>The name of the reward function in the specified file. Defaults to <code>compute_score</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="algorithm">Algorithm</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>algorithm.gamma</code></td>
+<td>Discount factor for future rewards.</td>
+</tr>
+<tr>
+<td><code>algorithm.lam</code></td>
+<td>The trade-off between bias and variance in the GAE estimator.</td>
+</tr>
+<tr>
+<td><code>algorithm.adv_estimator</code></td>
+<td>The type of advantage estimator: <code>gae</code>, <code>grpo</code>, <code>reinforce_plus_plus</code>, etc.</td>
+</tr>
+<tr>
+<td><code>algorithm.norm_adv_by_std_in_grpo</code></td>
+<td>Whether to normalize advantage by its standard deviation in GRPO.</td>
+</tr>
+<tr>
+<td><code>algorithm.use_kl_in_reward</code></td>
+<td>Whether to enable KL penalty in the reward.</td>
+</tr>
+<tr>
+<td><code>algorithm.kl_penalty</code></td>
+<td>How to estimate KL divergence: <code>kl</code>, <code>abs</code>, <code>mse</code>, <code>low_var_kl</code>, or <code>full</code>.</td>
+</tr>
+<tr>
+<td><code>algorithm.kl_ctrl.type</code></td>
+<td>KL control type: <code>fixed</code> or <code>adaptive</code>.</td>
+</tr>
+<tr>
+<td><code>algorithm.kl_ctrl.kl_coef</code></td>
+<td>The initial coefficient for the KL penalty.</td>
+</tr>
+<tr>
+<td><code>algorithm.kl_ctrl.horizon</code></td>
+<td>The horizon value for the adaptive controller (if enabled).</td>
+</tr>
+<tr>
+<td><code>algorithm.kl_ctrl.target_kl</code></td>
+<td>The target KL divergence (for the adaptive controller).</td>
+</tr>
+<tr>
+<td><code>algorithm.use_pf_ppo</code></td>
+<td>Whether to enable Preference-Feedback PPO.</td>
+</tr>
+<tr>
+<td><code>algorithm.pf_ppo.reweight_method</code></td>
+<td>Sample re-weighting method: <code>pow</code>, <code>max_min</code>, or <code>max_random</code>.</td>
+</tr>
+<tr>
+<td><code>algorithm.pf_ppo.weight_pow</code></td>
+<td>The power used for weight scaling in the <code>pow</code> method.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="trainer">Trainer</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trainer.balance_batch</code></td>
+<td>Whether to balance batch sizes across distributed worker nodes.</td>
+</tr>
+<tr>
+<td><code>trainer.total_epochs</code></td>
+<td>The total number of training epochs.</td>
+</tr>
+<tr>
+<td><code>trainer.total_training_steps</code></td>
+<td>Total training steps (can be set explicitly or derived from epochs).</td>
+</tr>
+<tr>
+<td><code>trainer.profile_steps</code></td>
+<td>The steps to be profiled. <code>null</code> means no profiling.</td>
+</tr>
+<tr>
+<td><code>trainer.controller_nsight_options.trace</code></td>
+<td>For the controller process, selects the APIs to trace (e.g., cuda, nvtx, cublas, etc.).</td>
+</tr>
+<tr>
+<td><code>trainer.controller_nsight_options.cuda-memory-usage</code></td>
+<td>For the controller process, whether to profile CUDA memory usage. Must be the string <code>"true"</code> or <code>"false"</code>.</td>
+</tr>
+<tr>
+<td><code>trainer.controller_nsight_options.cuda-graph-trace</code></td>
+<td>For the controller process, whether CUDA graphs will be traced as a whole.</td>
+</tr>
+<tr>
+<td><code>trainer.worker_nsight_options.trace</code></td>
+<td>For worker processes, selects the APIs to trace.</td>
+</tr>
+<tr>
+<td><code>trainer.worker_nsight_options.cuda-memory-usage</code></td>
+<td>For worker processes, whether to profile CUDA memory usage. Must be the string <code>"true"</code> or <code>"false"</code>.</td>
+</tr>
+<tr>
+<td><code>trainer.worker_nsight_options.cuda-graph-trace</code></td>
+<td>For worker processes, whether CUDA graphs will be traced as a whole.</td>
+</tr>
+<tr>
+<td><code>trainer.worker_nsight_options.capture-range</code></td>
+<td>Profile only within the <code>torch.cuda.profiler.start</code> and <code>stop</code> range. Default is <code>cudaProfilerApi</code>, do not change this setting.</td>
+</tr>
+<tr>
+<td><code>trainer.worker_nsight_options.capture-range-end</code></td>
+<td>Specifies the desired behavior when the capture range ends.</td>
+</tr>
+<tr>
+<td><code>trainer.worker_nsight_options.kill</code></td>
+<td>Sends a signal to the target application's process group. We let the program exit on its own.</td>
+</tr>
+<tr>
+<td><code>trainer.project_name</code></td>
+<td>The project name for experiment tracking (e.g., wandb).</td>
+</tr>
+<tr>
+<td><code>trainer.experiment_name</code></td>
+<td>The experiment name to identify the run in tracking tools.</td>
+</tr>
+<tr>
+<td><code>trainer.logger</code></td>
+<td>The logging backend to use: <code>console</code>, <code>wandb</code>, etc.</td>
+</tr>
+<tr>
+<td><code>trainer.log_val_generations</code></td>
+<td>The number of generations to log during validation.</td>
+</tr>
+<tr>
+<td><code>trainer.rollout_data_dir</code></td>
+<td>The directory to log rollout data; if <code>null</code>, data is not dumped.</td>
+</tr>
+<tr>
+<td><code>trainer.validation_data_dir</code></td>
+<td>The directory to log validation data; if <code>null</code>, data is not dumped.</td>
+</tr>
+<tr>
+<td><code>trainer.nnodes</code></td>
+<td>The number of nodes used in training.</td>
+</tr>
+<tr>
+<td><code>trainer.n_gpus_per_node</code></td>
+<td>The number of GPUs per node.</td>
+</tr>
+<tr>
+<td><code>trainer.save_freq</code></td>
+<td>The frequency of saving model checkpoints (in number of iterations).</td>
+</tr>
+<tr>
+<td><code>trainer.resume_mode</code></td>
+<td>Resume mode: <code>auto</code>, <code>disable</code>, or <code>resume_path</code>.</td>
+</tr>
+<tr>
+<td><code>trainer.resume_from_path</code></td>
+<td>Resume training from this path (used only if <code>resume_mode</code> is <code>resume_path</code>).</td>
+</tr>
+<tr>
+<td><code>trainer.val_before_train</code></td>
+<td>Whether to run validation before training starts.</td>
+</tr>
+<tr>
+<td><code>trainer.val_only</code></td>
+<td>Whether to run only validation.</td>
+</tr>
+<tr>
+<td><code>trainer.test_freq</code></td>
+<td>The validation frequency (in number of training iterations).</td>
+</tr>
+<tr>
+<td><code>trainer.critic_warmup</code></td>
+<td>The number of iterations to pre-warm the critic before updating the policy.</td>
+</tr>
+<tr>
+<td><code>trainer.default_hdfs_dir</code></td>
+<td>The default distributed file system path for saving checkpoints.</td>
+</tr>
+<tr>
+<td><code>trainer.del_local_ckpt_after_load</code></td>
+<td>Whether to delete local checkpoints after loading.</td>
+</tr>
+<tr>
+<td><code>trainer.default_local_dir</code></td>
+<td>The default local directory for saving checkpoints.</td>
+</tr>
+<tr>
+<td><code>trainer.max_actor_ckpt_to_keep</code></td>
+<td>The maximum number of actor checkpoints to keep.</td>
+</tr>
+<tr>
+<td><code>trainer.max_critic_ckpt_to_keep</code></td>
+<td>The maximum number of critic checkpoints to keep.</td>
+</tr>
+<tr>
+<td><code>trainer.ray_wait_register_center_timeout</code></td>
+<td>The timeout (in seconds) for Ray workers to wait for registration.</td>
+</tr>
+<tr>
+<td><code>trainer.device</code></td>
+<td>The device to run training on (e.g., <code>cuda</code>, <code>cpu</code>).</td>
+</tr>
+</tbody>
+</table>
+<h3 id="ray-init">Ray Init</h3>
+<table>
+<thead>
+<tr>
+<th>Parameter Name</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ray_init.num_cpus</code></td>
+<td>The number of CPUs for Ray to use. A fixed number should be used instead of <code>null</code> when using SLURM.</td>
+</tr>
+<tr>
+<td><code>ray_init.timeline_json_file</code></td>
+<td>The path to save the Ray timeline JSON file for performance analysis.</td>
+</tr>
+</tbody>
+</table></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/code-walk-through/readme-5-EN.md">rlhf/verl/multi-turn/code-walk-through/readme-5-EN.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

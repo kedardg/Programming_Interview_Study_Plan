@@ -1,0 +1,454 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Higgs Audio v3 TTS on SGLang-Omni: Real-Time, Controllable Speech for Voice Agents</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/sglang-omni/boson.md</div>
+<article class="note"><h1 id="higgs-audio-v3-tts-on-sglang-omni-real-time-controllable-speech-for-voice-agents">Higgs Audio v3 TTS on SGLang-Omni: Real-Time, Controllable Speech for Voice Agents</h1>
+<p><em>Boson AI &amp; SGLang-Omni Team</em></p>
+<p>Today we are announcing end-to-end serving for <a href="https://www.boson.ai/blog/higgs-audio-v3-tts"><strong>Higgs Audio v3 TTS</strong></a> on <a href="https://github.com/sgl-project/sglang-omni"><strong>SGLang-Omni</strong></a>. Higgs Audio v3 TTS is Boson AI's text-to-speech model for conversational voice agents: it generates natural and expressive speech at low latency, supports <a href="https://www.boson.ai/blog/higgs-audio-v3-tts">100 languages with single-digit WER/CER</a>, and lets developers control emotion, style, prosody, and sound effects directly from the input text stream.</p>
+<p>For us, serving Higgs is not just about adding one more TTS model. Higgs represents a broader class of generation workloads where the end-to-end path is no longer a single autoregressive decode loop. Instead, generation is split across multiple stages with different compute patterns, latency requirements, and memory behavior. SGLang-Omni is the inference framework we built for exactly this class of multi-stage models.</p>
+<p><iframe
+  width="960"
+  height="540"
+  src="https://www.youtube.com/embed/i2PJeaywDew"
+  title="Higgs Audio v3 TTS Demo"
+  frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+  allowfullscreen
+></iframe>
+</p>
+<h2 id="meet-higgs-audio-v3-tts">Meet Higgs Audio v3 TTS</h2>
+<h3 id="designed-for-real-conversations">Designed for Real Conversations</h3>
+<p>A good conversational TTS model cannot wait for a fully polished paragraph. In a real voice-agent setting, the model may only see half a sentence, or even a few words, before it needs to start speaking. As more text arrives, the generated voice still has to remain coherent in speaker identity, emotion, and pace.</p>
+<p>Higgs Audio v3 TTS was designed for that streaming interaction pattern. It can begin synthesis before a full sentence or punctuation mark arrives, then continue as the text stream grows while preserving a stable delivery.</p>
+<p>Architecturally, Higgs is a roughly 4B-parameter autoregressive decoder built on a Qwen3-4B backbone. It consumes interleaved text and audio tokens. Audio is encoded by the Higgs Tokenizer into 8 discrete codebooks at 25 fps, staggered with a delayed pattern, mapped into the backbone hidden states through a fused multi-codebook embedding, and decoded back into a 24 kHz waveform through a fused multi-codebook head. Generation alternates between text and audio chunks, so each new audio segment is grounded in both the reference audio and the context generated so far.</p>
+<h3 id="multilingual-quality">Multilingual Quality</h3>
+<p>On Boson AI's internal <strong>Higgs-Multilingual</strong> suite, which covers 111 languages and dialects, Higgs Audio v3 TTS reaches <a href="https://www.boson.ai/blog/higgs-audio-v3-tts"><strong>single-digit WER/CER on 100 languages</strong></a>. On public multilingual voice-cloning benchmarks, v3 also achieves macro-averaged single-digit WER/CER on Seed-TTS, CV3, and MiniMax-Multilingual. Zero-shot voice cloning only needs a short reference clip, and the same reference can be used across languages.</p>
+<p>The table below reports WER/CER (↓, %) for zero-shot voice cloning. Each number is macro-averaged over the language set of the corresponding benchmark, using reproducible metrics and normalization.</p>
+<table>
+<thead>
+<tr>
+<th>Benchmark</th>
+<th style="text-align: right;">Languages</th>
+<th style="text-align: right;">WER/CER ↓</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Seed-TTS</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">1.11</td>
+</tr>
+<tr>
+<td>CV3</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">4.41</td>
+</tr>
+<tr>
+<td>MiniMax-Multilingual</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">2.74</td>
+</tr>
+<tr>
+<td>Higgs-Multilingual</td>
+<td style="text-align: right;">111</td>
+<td style="text-align: right;">3.61</td>
+</tr>
+</tbody>
+</table>
+<p>Per-language Seed-TTS breakdowns and WavLM speaker similarity are available in the <a href="https://sgl-project.github.io/sglang-omni/cookbook/higgs_tts.html">SGLang Omni Higgs Cookbook</a>.</p>
+<h3 id="controlling-delivery-from-the-text-stream">Controlling Delivery from the Text Stream</h3>
+<p>Higgs Audio v3 TTS is also designed to be controllable. Developers can put control tags directly into the input text to change emotion, switch speaking style, adjust speed and pitch, insert pauses, or trigger sound effects within the same utterance:</p>
+<pre><code class="language-text">&lt;|emotion:amusement|&gt;&lt;|prosody:expressive_high|&gt;Wait, wait, that was kind of hilarious. &lt;|sfx:laughter|&gt;Hehe, no, seriously, I was not ready for that.
+</code></pre>
+<p>The tag families cover 20+ emotions (<code>&lt;|emotion:elation|&gt;</code>, <code>&lt;|emotion:anger|&gt;</code>, <code>&lt;|emotion:sadness|&gt;</code>, ...), styles (<code>&lt;|style:singing|&gt;</code>, <code>&lt;|style:whispering|&gt;</code>, <code>&lt;|style:shouting|&gt;</code>), prosody (<code>&lt;|prosody:speed_very_slow|&gt;</code>, <code>&lt;|prosody:pitch_high|&gt;</code>, <code>&lt;|prosody:pause|&gt;</code>, <code>&lt;|prosody:long_pause|&gt;</code>), and sound effects (<code>&lt;|sfx:cough|&gt;</code>, <code>&lt;|sfx:laughter|&gt;</code>, <code>&lt;|sfx:sigh|&gt;</code>, ...). Tags from different categories can be combined. The full catalogue is in the <a href="https://sgl-project.github.io/sglang-omni/cookbook/higgs_tts.html#inline-control-tokens">SGLang Omni Higgs Cookbook</a>.</p>
+<h2 id="serving-higgs-with-sglang-omni">Serving Higgs with SGLang-Omni</h2>
+<p>Higgs is served and optimized on <a href="https://github.com/sgl-project/sglang-omni"><strong>SGLang-Omni</strong></a>. Unlike a standard LLM, Higgs and many modern TTS or omni models do not fit naturally into one uniform autoregressive decode loop. Their end-to-end generation path contains multiple stages: some look like standard AR decoding, some are lightweight function-style computation, and some continuously consume chunks and stream audio back.</p>
+<p>The goal of SGLang-Omni is to serve this kind of model with a clean runtime structure: each stage is scheduled according to its own compute pattern, stages communicate through low-overhead channels, and GPU placement, process topology, and memory budgets are managed by the framework.</p>
+<h3 id="multi-stage-decoding-with-a-high-performance-sglang-backend">Multi-stage Decoding with a High-Performance SGLang Backend</h3>
+<p>Single-stage models already have strong serving paths: autoregressive LLMs are optimized by SGLang main, and diffusion models are supported by SGLang-Diffusion. SGLang-Omni focuses on a different regime: models whose end-to-end generation is split into multiple stages with different compute characteristics. Higgs is one example. Qwen3-Omni's Thinker → Talker → MTP pipeline, Fish Audio S2-Pro's serially nested Dual-AR design, and fully omni-modal models such as Ming-Omni and LLaDA2.0-Uni fall into the same category.</p>
+<p>This is why the SGLang-Omni runtime is built around the stage abstraction. A model configuration statically declares the stages in the pipeline, their GPU placement, and the process topology. The placement and topology layers prepare the workers. The Coordinator routes requests between stages. Each Stage acts as an IO shell: it receives data from upstream stages, hands work to its internal Scheduler, and streams outputs to downstream stages.</p>
+<p>Different stages can use different schedulers. AR stages, such as the Qwen3-Omni Thinker, usually use <code>OmniScheduler</code>, which preserves SGLang's continuous batching, mixed prefill/decode scheduling, KV cache management, tree cache, and CUDA Graph support while adapting them to omni-native request objects and streaming outputs. Non-AR stages, such as small encoders and aggregators, can use <code>SimpleScheduler</code>, which is essentially a clear get → forward → put loop. Streaming stages use <code>StreamingSimpleScheduler</code> to manage chunk and done lifecycles, such as the Higgs vocoder in streaming mode.</p>
+<p>The interface between stages is uniform, but each stage can choose the execution strategy that matches its own compute pattern. To make this practical and fast, we focus on three pieces of infrastructure:</p>
+<ul>
+<li><strong>Layered communication.</strong> Lightweight control messages, including submit, data-ready, stream, complete, shutdown, and abort, go through a ZMQ/msgpack control plane. Tensor payloads move through the relay data plane, with <code>shm</code>, <code>nccl</code>, <code>nixl</code>, and <code>mooncake</code> backends available. Same-process edges can use local dispatch, eligible same-GPU streaming chunks can use CUDA IPC, and cross-process edges keep the same stage-level contract.</li>
+<li><strong>Process-GPU-stage topology.</strong> Pipelines declare stages, routing, streaming edges, process groups, GPU placement, tensor-parallel size, and optional fused stage groups in config. Non-TP stages explicitly declare their process group. TP stages expand into per-rank processes, with rank 0 owning external stage IO. Compact colocated deployments and larger split/TP deployments are different instances of the same topology description, not separate serving stacks.</li>
+<li><strong>Memory isolation.</strong> In a multi-stage runtime, GPU memory is a stage-level resource contract rather than one global scheduler fraction. Each GPU-backed stage can declare <code>runtime.resources.total_gpu_memory_fraction</code>; placement validation sums budgets per GPU before startup. When multiple process groups share a card, those budgets must be explicit, so one stage cannot silently consume memory reserved for another.</li>
+</ul>
+<h3 id="reusing-omni-specific-optimizations">Reusing Omni-Specific Optimizations</h3>
+<p>While integrating Higgs, we also pulled recurring omni optimizations into reusable framework modules. Similar compute patterns should not be reimplemented in each model, and performance work should live in the runtime rather than being scattered across model-specific pipelines.</p>
+<ul>
+<li><strong>CUDA-Graph-friendly feedback runners.</strong> Higgs' <code>tts_engine</code> enables CUDA Graph capture by default and uses a model runner designed for the AR + multi-codebook feedback loop. The runner handles static buffer assignment, deferred capture, and extra care around Python-side gather/scatter. The same runner interface also supports one-step-lookahead async decode for Qwen3-Omni, Fish Audio S2-Pro, and other SGLang-Omni models.</li>
+<li><strong>Streaming vocoder schedulers.</strong> Higgs, Qwen3-Omni, Fish Audio S2-Pro, and related models all need a similar streaming audio lifecycle: initialize per-request state, accumulate incoming code chunks, emit audio windows as soon as enough context is available, flush on <code>stream_done</code>, and return a compact final payload to streaming clients. Codec and windowing logic remain model-specific, but the serving lifecycle is shared.</li>
+</ul>
+<p>With these abstractions, a new multi-stage model does not need a bespoke pipeline with if-else branches scattered across the codebase. Developers partition the model into scheduling segments, choose the right scheduler and model-runner hooks, declare topology and memory contracts, and let the framework handle routing, streaming, data movement, process placement, and stage-level resource isolation.</p>
+<h3 id="a-growing-multi-stage-model-ecosystem">A Growing Multi-Stage Model Ecosystem</h3>
+<p>Higgs now joins the TTS and omni models already supported by SGLang-Omni:</p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Type</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://huggingface.co/bosonai/higgs-audio-v3-tts-4b">Higgs Audio v3 TTS</a></td>
+<td>TTS</td>
+<td>Voice cloning, streaming, 100 languages</td>
+</tr>
+<tr>
+<td><a href="https://huggingface.co/fishaudio/s2-pro">Fish Audio S2-Pro</a></td>
+<td>TTS</td>
+<td>Voice cloning, streaming</td>
+</tr>
+<tr>
+<td><a href="https://huggingface.co/mistralai/Voxtral-4B-TTS-2603">Voxtral TTS</a></td>
+<td>TTS</td>
+<td>Named voices, streaming, 9 languages</td>
+</tr>
+<tr>
+<td><a href="https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base">Qwen3-TTS</a></td>
+<td>TTS</td>
+<td>Voice cloning, streaming, 10 languages</td>
+</tr>
+<tr>
+<td><a href="https://huggingface.co/OpenMOSS-Team/MOSS-TTS-v1.5">MOSS-TTS-v1.5</a></td>
+<td>TTS</td>
+<td>Voice cloning, streaming, 31 languages</td>
+</tr>
+<tr>
+<td><a href="https://huggingface.co/Qwen/Qwen3-Omni-30B-A3B-Instruct">Qwen3-Omni</a></td>
+<td>Omni</td>
+<td>Text/image/audio/video → text + audio</td>
+</tr>
+<tr>
+<td><a href="https://huggingface.co/inclusionAI/Ming-flash-omni-2.0">Ming-flash-omni-2.0</a></td>
+<td>Omni</td>
+<td>Streaming TTS</td>
+</tr>
+<tr>
+<td><a href="https://huggingface.co/inclusionAI/LLaDA2.0-Uni">LLaDA2.0-Uni</a></td>
+<td>Multimodal</td>
+<td>Text + image understanding and generation</td>
+</tr>
+</tbody>
+</table>
+<p>These models look different from the outside, but at the inference-system level they share the same underlying problem: how to organize multiple heterogeneous stages into a stable, efficient, and extensible generation pipeline. That is why onboarding Higgs on SGLang-Omni was mostly about declaring its pipeline (<code>preprocessing → audio_encoder → tts_engine → vocoder</code>) and adding model-specific hooks, rather than building a serving stack from scratch.</p>
+<h3 id="optimizing-higgs-end-to-end">Optimizing Higgs End-to-End</h3>
+<p>Beyond the framework abstraction, we also optimized the Higgs pipeline end to end. The main pieces are listed below; implementation details and tracking live in the <a href="https://github.com/sgl-project/sglang-omni/issues/478">Higgs optimization roadmap (#478)</a> and the <a href="https://github.com/sgl-project/sglang-omni">repository</a>.</p>
+<ul>
+<li><strong>AR backbone</strong>: <a href="https://github.com/sgl-project/sglang-omni/pull/503">CUDA Graph capture</a> for the decode loop, <a href="https://github.com/sgl-project/sglang-omni/pull/590">async one-step-lookahead decode</a> for the omni AR loop, and <a href="https://github.com/sgl-project/sglang-omni/pull/572">batching per-step D2H syncs</a> into a single transfer.</li>
+<li><strong>Encoder</strong>: <a href="https://github.com/sgl-project/sglang-omni/issues/576">fusing preprocessing into the encoder stage</a>, an <a href="https://github.com/sgl-project/sglang-omni/pull/563">LRU cache</a> for <a href="https://github.com/sgl-project/sglang-omni/pull/605">reused reference audio</a>, and a <a href="https://github.com/sgl-project/sglang-omni/pull/610">batched audio encoder</a>.</li>
+<li><strong>Vocoder</strong>: <a href="https://github.com/sgl-project/sglang-omni/pull/574">batched vocoder decode</a>.</li>
+<li><strong>Caching</strong>: RadixAttention cache partitioned by reference audio with <code>extra_key</code> namespacing, so repeated voice-cloning references can reuse prefix cache.</li>
+<li><strong>Scheduling and streaming</strong>: <a href="https://github.com/sgl-project/sglang-omni/pull/476">dropping the bespoke scheduler</a> in favor of the shared <code>OmniScheduler</code>, plus real SSE <a href="https://github.com/sgl-project/sglang-omni/pull/597">streaming</a> <a href="https://github.com/sgl-project/sglang-omni/pull/614">schedulers</a> to reduce time to first audio.</li>
+</ul>
+<h3 id="performance">Performance</h3>
+<p>We evaluate Higgs on the full Seed-TTS EN set (<strong>N=1088</strong> per run). The client sweeps <code>--max-concurrency</code> against a Higgs server configured with <code>max_running_requests=16</code>, bf16, and CUDA Graph enabled. Each row reports the <strong>mean of 3 runs</strong> on <strong>1× H100</strong>.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: right;">Concurrency</th>
+<th style="text-align: right;">Throughput (req/s)</th>
+<th style="text-align: right;">Mean latency</th>
+<th style="text-align: right;">RTF (per-req)</th>
+<th style="text-align: right;">audio_s/s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1.62</td>
+<td style="text-align: right;">617 ms</td>
+<td style="text-align: right;">0.147</td>
+<td style="text-align: right;">6.89</td>
+</tr>
+<tr>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2.70</td>
+<td style="text-align: right;">742 ms</td>
+<td style="text-align: right;">0.180</td>
+<td style="text-align: right;">11.37</td>
+</tr>
+<tr>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">5.45</td>
+<td style="text-align: right;">733 ms</td>
+<td style="text-align: right;">0.177</td>
+<td style="text-align: right;">22.84</td>
+</tr>
+<tr>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">8.91</td>
+<td style="text-align: right;">898 ms</td>
+<td style="text-align: right;">0.217</td>
+<td style="text-align: right;">37.38</td>
+</tr>
+<tr>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">14.74</td>
+<td style="text-align: right;">1079 ms</td>
+<td style="text-align: right;">0.262</td>
+<td style="text-align: right;">61.84</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Concurrency</strong>: Maximum number of in-flight client requests (<code>--max-concurrency</code>).</li>
+<li><strong>Throughput (req/s)</strong>: Completed requests divided by total benchmark wall-clock time.</li>
+<li><strong>Mean latency</strong>: Average end-to-end time per request, from sending the request to receiving the full response.</li>
+<li><strong>RTF (per-req)</strong>: Average ratio of processing time to generated audio duration per request. Values below 1 are faster than real time.</li>
+<li><strong>audio_s/s</strong>: Total seconds of audio produced divided by total benchmark wall-clock time.</li>
+</ul>
+<p>To reproduce the results, follow the <a href="https://github.com/sgl-project/sglang-omni/blob/main/benchmarks/eval/benchmark_tts_seedtts.py">benchmark script</a>.</p>
+<h2 id="try-it-yourself">Try it Yourself</h2>
+<p>Detailed instructions are in the <a href="https://sgl-project.github.io/sglang-omni/cookbook/higgs_tts.html">SGLang Omni Higgs Cookbook</a>. The commands below show the shortest path to a working setup.</p>
+<h3 id="install-and-serve">Install and Serve</h3>
+<pre><code class="language-bash">docker pull lmsys/sglang-omni:dev
+docker run -it --gpus all --shm-size 32g --ipc host --network host --privileged \
+  lmsys/sglang-omni:dev /bin/zsh
+
+git clone git@github.com:sgl-project/sglang-omni.git &amp;&amp; cd sglang-omni
+uv venv .venv -p 3.12 &amp;&amp; source .venv/bin/activate
+uv pip install -v -e .
+</code></pre>
+<pre><code class="language-bash">hf download bosonai/higgs-audio-v3-tts-4b
+
+sgl-omni serve \
+  --model-path bosonai/higgs-audio-v3-tts-4b \
+  --port 8000
+</code></pre>
+<h3 id="zero-shot-synthesis">Zero-shot synthesis</h3>
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{&quot;input&quot;: &quot;Hello, how are you?&quot;}' \
+  --output output.wav
+</code></pre>
+<p>Reference output:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/higgs-1.wav" type="audio/wav">
+</audio></p>
+<h3 id="voice-cloning">Voice cloning</h3>
+<p>For voice cloning, we recommend providing both the reference audio and the reference transcript (<code>text</code>), which usually improves cloning quality:</p>
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;Have a nice day and enjoy south california sunshine.&quot;,
+    &quot;references&quot;: [{
+      &quot;audio_path&quot;: &quot;https://sgl-project.github.io/sglang-omni/_static/audio/male-voice.wav&quot;,
+      &quot;text&quot;: &quot;Hey, Adam here. Let'\''s create something that feels real, sounds human, and connects every time.&quot;
+    }],
+    &quot;temperature&quot;: 0.8,
+    &quot;top_k&quot;: 50,
+    &quot;max_new_tokens&quot;: 1024
+  }' \
+  --output output.wav
+</code></pre>
+<p>Reference input:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/male-voice.wav" type="audio/wav">
+</audio></p>
+<p>Reference output:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/higgs-2.wav" type="audio/wav">
+</audio></p>
+<h3 id="streaming">Streaming</h3>
+<p>Set <code>"stream": true</code> to receive audio over <a href="https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events">Server-Sent Events</a>. The client can start playback before the full generation finishes because the vocoder emits incremental WAV chunks. The <code>-N</code> flag disables curl's output buffering so SSE events print as they arrive:</p>
+<pre><code class="language-bash">curl -N -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;Get the trust fund to the bank early.&quot;,
+    &quot;references&quot;: [{
+      &quot;audio_path&quot;: &quot;https://sgl-project.github.io/sglang-omni/_static/audio/male-voice.wav&quot;,
+      &quot;text&quot;: &quot;Hey, Adam here. Let'\''s create something that feels real, sounds human, and connects every time.&quot;
+    }],
+    &quot;stream&quot;: true
+  }'
+</code></pre>
+<p>For raw PCM streaming (no SSE JSON), see the <a href="https://sgl-project.github.io/sglang-omni/cookbook/higgs_tts.html#streaming">Higgs TTS cookbook</a>.</p>
+<p>Reference output:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/higgs-4.wav" type="audio/wav">
+</audio></p>
+<h3 id="inline-control-tokens">Inline Control Tokens</h3>
+<p>Control tokens can be embedded directly in the <code>input</code> field, and tokens from different categories can be combined. In general, put delivery tokens such as emotion, style, speed, pitch, or expressive prosody at the beginning of each turn; place <code>&lt;|prosody:pause|&gt;</code> / <code>&lt;|prosody:long_pause|&gt;</code> where the pause should happen; and pair each <code>&lt;|sfx:…|&gt;</code> with matching onomatopoeia right after it. The full catalogue is in the <a href="https://sgl-project.github.io/sglang-omni/cookbook/higgs_tts.html#inline-control-tokens">cookbook</a>.</p>
+<p><strong>Emotion: amusement + laughter</strong></p>
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;&lt;|emotion:amusement|&gt;&lt;|prosody:expressive_high|&gt;Wait, wait, that was kind of hilarious. &lt;|sfx:laughter|&gt;Hehe, no, seriously, I was not ready for that.&quot;,
+    &quot;temperature&quot;: 0.8,
+    &quot;top_k&quot;: 50,
+    &quot;max_new_tokens&quot;: 1024
+  }' \
+  --output output.wav
+</code></pre>
+<p>Reference output:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/control-tokens-test1.wav" type="audio/wav">
+</audio></p>
+<p><strong>Emotion: anger + shouting</strong></p>
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;&lt;|emotion:anger|&gt;&lt;|style:shouting|&gt;No, that is not okay! We cannot ship something that sounds broken, delayed, and unnatural.&quot;,
+    &quot;temperature&quot;: 0.8,
+    &quot;top_k&quot;: 50,
+    &quot;max_new_tokens&quot;: 1024
+  }' \
+  --output output.wav
+</code></pre>
+<p>Reference output:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/control-tokens-test2.wav" type="audio/wav">
+</audio></p>
+<p><strong>Emotion: surprise + screaming</strong></p>
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;&lt;|emotion:surprise|&gt;&lt;|prosody:pitch_high|&gt;&lt;|sfx:screaming|&gt;Ah! Wait, I almost forgot! Higgs Audio v3 also supports over one hundred languages.&quot;,
+    &quot;references&quot;: [{
+      &quot;audio_path&quot;: &quot;https://sgl-project.github.io/sglang-omni/_static/audio/ref_voice.wav&quot;,
+      &quot;text&quot;: &quot;It was the night before my birthday. Hooray! It’s almost here! It may not be a holiday, but it’s the best day of the year.&quot;
+    }],
+    &quot;temperature&quot;: 0.8,
+    &quot;top_k&quot;: 50,
+    &quot;max_new_tokens&quot;: 1024
+  }' \
+  --output output.wav
+</code></pre>
+<p>Reference output:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/control-tokens-test5.wav" type="audio/wav">
+</audio></p>
+<p><strong>Combined example:</strong></p>
+<p>The example below combines emotion, sound effects, and prosody tokens in a short Gaokao-style English listening dialogue between two speakers:</p>
+<details>
+<summary>Commands</summary>
+
+Part 1 — she asks about the missed class:
+
+
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;&lt;|emotion:contemplation|&gt;Hi David, I missed the biology class today because I caught a cold. &lt;|sfx:cough|&gt;Ahem! Sorry, Could you tell me what the teacher covered?&quot;,
+    &quot;references&quot;: [{
+      &quot;audio_path&quot;: &quot;https://sgl-project.github.io/sglang-omni/_static/audio/female-voice.wav&quot;,
+      &quot;text&quot;: &quot;By repeating what students say, teachers can demonstrate that they are listening. By extending what students say.&quot;
+    }],
+    &quot;temperature&quot;: 0.8,
+    &quot;top_k&quot;: 50,
+    &quot;max_new_tokens&quot;: 1024
+  }' \
+  --output part1.wav
+</code></pre>
+
+
+Part 2 — he explains what was covered:
+
+
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;&lt;|emotion:enthusiasm|&gt;Sure, no problem! We learned how plants make food through photosynthesis, and &lt;|prosody:long_pause|&gt; there will be a quiz this Friday.&quot;,
+    &quot;references&quot;: [{
+      &quot;audio_path&quot;: &quot;https://sgl-project.github.io/sglang-omni/_static/audio/male-voice.wav&quot;,
+      &quot;text&quot;: &quot;Hey, Adam here. Let'\''s create something that feels real, sounds human, and connects every time.&quot;
+    }],
+    &quot;temperature&quot;: 0.8,
+    &quot;top_k&quot;: 50,
+    &quot;max_new_tokens&quot;: 1024
+  }' \
+  --output part2.wav
+</code></pre>
+
+
+Part 3 — she thanks him:
+
+
+<pre><code class="language-bash">curl -X POST http://localhost:8000/v1/audio/speech \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{
+    &quot;input&quot;: &quot;&lt;|emotion:relief|&gt;Oh, that is really helpful. Thank you!&quot;,
+    &quot;references&quot;: [{
+      &quot;audio_path&quot;: &quot;https://sgl-project.github.io/sglang-omni/_static/audio/female-voice.wav&quot;,
+      &quot;text&quot;: &quot;By repeating what students say, teachers can demonstrate that they are listening. By extending what students say.&quot;
+    }],
+    &quot;temperature&quot;: 0.8,
+    &quot;top_k&quot;: 50,
+    &quot;max_new_tokens&quot;: 1024
+  }' \
+  --output part3.wav
+</code></pre>
+
+
+Concatenate (~0.6 s gap between lines):
+
+
+<pre><code class="language-bash">ffmpeg -y \
+  -i part1.wav -f lavfi -t 0.6 -i anullsrc=r=24000:cl=mono \
+  -i part2.wav -f lavfi -t 0.6 -i anullsrc=r=24000:cl=mono \
+  -i part3.wav \
+  -filter_complex &quot;[0:a][1:a][2:a][3:a][4:a]concat=n=5:v=0:a=1&quot; \
+  gaokao_listening.wav
+</code></pre>
+
+
+</details>
+
+<p>Reference output:</p>
+<p><audio controls>
+  <source src="https://sgl-project.github.io/sglang-omni/_static/audio/gaokao-listening.wav" type="audio/wav">
+</audio></p>
+<h3 id="demo">Demo</h3>
+<p>You can also launch the backend and browser UI with one command:</p>
+<pre><code class="language-bash">CUDA_VISIBLE_DEVICES=0 ./playground/higgs/start.sh
+</code></pre>
+<p><iframe
+  width="960"
+  height="540"
+  src="https://drive.google.com/file/d/1QBxraffYEm68LBKy16Q-M_Gfbb0ek3cl/preview"
+  title="SGLang-Omni Higgs playground demo"
+  allow="autoplay"
+  allowfullscreen
+></iframe>
+</p>
+<h2 id="roadmap">Roadmap</h2>
+<p>For SGLang-Omni, serving Higgs end to end is an important milestone, but it is not the finish line. We are continuing to push on several tracks:</p>
+<ul>
+<li><strong>Tracking upstream SGLang</strong> (<a href="https://github.com/sgl-project/sglang-omni/issues/658">#658</a>): moving to the latest SGLang so AR backbones continue to inherit improvements from mainline SGLang, including CUDA/PyTorch build updates, kernel improvements, scheduling, and speculative decoding.</li>
+<li><strong>Per-model refactor</strong> (<a href="https://github.com/sgl-project/sglang-omni/issues/661">#661</a>): continuing the direction of <a href="https://github.com/sgl-project/sglang-omni/issues/188">RFC #188</a> with a cleaner per-model abstraction. We want new-model integration to look more like "declare topology and plug in hooks" than adding special branches across the framework.</li>
+<li><strong>End-to-end RL</strong> (<a href="https://github.com/sgl-project/sglang-omni/issues/663">#663</a>): using SGLang-Omni as a high-throughput rollout backend for omni and TTS models with explicit reward targets, further connecting serving and post-training.</li>
+</ul>
+<p>Cross-node multi-stage pipelines and fuller diffusion-stage support are also in progress. With stage abstraction, a unified scheduler interface, layered communication, and cross-stage memory budgeting already in place, these capabilities can grow within the same framework instead of requiring another serving stack.</p>
+<h2 id="join-us">Join us</h2>
+<p>SGLang-Omni is still moving quickly. We want it to become a general inference foundation for multi-stage generative models: new models should not need a serving stack from scratch, nor special-case logic scattered across a dozen files. They should be expressible as clear stages, topology declarations, and model-specific hooks, with scheduling, communication, memory management, and streaming handled by the framework.</p>
+<p>If you are interested in multi-stage inference, TTS, omni models, multimodal generation, inference systems, or RL rollout backends, we would love to work with you. Whether your strength is kernels, scheduling, communication, model onboarding, or benchmarking, contributions and discussions are welcome.</p>
+<h2 id="acknowledgments">Acknowledgments</h2>
+<p><strong>SGLang-Omni</strong> — Haoguang Cai, Shangming Cai, Qiujiang Chen, Jiaxin Deng, Wenyao Gao, Yifei Gao, Jingwen Gu, Yitong Guan, Chenchen Hong, Hao Jin, Xinli Jing, Shenggui Li, Junrong Lin, Xinyu Lu, Yuan Luo, Ratish Palanisamy, Mick Qian, JinTao Qu, Shuai Shi, Chao Wang, Richard Wang, Shuwen Wang, Zijie Xia, Yuhao Yang, Xuesong Ye, Yin Yue, Fan Yin, Gaokai Zhang, Xiaoyu Zhang, Yichi Zhang, Chenyang Zhao.</p>
+<p><strong>Higgs Audio v3 TTS (Boson AI)</strong> — Mu Li, Alex Smola, Lindsey Allen. Silin Meng, Ke Bai. Ruskin Raj Manku, Huapeng Zhou, Dongming Shen, Jonah Mackey, Erik Li, Weisu Yin, Yizhi Liu, Xinyu Wang, Hao Yu.</p>
+<h2 id="learn-more">Learn More</h2>
+<ul>
+<li><strong>Model:</strong> <a href="https://huggingface.co/bosonai/higgs-audio-v3-tts-4b"><code>bosonai/higgs-audio-v3-tts-4b</code></a></li>
+<li><strong>Blog:</strong> <a href="https://www.boson.ai/blog/higgs-audio-v3-tts">Higgs Audio v3 TTS</a></li>
+<li><strong>Serving framework:</strong> <a href="https://github.com/sgl-project/sglang-omni">SGLang-Omni on GitHub</a></li>
+<li><strong>Documentation:</strong> <a href="https://sgl-project.github.io/sglang-omni/">SGLang-Omni docs</a> · <a href="https://sgl-project.github.io/sglang-omni/cookbook/higgs_tts.html">Higgs TTS cookbook</a></li>
+<li><strong>Higgs optimization roadmap:</strong> <a href="https://github.com/sgl-project/sglang-omni/issues/478">#478</a></li>
+<li><strong>Design background:</strong> <em>SGLang-Omni: Redesigning the Inference Framework for Multi-Stage Generative Models</em></li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/sglang-omni/boson.md">sglang/sglang-omni/boson.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

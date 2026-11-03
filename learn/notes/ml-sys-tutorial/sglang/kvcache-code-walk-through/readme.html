@@ -1,0 +1,294 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KV Cache Code Walkthrough</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/kvcache-code-walk-through/readme.md</div>
+<article class="note"><h1 id="kv-cache-code-walkthrough">KV Cache Code Walkthrough</h1>
+<p>This document provides an overview of the KV cache management implementation. Our narrative start with the <code>Scheduler</code> components which orchestrat the requests in batch. After that, we zoom into a single request, follow its journey through prefill and decode phases, detailing how the KV cache and memory pools are updated step-by-step.</p>
+<p>To facilitate this explanation, we will make a few assumptions in our examples:
+- We use FlashInfer as backend.
+- We use Longest Prefix as priority for requests in <code>waiting_queue</code> (e.g., the longest-prefix-match scheduling in SGLang paper).
+- We don't consider jump forward decoding/speculative decoding.
+- We don't enable <code>enable_mixed_chunck</code>.
+- We use <code>Radix Cache</code> as <code>tree_cache</code>.</p>
+<!-- todo: 看完之后只大概理解了functional design，并没有感知到什么design tradeoff (orz)，如果理解整个design的tradeoff对理解code有益的话，可以在最开头补充performance metrics和sys big picture，这样可以减少”为什么要这么schedule和设计cache“的疑惑 -->
+
+<h2 id="scheduler-overview">Scheduler Overview</h2>
+<p>This section provides a high-level overview of the <code>Scheduler</code> which is responsible for managing active requests.</p>
+<p><img alt="alt text" src="../../../../vendor/notes/ml-sys-tutorial/sglang/kvcache-code-walk-through/scheduler_overview.png">
+The figure illustrates how the <strong>Scheduler</strong> directs requests from the <code>waiting_queue</code> into a <code>new_batch</code> (for prefill/extend phase) and then into the <code>running_batch</code> (for decode phase). Let's firstly understand each of these building blocks:</p>
+<h4 id="waiting_queue"><code>waiting_queue</code></h4>
+<p>A data structure designed to hold active requests. The queue would be reordered on demand based on requests priority(in our assumption, the requests with longest prefix) or available memory to optimize batch processing time.
+- <strong>What to Enqueue?</strong> 
+  - Newly arrived requests.
+  - Requests that are returned from <code>retract_decode</code>. 
+    &gt; <strong>retract</strong> 
+    &gt; 
+    &gt; If available memory is insufficient during decode, the scheduler may retract certain requests (via <code>retract_decode</code>) from the <code>running_batch</code>, returning them to the waiting queue for later processing.</p>
+<!--TODO: 可以callback一下priority和longest prefix之间的关系 -->
+
+<h4 id="new_batch"><code>new_batch</code></h4>
+<p>A batch of requests that are ready for prefill/extend stage.</p>
+<blockquote>
+<p>"prefill" vs "extend" </p>
+<p>The key difference is whether it builds upon an existing prefix in the cache  <strong>Prefill</strong> handles the initial processing of a request’s input tokens to populate the KV cache with their key-value (KV) pairs when no prior cache exists or when the prefix match is incomplete. <strong>Extend</strong> builds upon an existing prefix in the cache, appending new tokens’ KV pairs.</p>
+</blockquote>
+<h4 id="running_batch"><code>running_batch</code></h4>
+<p>A batch of requests that are ready for decode stage.</p>
+<h4 id="cur_batch"><code>cur_batch</code></h4>
+<p>The batch of requests that are currently being processed in the main loop of Scheduler (<code>run_batch</code> function).<br>
+- <strong>How is <code>cur_batch</code> being formed?</strong><br>
+If there's requests ready for prefill (<code>new_batch</code>) in this cycle, use <code>new_batch</code> as <code>cur_batch</code>. Otherwise, <code>cur_batch</code> would process those that are ready for decode, thus use <code>running_batch</code> as <code>cur_batch</code>. </p>
+<h3 id="sequences">Sequences</h3>
+<!-- todo: 这里的sequence是？ 看了图也没发现是哪个sequence？是箭头方向的execution flow吗？-->
+
+<p>Let's walk through the sequence in the diagram now.</p>
+<h4 id="1-new-request-arrived">1. <strong>New Request arrived</strong></h4>
+<p>The Scheduler continuously calls <code>recv_requests</code> to collect newly arrived requests, validate them and place them into the <code>waiting_queue</code>. </p>
+<p>In our example, <code>Req 7</code> is received and enqueued.</p>
+<!-- SV: The Scheduler listens in `event_loop_normal` and `process_input_requests` where the `_request_dispatcher` decides on how to handle the request. -->
+
+<h4 id="2-merge-batches">2. <strong>Merge Batches</strong></h4>
+<p>Before form the <code>cur_batch</code> for this round, Scheduler would merge the last round's <code>cur_batch</code> into <code>running_batch</code>. In the diagram, <code>cur_batch</code> from last round are shown as <code>cur_batch(i-1)</code> and <code>running_batch</code> are shown as <code>running_batch(i-1)</code>. In our example, <code>Req 0</code> and <code>Req 1</code> will be merged together into the new <code>running_batch</code>. </p>
+<ul>
+<li><strong>Chunked Prefill Fragment Being Removed</strong></li>
+</ul>
+<p>If a request requires more tokens than the available memory (<code>remaining_tokens</code>), it may be <strong>chunked</strong> into smaller parts. During the <strong>Merge Batches</strong> step, the scheduler also removes the last round's <code>being_chunked_request</code>. These chunked requests (like <code>Req 5a</code>) are temporary fragments created solely for populate KV cache in prefill, they are not needed to proceed to decode phase, thus they can be removed once the prefill for it being finished.</p>
+<p>To better understand the chunking process, let's look at how <code>Req 5</code> is handled:
+  1. Initially, <code>Req 5</code> enters the waiting queue as a single long request
+  2. During the first prefill attempt, due to memory constraints, it's split into <code>Req 5a</code> and <code>Req 5b</code>
+  3. After <code>Req 5a</code> is processed and its KV cache is stored, it's removed as a <code>being_chunked_request</code>
+  4. In the current round, when trying to process <code>Req 5b</code>, it still exceeds the resource limit
+  5. Therefore, <code>Req 5b</code> is further split into a new <code>Req 5b</code> (which goes into the global batch) and <code>Req 5c</code> (which stays in the waiting queue)</p>
+<h4 id="3-forming-the-new_batch">3. <strong>Forming the <code>new_batch</code></strong>:</h4>
+<p>The process of forming a <code>new_batch</code> consists of three main steps:</p>
+<!-- SV: A new batch is formed after after the Scheduler performed merging in `get_next_batch_to_run` by calling `get_new_batch_prefill`. -->
+
+<ol>
+<li><strong>Reorder Waiting Queue</strong>:
+  - The scheduler reorders requests based on its scheduling policy
+  - By default, it prioritizes requests with the longest prefix in the radix cache</li>
+</ol>
+<!-- SV: The Scheduler reorders requests based on its `SchedulePolicy`. -->
+<!-- SV: By default we sort requests by longest prefix, for different policies and their implementation please refer to `schedule_policy.py` -->
+
+<ol start="2">
+<li>
+<p><strong>Request Selection</strong>:
+  - Requests are selected one by one from the reordered queue
+  - In our example:</p>
+<ul>
+<li><code>Req 6</code> is selected first as it has the longest prefix match in the cache</li>
+<li><code>Req 5b</code> is selected next as there's still available memory</li>
+<li>However, <code>Req 5b</code> exceeds the memory limit and is further split into <code>Req 5b</code> and <code>Req 5c</code></li>
+<li><code>Req 5b</code> is added to the <code>new_batch</code> while <code>Req 5c</code> remains in the waiting queue</li>
+</ul>
+</li>
+<li>
+<p><strong>Prepare for Extend</strong>:
+  Allocateing spaces in <code>req_to_token_pool</code> and <code>token_to_kv_pool</code> for the <code>new_batch</code> requests
+  - If no <code>new_batch</code> can be formed, the scheduler will fallback to use <code>running_batch</code> as <code>cur_batch</code>, it will firstly remove finished requests like <code>Old Finished Req</code>. 
+  - If GPU memory becomes insufficient, some decoding requests may be retracted according to the retraction policy. In our example, <code>Req 0</code> is retracted during this process.</p>
+</li>
+</ol>
+<!-- SV: After determination of the `new_batch` inside `get_new_batch_prefill` we `prepare_for_extend`. -->
+
+<h4 id="4-running-the-batch">4. <strong>Running the Batch</strong>:</h4>
+<p>Once the <strong>Global Batch</strong> is determined, <code>run_batch</code> is called to run a forward pass.</p>
+<!-- SV: In `event_loop_overlap` after determination of the `batch`, `run_batch` is called to forward pass the `batch`. -->
+
+<h4 id="5-result-processing">5. <strong>Result Processing</strong>:</h4>
+<p>After <code>run_batch</code>, the Scheduler calls <code>process_batch_result</code> to to determine which requests have finished and which continue. In our example, <code>Req 6</code> is finished and turns grey, <code>Req 5b</code> remains unfinished.</p>
+<h4 id="6-iteration">6. <strong>Iteration</strong>:</h4>
+<p>The loop repeats until all requests are eventually completed. If insufficient memory is encountered, requests may be chunked (in prefill) or retracted (in decode), then reinserted into the waiting queue for later processing.</p>
+<!-- SV: `event_loop_overlap` keeps running until the `last_batch` is processed. -->
+
+<h2 id="a-requests-lifecycle">A Request's Lifecycle</h2>
+<p>This section zoom into one request's lifecycle, we would step-by-step walkthrough the key functions that updates the KV Cache &amp; Memory Pools.</p>
+<p><img alt="alt text" src="../../../../vendor/notes/ml-sys-tutorial/sglang/kvcache-code-walk-through/kv-cache-request-lifecycle.png"></p>
+<p>Let's firstly understand some of the important building blocks for managing KV. </p>
+<p>There are two-level memory pools to manage KV cache. </p>
+<!-- todo 我觉得两层mapping是可以画个图的，比文字好看 -->
+
+<h4 id="req_to_token_pool"><code>req_to_token_pool</code></h4>
+<p>A map from a request to its tokens' KV cache indices.
+- <strong>Shape:</strong> Max Allowed Requests Number (being set by argument <code>max-running-requests</code> for the maximum number of requests to run concurrently) * Max Context Length for each request (being set by config <code>model_config.context_len</code>)
+- <strong>Access:</strong> 
+    - Dim0: <code>req_pool_indices</code> identify the specific request
+    - Dim1: token positions in req (starting from 0, 1, 2...), identify the specific token in the request
+    - Value: <code>out_cache_loc</code> for token, it points to the KV cache indices associated with the token identified by Dim0 and Dim1</p>
+<!-- SV: To make connection to the above more clear it could be benefical to point out that this is updated in  `get_next_batch_to_run -->
+<h4 id="token_to_kv_pool"><code>token_to_kv_pool</code></h4>
+<p><code>req_to_token_pool</code> maintained the map between request to tokens KV cache indices, <code>token_to_kv_pool</code> further maps token from its KV cache indices to its real KV cache data.  Note that, for different attention implementation, like <a href="https://arxiv.org/abs/1706.03762"><code>MHA</code></a>, <a href="https://arxiv.org/abs/2405.04434"><code>MLA</code></a>, <a href="https://arxiv.org/abs/2408.07092"><code>Double Sparsity</code></a>, <code>token_to_kv_pool</code> could have different implementation.
+- <strong>Layout:</strong> Number of Layers * Max Allowed Tokens Number * Number of Head * Head Dimension
+- <strong>Access:</strong> 
+    - Dim0: <code>layer_id</code> identify the specific layer
+    - Dim1: <code>out_cache_loc</code> identify the specific KV cache indices (free slots)
+    - Dim2: Head
+    - Dim3: Head Dimension
+    - Value: <code>cache_k</code> for k_buffer and <code>cache_v</code> for v_buffer, the real KV Cache Data</p>
+<pre><code>Note that we normally retrieve the KV Cache for entire layer all together, because we would need all prior tokens' KV in a request to do forward.
+</code></pre>
+<!-- todo: 如果能讲讲tree cache是什么就更好了，如果它的设计跟perf metric (cache reuse)有关的话 -->
+<h4 id="tree_cache"><code>tree_cache</code></h4>
+<p><code>tree_cache</code> is a tree structure to enhance the reuse of prefix KV Cache across requests. <code>tree_cache</code> is responsible for updating <code>req_to_token_pool</code> and <code>token_to_kv_pool</code> on a token level for each request. Across <code>tree_cache</code>, <code>req_to_token_pool</code>, and <code>token_to_kv_pool</code>, tokens are linked via it's KV Cache indices.
+- <strong>Access:</strong>
+  - Key: Token ID, same token's KV Cache is agnostic from requests
+  - Value: Token's KV Cache Indices</p>
+<h3 id="sequence">Sequence</h3>
+<p>Let's walk through the sequence in the diagram now.</p>
+<h4 id="prefill-batch">Prefill Batch</h4>
+<h5 id="step-1-function-get_new_batch_prefill">Step 1. Function <code>get_new_batch_prefill</code></h5>
+<ul>
+<li>Update prefix from radix tree cache for request<ul>
+<li>When <code>ABC</code> come in, say the current radix cache have one node <code>AFG</code> thats currently being referenced.</li>
+<li><code>match_prefix</code> would try to find the prefix for <code>ABC</code> in the current radix cache, and it matched up to the first token <code>A</code> in the node.</li>
+<li>Radix Cache Split the node into <code>A</code> and <code>FG</code>, node <code>A</code> is the current last node for this request.</li>
+</ul>
+</li>
+<li>Invoke <code>prepare_for_extend</code><ul>
+<li><code>req_to_token_pool</code></li>
+<li>Allocate to <code>req_pool_indices</code></li>
+<li>Add prefix to <code>req_to_token_pool</code></li>
+<li><code>token_to_kv_pool</code></li>
+<li>Allocate (the sum of each reqs (number of input id tokens - number of prefix tokens)) <code>out_cache_loc</code></li>
+<li>In our example of request ABC, the batch size is 1<ul>
+<li>number of input id tokens = 3 -&gt; A,B,C </li>
+<li>number of prefix tokens = 1 -&gt; A</li>
+<li>We will allocate 2 slots to <code>out_cache_loc</code> for token B, C</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h5 id="step-2-function-run_batch">Step 2. Function <code>run_batch</code></h5>
+<p>Run <code>forward_extend</code> on the current batch, this will eventually invoke the Attention Backend, who is responsible for 
+- Set the kv cache of extend tokens.
+  - Set KV cache for extends token to <code>token_to_kv_pool</code> (Function <code>save_kv_cache</code>)
+  - In our example: from above steps, we get 2 slots for token B, C in <code>out_cache_loc</code>, their corresponding K, V would be set to this 2 slots here.
+- Run forward attention calculation, the input would be
+  - Q = extend tokens, in our example token B, C
+  - KV = All cached tokens from <code>req_to_token_pool</code> by <code>out_cache_loc</code> including A(prefix tokens), B, C(extend tokens) (Function <code>create_flashinfer_kv_indices_triton</code>).</p>
+<!-- SV: Trace the way to `forward_extend` more clearly, i.e. `self.tp_worker.forward_batch_generation` to `self.model_runner.forward` to `self.forward_extend` -->
+
+<h5 id="step-3-function-process_batch_result_prefill">Step 3. Function <code>process_batch_result_prefill</code></h5>
+<p><code>cache_finished_req</code> and <code>cache_unfinished_req</code> are responsible for managing the KV cache in Radix Cache, ReqToTokenPool, and TokenToKVPool.
+  - If the request is finished, invoke <code>cache_finished_req</code> (refer to <a href="#radixcache-cache_finished_req--cache_finished_req">this secion</a> for details of <code>cache_finished_req</code> )
+  - else invoke <code>cache_unfinished_req</code> (refer to <a href="#radixcache-cache_finished_req--cache_finished_req">this secion</a> for details of <code>cache_unfinished_req</code> )</p>
+<p>In our example, <code>cache_unfinished_req</code> is invoked after extend/prefill phase, <code>BC</code> was added as a child node for <code>A</code>, both nodes <code>A</code> and <code>BC</code> increase the lock reference, node <code>BC</code> become the <code>last_node</code> for the request.</p>
+<h4 id="decode-batch">Decode Batch</h4>
+<h5 id="step-4-function-update_running_batch">Step 4. Function <code>update_running_batch</code></h5>
+<ul>
+<li>Invoke <code>prepare_for_decode</code><ul>
+<li><code>req_to_token_pool</code> No change</li>
+<li><code>token_to_kv_pool</code></li>
+<li>Allocate (batch size * 1) slot to <code>out_cache_loc</code> because we only generate one token for each batch in decode mode</li>
+<li>For example: in above diagram, the round that generate D from C<ul>
+<li>We will allocate 1 slots to <code>out_cache_loc</code> for token D</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<!-- SV: Maybe mention dynamic changing of the forward mode? -->
+
+<h5 id="step-5-function-run_batch">Step 5. Function <code>run_batch</code></h5>
+<p>Run <code>forward_decode</code> on the current batch, this will eventually invoke the Attention Backend, who is responsible for 
+- Save the kv cache of decode token.
+  - Save KV cache for decode token to <code>token_to_kv_pool</code> (Function <code>save_kv_cache</code>)
+  - For example: In above step, we get 1 slots for token D in <code>out_cache_loc</code>, it's corresponding K, V would be saved to this 1 slot here.
+- Run forward, the input would be:
+  - Q = decode token, in our example token D
+  - KV = All cached tokens from <code>req_to_token_pool</code> by <code>out_cache_loc</code> including A, B, C(from previous round), D (Function <code>create_flashinfer_kv_indices_triton</code>)</p>
+<!-- SV: See above comment for run_batch -->
+
+<h5 id="step-6-function-process_batch_result_decode">Step 6. Function <code>process_batch_result_decode</code></h5>
+<p>If the request is finished, invoke <code>cache_finished_req</code> (refer to <a href="#radixcache-cache_finished_req--cache_finished_req">this secion</a> for details of <code>cache_finished_req</code> ). No operation for cache is needed for unfinished request in decode phase.</p>
+<p>In our example, <code>DE</code> is appended to node <code>BC</code>, and the lock reference for node <code>A</code> and <code>BCDE</code> got decreased. </p>
+<h4 id="radixcache-cache_finished_req-cache_finished_req">RadixCache <code>cache_finished_req</code> &amp; <code>cache_finished_req</code></h4>
+<p>This section would go deeper on <code>cache_finished_req</code> &amp; <code>cache_finished_req</code>'s flow.</p>
+<h5 id="quick-overview-of-cache_finished_req-vs-cache_unfinished_req"><strong>Quick Overview of <code>cache_finished_req()</code> vs. <code>cache_unfinished_req()</code></strong></h5>
+<table>
+<thead>
+<tr>
+<th>Sequence</th>
+<th><code>cache_unfinished_req()</code></th>
+<th><code>cache_finished_req()</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>1. Get <code>kv_indices</code></strong> from <code>req_to_token_pool.req_to_token</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>2. Update Radix Cache</strong> (<code>insert()</code>)</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td><strong>3. Free KV Cache</strong> (<code>self.token_to_kv_pool.free()</code>)</td>
+<td>-</td>
+<td>release duplicate kv cache storage</td>
+</tr>
+<tr>
+<td><strong>4. Handle <code>req_to_token_pool</code></strong></td>
+<td><strong>Writes and updates</strong> <code>req_to_token_pool | **Releases**</code>req_to_token_pool` as the request is completed.</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>5. Handle <code>req.last_node</code></strong></td>
+<td><strong>Increases</strong> the reference count of <code>req.last_node</code></td>
+<td><strong>Decreases</strong> the reference count of <code>req.last_node</code>, as <code>req</code> is finished.</td>
+</tr>
+</tbody>
+</table>
+<p>As we can observe, the core functionality is essentially the same for <code>cache_unfinished_req()</code> and <code>cache_finished_req()</code>, we are going to walk through the code for how req_to_token_pool, token_to_kv_pool and tree_cache are updated during <code>cache_unfinished_req()</code>, and explain the key difference between <code>cache_unfinished_req()</code> and <code>cache_finished_req()</code>.</p>
+<h5 id="cache_unfinished_req"><code>cache_unfinished_req</code></h5>
+<ol>
+<li>
+<p>Get KV Index: Get KV index from <code>req_to_token_pool.req_to_token</code></p>
+</li>
+<li>
+<p>Update Radix Cache</p>
+</li>
+</ol>
+<pre><code class="language-python">new_prefix_len = self.insert(token_ids, kv_indices.clone())
+</code></pre>
+<p>This method inserts token_ids and their corresponding kv_indices into the Radix Cache. If successful, it returns a new prefix length (new_prefix_len).</p>
+<ol start="3">
+<li>
+<p><code>Free KV Cache</code> </p>
+</li>
+<li>
+<p>Update <code>prefix_indices</code> and <code>last_node</code></p>
+<p>Calls <code>match_prefix()</code> to update the request’s <code>prefix_indices</code> and <code>last_node</code>. This is important as <code>prefix_indices</code> and <code>last_node</code> will be used in next iteration.
+  - <code>prefix_indices</code> is used to calculate the needed size of extend/prefill tokens.
+  - <code>last_node</code> is used to keep track of a requests last node in the radix tree so that it can be used to trace back towards root node when updating lock.</p>
+</li>
+<li>
+<p>Lock Management for Memory Safety
+To prevent unintended deletion of active cache nodes. Keeping a lock on a node shields it from being freed while still needed. After above state transition, the old <code>last_node</code> is unlocked using dec_lock_ref(), allowing it to be freed when no longer in use. The new <code>last_node</code> is locked, protecting it from deletion.</p>
+</li>
+</ol>
+<h5 id="cache_finished_req"><code>cache_finished_req</code></h5>
+<h6 id="similar-to-cache_unfinished_req-cache_finished_req-also-has-the-following-steps"><strong>Similar to <code>cache_unfinished_req()</code>, <code>cache_finished_req()</code> also has the following steps:</strong></h6>
+<ol>
+<li>When a request <code>req</code> is completed, its <code>token_ids</code> are stored in the <strong>Radix Cache</strong>. Update Radix Cache </li>
+<li><strong>Release</strong> redundant <strong>KV Cache space</strong> in <code>token_to_kv_pool</code> (removing duplicates) by marking the KV indices as free slots.</li>
+<li><strong>Release <code>req_to_token_pool</code></strong> and <strong>update <code>tree_cache</code></strong>.  </li>
+</ol></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/kvcache-code-walk-through/readme.md">sglang/kvcache-code-walk-through/readme.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

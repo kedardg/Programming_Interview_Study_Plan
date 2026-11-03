@@ -1,0 +1,309 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search System</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-search.md</div>
+<article class="note"><h1 id="search-system">Search System</h1>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<ul>
+<li>
+<p>Clarifying questions</p>
+<ul>
+<li>Is it a generalized search engine (like google) or specialized (like amazon product)?</li>
+<li>What is the primary (business) objective of the search system?</li>
+<li>What are the specific use cases and scenarios where it will be applied?</li>
+<li>What are the system requirements (such as response time, accuracy, scalability, and integration with existing systems or platforms)?</li>
+<li>What is the expected scale of the system in terms of data and user interactions?</li>
+<li>Is their any data available? What format? </li>
+<li>Personalized? not required </li>
+<li>How many languages needs to be supported?</li>
+<li>What types of items (products) are available on the platform, and what attributes are associated with them?</li>
+<li>What are the common user search behaviors and patterns? Do users frequently use filters, sort options, or advanced search features?</li>
+<li>Are there specific search-related challenges unique to the use case (e-commerce)? such as handling product availability, pricing, and customer reviews?</li>
+</ul>
+</li>
+<li>
+<p>Use case(s) and business goal</p>
+</li>
+<li>Use case: user enters text query into search box, system shows the most relevant items (products) </li>
+<li>business goal: increase CTR, conversion rate, etc  </li>
+<li>Requirements</li>
+<li>response time, accuracy, scalability (50M DAU)</li>
+<li>Constraints</li>
+<li>budget limitations, hardware limitations, or legal and privacy constraints</li>
+<li>Data: sources and availability</li>
+<li>Sources:  </li>
+<li></li>
+<li>Assumptions</li>
+<li>ML formulation: </li>
+<li>ML Objective: retrieve items that are most relevant to a text query  <ul>
+<li>we can define relevance as weighted summary of click, successful session, conversion, etc. </li>
+</ul>
+</li>
+<li>ML I/O: I: text query from a user, O: ranked list of most relevant items on an e-commerce platform  </li>
+<li>ML category: MM input search system -&gt; retrieval and ranking <ul>
+<li>ranking: MM input -&gt; multi-label classification (click, success, convert, etc)</li>
+<li>we can use a multi-task classifier </li>
+</ul>
+</li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<ul>
+<li>Offline</li>
+<li>Precision@k, Recall@k, MRR, mAP, NDCG  </li>
+<li>we choose NDCG (non-binary relevance)</li>
+<li>Online </li>
+<li>CTR: problem: doesn't track relevancy, click baits  </li>
+<li>success session rate: dwell time &gt; T or add to cart </li>
+<li>total dwell time </li>
+<li>conversion rate </li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<ul>
+<li>Multimodal search (text, photo, video) for product content from text query: </li>
+<li>Multi-layer architecture </li>
+<li>Query Understanding -&gt; Candidate generation -&gt; stage 1 Ranker -&gt; stage 2 Ranker -&gt; Blender -&gt; Filter </li>
+<li>Query understanding </li>
+<li>spell checker </li>
+<li>query normalization </li>
+<li>query expansion (e.g. add alternative) / relaxation (e.g. remove "good")</li>
+<li>Intent/Domain classification </li>
+<li>Candidate generation </li>
+<li>focus on recall, millions/billions into 10Ks </li>
+<li>Ranking </li>
+<li>ML based </li>
+<li>multi-stage ranker: if more than 10k items to select from or QPS &gt; 10k  </li>
+<li>100k items: stage 1 (liner model) -&gt; stage 2 (DNN model) -&gt; 500 items</li>
+<li>Blender: </li>
+<li>outputs a SERP (search engine result page)</li>
+<li>blends results from multiple sources e.g. textual (inverted index, semantic) search, visual search, etc. </li>
+</ul>
+<h4 id="retrieval">Retrieval</h4>
+<ul>
+<li>from 100 B to 100k </li>
+<li>IR: compares query text with document text </li>
+<li>Document types: </li>
+<li>item (product) title </li>
+<li>item description </li>
+<li>item reviews </li>
+<li>item category </li>
+<li>inverted index: </li>
+<li>index DS, mapping from words into their locations in a set of documents (e.g. ABC -&gt; documents 1, 7)</li>
+<li>after query expansion (e.g. black pants into black and pants or suit-pants or trousers etc), do a search in inverted index db and find relevant items with relevance score </li>
+<li>relevance score </li>
+<li>weighted linear combination of: <ul>
+<li>terms match (e.g. TF-IDF score)(e.g. w = 0.5), </li>
+<li>item popularity (e.g. no of reviews, or bought) (e.g. w=0.125), </li>
+<li>intent match score (e.g. 0.125/2), </li>
+<li>domain match score,  </li>
+<li>personalization score (e.g. age, gender, location, interests) </li>
+</ul>
+</li>
+</ul>
+<h4 id="ranking">Ranking:</h4>
+<ul>
+<li>see the next sections. </li>
+</ul>
+<!-- 
+- Visual search system 
+  - Text query -> videos (based on similarity of text and visual content) 
+  - Two tower embedding architecture (video and text_query encoders)
+- Textual search system 
+  - search for most similar titles, descs, and tags  w/ text query 
+  - we can use Inverted Index (e.g. elastic search) for efficient full text search 
+    - An inverted index is a data structure that maps terms (words) to the documents or locations where they appear, enabling efficient text-based document retrieval, commonly used in search engines. -->
+
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<ul>
+<li>Data sources: </li>
+<li>Users </li>
+<li>Queries </li>
+<li>Items (products)</li>
+<li>Context </li>
+<li>Labeling: </li>
+<li>use online user engagement data to generate positive and negative labels </li>
+</ul>
+<!-- We use provided annotated data in the format of <video_id, query>.  -->
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<ul>
+<li>Feature selection </li>
+<li>User: <ul>
+<li>ID, username, </li>
+<li>Demographics (age, gender, location)</li>
+<li>User interaction history (click rate, purchase rate, etc)</li>
+<li>User interests (e.g. categories)</li>
+</ul>
+</li>
+<li>Context: <ul>
+<li>device, </li>
+<li>time of the day, </li>
+<li>recent hype results </li>
+<li>previous queries </li>
+</ul>
+</li>
+<li>Query features: <ul>
+<li>query historical engagement (by other users)</li>
+<li>query intent / domain </li>
+<li>query embeddings </li>
+</ul>
+</li>
+<li>Item (product) features <ul>
+<li>Title (exact text + embeddings)</li>
+<li>Description (exact text + embeddings)</li>
+<li>Reviews data (avg reviews, no of reviews, review textual data (text + embeddings)) </li>
+<li>category </li>
+<li>page rank </li>
+<li>engagement radius </li>
+</ul>
+</li>
+<li>User-Item(product) features <ul>
+<li>distance (e.g. for shipment)</li>
+<li>historical engagement by the user (e.g. document type)</li>
+</ul>
+</li>
+<li>Query-Item(product) features<ul>
+<li>text match (title, description, category)</li>
+<li>unigram or bigram search (title, description, category) - TF-IDF score </li>
+<li>historical engagement (e.g. click rate of Item for that query)</li>
+<li></li>
+</ul>
+</li>
+</ul>
+<!-- - Preprocessing unstructured data 
+  - Text pre-processing : normalization, tokenization, token to ids
+  - Video preprocessing: decode into frames -> sample -> resize -> scale, normalize, color correct  -->
+
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<h4 id="ranking_1">Ranking</h4>
+<ul>
+<li>Model Selection  </li>
+<li>Two options:<ul>
+<li>Pointwise LTR model: <user, item> -&gt; relevance score </li>
+<li>approximate it as a binary classification problem p(relevant)</li>
+<li>Pairwise LTR model: <user, item1, item2> -&gt; item1 score &gt; item2 score ?</li>
+<li>loss function if the predicted order is correct </li>
+<li>more natural to ranking, more complicated </li>
+</ul>
+</li>
+<li>
+<p>Multi - Stage ranking </p>
+<ul>
+<li>100k items (focus on recall) -&gt; 500 items (focus on precision) -&gt; 500 items in correct order   </li>
+<li>Stage 1: We use a pointwise LTR -&gt; binary classifier </li>
+<li>latency: microseconds </li>
+<li>suggestion: LR or small MART (multiple additive regression trees)</li>
+<li>use ROC AUC for metric</li>
+<li>Stage 2: Pairwise LTR model </li>
+<li>Two options (choose based on train data availability and capacity):<ul>
+<li>LambdaMART: a variation of MART, obj fcn changed to improve pairwise ranking  </li>
+<li>LambdaRank: NN based model, pairwise loss (minimize inversions in ranking)</li>
+</ul>
+</li>
+<li>use NDCG for metric </li>
+</ul>
+</li>
+<li>
+<p>Training Dataset</p>
+</li>
+<li>Pointwise approach <ul>
+<li>positive samples: user engaged (e.g. click, spent time &gt; T, add to cart, purchased)</li>
+<li>negative samples: no engagement by the user + random negative samples e.g. from pages 10 and beyond</li>
+<li>5 million Q/day -&gt; one positive one negative sample from each query -&gt; 10 million samples a day </li>
+<li>use a whole week's data at least to capture daily patterns </li>
+<li>capturing and dealing with seasonal and holiday data </li>
+<li>train-valid/test split: 70/30 (of 70 million)</li>
+<li>temporal affect: e.g. use 3 weeks data: first 2/3 of weeks: train, last week valid / test </li>
+</ul>
+</li>
+<li>Pairwise approach: <ul>
+<li>ranks items according to their relative order, which is closer to the nature of ranking </li>
+<li>predict doc scores in a way that miimizes No of inversions in the final ranked result </li>
+<li>Two options for train data generation for pointwise approach</li>
+<li>human raters: each human rates 10 results per 100K queries * 10 humans = 10M examples<ul>
+<li>expensive, doesn't scale </li>
+</ul>
+</li>
+<li>online engagement data <ul>
+<li>assign scores to each engagement type e.g. </li>
+<li>impression with no click -&gt; label/score 0 </li>
+<li>click only -&gt; score 1 </li>
+<li>spent time after click &gt; T : score 2 </li>
+<li>add to cart : score 3 </li>
+<li>purchase: score 4  </li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<!-- - Text encoders:  -->
+<pre><code>&lt;!-- - Text -&gt; Vector (Embeddings)  
+- Two approaches: 
+  - Statistical (BoW, TF-IDF)
+  - ML encoders (word2vec, transformer based e.g. BERT)  
+- We chose transformer based (BERT).
+</code></pre>
+<ul>
+<li>Video encoders: <ul>
+<li>Video-level</li>
+<li>more expensive, but captures temporal understanding</li>
+<li>Example: ViViT (Video Vision Transformer)</li>
+<li>Frame-level (from sample frames and aggregate)</li>
+<li>less expensive (training and serving speed, compute power) </li>
+<li>Example: ViT 
+ --&gt;</li>
+</ul>
+</li>
+</ul>
+<!-- * Model Training   
+  - contrastive learning (similar to visual search system).  -->
+
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<!-- - Visual search from text query 
+  - text -> preprocess -> encoder -> embedding 
+  - videos are indexed by their encoded embeddings 
+  - search: using approximate nearest neighbor search (ANN)
+- Textual search
+  - using Elasticsearch (full text / fuzzy search)
+- Fusion  
+  - re-rank based on weighted sum of rel scores 
+  - re-rank using a model 
+- Re-ranking 
+  - business level logic and policies  -->
+<ul>
+<li>Re-ranking </li>
+<li>business level logic and policies  --&gt;<ul>
+<li>filtering inappropriate items </li>
+<li>diversity (exploration/exploitation)</li>
+<li>etc </li>
+</ul>
+</li>
+<li>Two ways: <ul>
+<li>rule based filters and aggregators </li>
+<li>ML model </li>
+<li>Binary Classification (P(inappropriate))</li>
+<li>Data sources: human raters, user feedback (report, review)</li>
+<li>Features: same as product features in ranker</li>
+<li>Models: LR, MART, or DNN (depending on data size, capacity, experiments)</li>
+<li>More details on harmful content classification </li>
+</ul>
+</li>
+</ul>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3>
+<h3 id="10-other-talking-points">10. Other talking points</h3>
+<ul>
+<li>Positional bias </li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-search.md">src/MLSD/mlsd-search.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

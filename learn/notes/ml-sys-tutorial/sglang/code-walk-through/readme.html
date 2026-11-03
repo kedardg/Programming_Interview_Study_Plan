@@ -1,0 +1,226 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SGLang Code Walk Through</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/code-walk-through/readme.md</div>
+<article class="note"><h1 id="sglang-code-walk-through">SGLang Code Walk Through</h1>
+<h2 id="english-version"><a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/code-walk-through/README-eng.md">English version</a> | <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/code-walk-through/readme-CN.md">简体中文</a></h2>
+<!-- [TODO: 概念和代码的名字？概念是概念，代码是代码，对我们的 workflow 图明确点，然后把 KV cache management 加进来] -->
+
+<p>This doc serve as a developer-level guidance and provide a brief code walkthrough of SGLang's backend, tracing the path of how requests are processed, as shown in the following figure.</p>
+<div style="text-align: center; width: 100%; margin: 0 auto;">
+    <img src="./sglang-architecture.svg" alt="SGLang Architecture" style="width: 100%; height: auto;">
+</div>
+
+<p>Specifically, requests flow through the following process to get responses:</p>
+<ol>
+<li>
+<p>The user launches the Server, initializing the FastAPI app, TokenizerManager, DetokenizerManager, and Scheduler, each running with its infinite event loop.</p>
+</li>
+<li>
+<p>The user sends <code>/v1/chat/completions</code> requests to the FastAPI Server, which routes them to TokenizerManager via the <code>v1_chat_completions</code> endpoint.</p>
+</li>
+<li>
+<p>The <code>v1_chat_completions</code> function converts the incoming requests into a <code>ChatCompletionRequest</code>,transforms them into a <code>GenerateReqInput</code> and calls TokenizerManager's <code>generate_request</code> method.</p>
+</li>
+<li>
+<p>TokenizerManager tokenizes the requests and forwards them to the Scheduler as Python objects (<code>pyobj</code>) while calling TokenizerManager‘s <code>_wait_one_response</code>.</p>
+</li>
+<li>
+<p>The Scheduler loops its infinite <code>event_loop_normal</code> to handle the requests:</p>
+<ul>
+<li>The Scheduler receives the requests via <code>recv_requests</code>, processes them through <code>process_input_requests</code>, handles the generation logic with <code>handle_generate_request</code>, and adds them to the <code>waiting_queue</code>.</li>
+<li>From the <code>waiting_queue</code>, the Scheduler uses <code>get_next_batch_to_run</code> to create a <code>ScheduleBatch</code> for the upcoming requests.</li>
+<li>The Scheduler executes the <code>run_batch</code> function, converting the <code>ScheduleBatch</code> into a <code>ModelWorkerBatch</code>.</li>
+<li>The Scheduler calls TpModelWorker's <code>forward_batch_generation</code>, awaiting the <code>logits_output</code> and <code>next_token_ids</code>.</li>
+<li>TpModelWorker initializes a <code>ForwardBatch</code>, forwards it to ModelRunner, and waits for the <code>logits_output</code>.</li>
+<li>The ModelRunner processes the <code>ForwardBatch</code>, classifies it and calls <code>forward_extend</code> to execute the model's forward pass.</li>
+<li>The model, accelerated by <code>AttentionBackend</code>, generates logits, which are returned to ModelRunner and subsequently to TpModelWorker.</li>
+<li>TpModelWorker receives the <code>logits_output</code> from ModelRunner, calls ModelRunner's <code>sample</code> method to generate <code>next_token_ids</code>, and sends them back to the Scheduler.</li>
+<li>The Scheduler processes batch results through <code>process_batch_result</code>, cache requests via <code>tree_cache.cache_finished_req(req)</code> and verifies completion status via <code>check_finished</code>, and handles caching. For unfinished requests, the Scheduler continues the event loop until the request meets the completion criteria; for finished requests, they are forwarded to Scheduler's <code>stream_output</code>.</li>
+<li>In <code>stream_output</code>, Scheduler processes the outputs, wraps them into <code>BatchTokenIDOut</code>, and send to the DetokenizerManager.</li>
+</ul>
+</li>
+<li>
+<p>The DetokenizerManager, running its own event loop, receives <code>BatchTokenIDOut</code>, processes it, and sends <code>BatchStrOut</code> back to TokenizerManager.</p>
+</li>
+<li>
+<p>The TokenizerManager, within its event loop, receives the results, processes them via <code>handle_loop</code>, updates the internal state, and yields the response to the server.</p>
+</li>
+<li>
+<p>The FastAPI Server packages the response and sends it back to the user.</p>
+</li>
+</ol>
+<h2 id="acknowledge-and-notation">Acknowledge And Notation</h2>
+<!-- [TODO: offical 可以不用 Acknowledge，仅供内部传阅，和宣传稿平级] -->
+
+<p>All the discussions are based on release <a href="https://github.com/sgl-project/sglang/tree/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751">v0.4.0</a>. We sincerely appreciate <a href="https://zhaochenyang20.github.io/Chayenne/">Chenyang Zhao</a>, <a href="https://github.com/Edenzzzz">Wenxuan Tan</a>,  <a href="https://simveit.github.io/">Simon Veitner</a>, <a href="https://shuaills.github.io/">Shuai Shi</a>, <a href="https://shizhediao.github.io/">Shizhe Diao</a>, <a href="https://shengdinghu.github.io/">Shending Hu</a>, <a href="https://github.com/BBuf">Xiaoyu Zhang</a>, <a href="https://github.com/agiping">agiping</a>、<a href="https://jamessand.github.io/">Zhizhou Sha</a> for their contribution to this document.</p>
+<p><strong>Note that this document is under construction and these parts will be included in the future.</strong></p>
+<ol>
+<li>Radix Cache Management with Attention Backend.</li>
+<li><code>get_next_batch_to_run</code>: How to fetch and write KV cache for requests in each batch.</li>
+<li><code>get_model_worker_batch</code>.</li>
+<li><code>write_req_to_token_pool_triton</code>.</li>
+<li>CUDA Graphs for Attention Backend.</li>
+<li>Overlapping scheduling.</li>
+</ol>
+<h2 id="launch-server">Launch Server</h2>
+<p>SGLang features an SRT (SGLang Runtime) Server for <a href="https://sgl-project.github.io/backend/send_request.html">serving online HTTP requests</a> and an Engine for <a href="https://sgl-project.github.io/backend/offline_engine_api.html">offline model execution</a> without HTTP protocol. Key functions, <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/server.py#L507"><code>launch_server</code></a> and <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/server.py#L418"><code>launch_engine</code></a>, are in <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/server.py">server.py</a>. The <code>launch_engine</code> function initializes core SRT Server components.</p>
+<ol>
+<li>Set up configs (logger, server args, CUDA/NCCL env, inter-process ports) and download the model and tokenizer.</li>
+<li>If <code>dp_size &gt; 1</code>, run <code>run_data_parallel_controller_process</code> to start multiple data parallel replicas; otherwise, initialize a Scheduler for each <code>tp_rank</code> as a subprocess to handle requests from TokenizerManager and manage KV Cache.</li>
+<li>Run TokenizerManager in the Engine's main process and DetokenizerManager as a subprocess: the former tokenizes requests and sends them to the Scheduler, and the latter converts token IDs returned by the Scheduler to text and sends them back to the Server. Note that for multi-node inference (e.g., deploying Llama 3.1 405B on two nodes with a total of 16 H100 GPUs), TokenizerManager and DetokenizerManager only run on the first node.</li>
+<li>Configure chat template (if specified) and wait for Scheduler processes to signal that all processes are ready, along with their configuration information.</li>
+</ol>
+<p>Note that in version 0.4.0, the <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/data_parallel_controller.py#L52">DataParallelController</a> is used for round-robin scheduling of requests across multiple data parallel replicas. We will change this to <a href="https://sgl-project.github.io/router/router.html">SGLang Router</a> for multiple replicas routing  in the future.</p>
+<h2 id="forward-requests-from-server">Forward Requests From Server</h2>
+<p>The Server employs a FastAPI app to define API endpoints, forwarding <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/server.py#L354"><code>/v1/chat/completions</code></a> requests to the TokenizerManager via <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/openai_api/adapter.py#L1101">v1_chat_completions</a>.</p>
+<ol>
+<li>Parse JSON from <code>raw_request</code> into a <code>ChatCompletionRequest</code>,  convert it to <code>GenerateReqInput</code> and configure <code>sampling_params</code> using <code>v1_chat_generate_request</code>.</li>
+<li>Call the TokenizerManager's <code>generate_request</code> and wait for the response. After getting the response, handle streaming or non-streaming responses based on the <code>stream</code> parameter.</li>
+<li>For streaming, process the <code>generate_request</code> output incrementally with <code>generate_stream_resp</code>; for non-streaming, wait the async result and convert it to a <code>ChatCompletionResponse</code> via <code>v1_chat_generate_response</code>.</li>
+</ol>
+<h2 id="generate-request-in-tokenizermanager">Generate Request In TokenizerManager</h2>
+<p><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/tokenizer_manager.py#L88">TokenizerManager</a> is initialized by <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/server.py#L507"><code>launch_server</code></a> in the Server's main process to tokenize requests.</p>
+<h3 id="initialization"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/tokenizer_manager.py#L88">Initialization</a></h3>
+<ol>
+<li>Set up <a href="https://libzmq.readthedocs.io/en/latest/">ZeroMQ</a> for inter-process communication, including sockets for the communication with DetokenizerManager and Scheduler.</li>
+<li>Configure <code>server_args</code>, enable <code>metrics</code>, and initialize <code>model_config</code>, <code>tokenizer</code>, and placeholders for multi-modal image processors.</li>
+</ol>
+<h3 id="generate_request"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/tokenizer_manager.py#L173">generate_request</a></h3>
+<ol>
+<li>If TokenizerManager's event loop is not initialized, initialize it here.</li>
+<li>Pause processing if model weights are updating via <code>update_weights_from_disk</code> or <code>update_weights_from_distributed</code>.</li>
+<li>Validate request type is aligned with the model's <code>is_generation</code> setting.</li>
+<li>Normalize requests using <code>normalize_batch_and_arguments</code> to manage batching, parallel sampling, and default parameters.</li>
+<li>Process single requests with <code>_tokenize_one_request</code>, send to the scheduler, and wait for responses from <code>_wait_one_response</code>.</li>
+<li>Process batch requests with <code>_handle_batch_request</code>, tokenize inputs, manage parallel sampling, interact with the scheduler, and yield responses in both streaming and non-streaming modes.</li>
+</ol>
+<h2 id="scheduler-receive-requests-and-process-batches">Scheduler Receive Requests and Process Batches</h2>
+<p>Here is the overview of the Scheduler:
+<img alt="sglang_scheduler" src="../../../../vendor/notes/ml-sys-tutorial/sglang/code-walk-through/sglang_scheduler.svg"></p>
+<p><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/scheduler.py#L97">Scheduler</a> runs as Server's subprocess, initialized via <code>run_scheduler_process</code> and executes its infinite event loop with <code>event_loop_normal</code> or <code>event_loop_overlap</code>.</p>
+<h3 id="initialization_1"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/scheduler.py#L97">Initialization</a></h3>
+<ol>
+<li>Set up <a href="https://libzmq.readthedocs.io/en/latest/">ZeroMQ</a> for communication with TokenizerManager.</li>
+<li>Configure <code>server_args</code>, <code>port_args</code>, <code>model_config</code>, <code>sessions</code>, and initialize TpModelWorker or TpModelWorkerClient based on overlap scheduling.</li>
+<li>Initialize tokenizer and processor, manage caching using ChunkCache or RadixCache and configure SchedulePolicy.</li>
+<li>Set up chunk prefill parameters and GrammarBackend for constraint decoding.</li>
+</ol>
+<h3 id="event-loop"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/scheduler.py#L376">Event Loop</a></h3>
+<p>The Scheduler continuously executes its event loop, alternating between <code>process_input_requests</code>,<code>get_next_batch_to_run</code>, <code>run_batch</code> and <code>process_batch_result</code>.</p>
+<h3 id="process_input_requests"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/scheduler.py#L508">process_input_requests</a></h3>
+<p>Iterates over incoming requests, identifying their types, and dispatches them to appropriate handlers.</p>
+<h3 id="get_next_batch_to_run"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/scheduler.py#L768">get_next_batch_to_run</a></h3>
+<ol>
+<li>Merge <code>last_batch</code> with <code>running_batch</code> if applicable and prioritize prefill batches with <code>get_new_batch_prefill</code>.</li>
+<li>If no prefill batch, update <code>running_batch</code> for decode batch by filtering requests, managing GPU memory, and adjusting decoding parameters.</li>
+</ol>
+<h3 id="run_batch"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/scheduler.py#L956">run_batch</a></h3>
+<ol>
+<li>For generation models, use TpModelWorker’s <code>forward_batch_generation</code> to generate a new token or <code>forward_batch_idle</code> for idle tasks, returning results to <code>event_loop_normal</code>.</li>
+<li>For embedding or reward models, execute <code>forward_batch_embedding</code>, and return embeddings.</li>
+</ol>
+<h3 id="process_batch_result"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/scheduler.py#L987">process_batch_result</a></h3>
+<p>After <code>run_batch</code>, Scheduler processes batch results in <code>event_loop_normal</code>:</p>
+<ol>
+<li>Decode mode processes outputs, updates request states, handles token and probability data, manages memory, and logs statistics.</li>
+<li>Extend mode handles prefill results, processes input tokens, and prepares for further decoding or embedding.</li>
+<li>Finished requests are cached via <code>cache_finished_req</code>, streamed to DetokenizerManager. Unfinished requests are updated and looped back into <code>get_next_batch_to_run</code> for further processing until completion.</li>
+</ol>
+<p>Note that LLM inference is typically divided into Prefill and Decode phases based on their different computational characteristics. For the concepts of Prefill and Decode, you can refer to <a href="https://huggingface.co/blog/martinigoyanes/llm-inference-at-scale-with-tgi">this article</a> from HuggingFace. However, in SGLang, <a href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/layers/attention/flashinfer_backend.py">extend mode</a> is used in most cases rather than prefill mode. While Prefill mode initializes KV-Cache for new requests, typically using Paged KV-Cache, Extend mode incrementally updates existing KV-Cache using Ragged Tensors, which is more efficient. This makes it particularly well-suited for long sequences or multi-turn dialogue requests that SGLang is designed for.</p>
+<h2 id="tpmodelworker-manage-forward-and-token-sampling">TpModelWorker Manage Forward and Token Sampling</h2>
+<p><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/tp_worker.py#L40">TpModelWorker</a> manages ModelRunner's forward and sampling for batches of requests scheduled by Scheduler.</p>
+<h3 id="initialization_2"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/tp_worker.py#L40">Initialization</a></h3>
+<ol>
+<li>Initializes tokenizer, model configuration and ModelRunner.</li>
+<li>Configures device settings and memory pool limits.</li>
+</ol>
+<h3 id="forward_batch_generation"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/tp_worker.py#L148">forward_batch_generation</a></h3>
+<ol>
+<li>Create a <code>ForwardBatch</code>, compute logits and sample next tokens using ModelRunner's <code>forward</code> and <code>sample</code>.</li>
+<li>Return <code>logits_output</code> and <code>next_token_ids</code> to Scheduler for <code>process_batch_result</code>.</li>
+</ol>
+<h3 id="forward_batch_embedding"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/tp_worker.py#L160">forward_batch_embedding</a></h3>
+<ol>
+<li>Create a <code>ForwardBatch</code>, get the <code>logits_output</code> and <code>embeddings</code> from ModelRunner's <code>forward</code>.</li>
+<li>Embedding requests do not require sampling, so skip the ModelRunner's <code>sample</code> and directly return the <code>embeddings</code> to Scheduler.</li>
+</ol>
+<h2 id="modelrunner-manages-model-execution">ModelRunner Manages Model Execution</h2>
+<p><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/model_executor/model_runner.py#L66">ModelRunner</a> initialize the attention backend and manage the loaded model to perform forward passes for generation and embedding tasks.</p>
+<h3 id="initialization_3"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/model_executor/model_runner.py#L66">Initialization</a></h3>
+<p>Initializes distributed environment, loads the model, applies tensor parallelism, and sets up memory pool and attention backend.</p>
+<h3 id="forward"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/model_executor/model_runner.py#L675">forward</a></h3>
+<p>The <code>forward</code> function determines the appropriate forward mode for processing batches based on the <code>forward_mode</code>:</p>
+<ol>
+<li><code>forward_decode</code>: Initializes forward metadata and call the Model's <code>forward</code> with input IDs and positions.</li>
+<li><code>forward_extend</code>: Initializes forward metadata and call the Model's <code>forward</code> for generation or embedding tasks.</li>
+<li><code>forward_idle</code>: Manages the forward pass when the forward mode is idle.</li>
+</ol>
+<h2 id="model-load-weights-and-perform-forward">Model Load Weights and Perform Forward</h2>
+<p>ModelRunner's <code>self.model</code> is a instance of the model class. All <a href="https://sgl-project.github.io/references/supported_models.html">supported models</a> can be found in <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/models">python/sglang/srt/models</a>. We take <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/models/qwen2.py#L269">Qwen2ForCausalLM</a> for example.</p>
+<p><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/models/qwen2.py#L269"><code>Qwen2ForCausalLM</code></a> is structured as follows:</p>
+<ul>
+<li><code>model</code>: weights used for the forward pass.</li>
+<li><code>embed_tokens</code>: maps <code>input_ids</code> into <code>embeddings</code>.</li>
+<li><code>lm_head</code>: projects the hidden states back to the vocabulary space.</li>
+<li><code>logits_processor</code>: manipulates <code>logits</code> to perform tasks such as sampling and normalization.</li>
+<li><code>pooler</code>: pooling mechanism for extracting embeddings or computing rewards.</li>
+</ul>
+<h3 id="forward_1"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/models/qwen2.py#L289">forward</a></h3>
+<p>The forward function in <code>Qwen2ForCausalLM</code> processes input IDs to produce logits for next-token prediction of chat completion requests or embeddings for reward/embedding requests:</p>
+<ol>
+<li>Converts <code>input_ids</code> to embeddings using <code>embed_tokens</code>. Sequentially forwards embeddings through multiple Qwen2DecoderLayer layers.</li>
+<li>Returns embeddings via <code>pooler</code> if <code>get_embedding</code> is True; otherwise, using <code>logits_processor</code> to compute <code>logits</code> and return.</li>
+</ol>
+<p>The most import acceleration of SGLang comes from the interaction between <code>forward_batch</code> and AttentionBackend. </p>
+<h2 id="attentionbackend-accelerate-model-forward">AttentionBackend Accelerate Model Forward</h2>
+<p>SGLang supports several <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/layers/attention">Attention Backends</a> which accelerate model forward and KV cache reuse. We take <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/layers/attention/flashinfer_backend.py">FlashInferBackend</a> for example.</p>
+<h3 id="initialization_4"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/layers/attention/flashinfer_backend.py#L48">Initialization</a></h3>
+<ol>
+<li>Configures wrappers for sliding window and cross-attention scenarios.</li>
+<li>Allocates necessary buffers for workspace and key-value indices.</li>
+<li>Prepares forward metadata for efficient attention computation.</li>
+<li>Integrates CUDA graph support for optimized execution paths.</li>
+</ol>
+<h3 id="init_forward_metadata"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/layers/attention/flashinfer_backend.py#L130">init_forward_metadata</a></h3>
+<ol>
+<li>Decode Mode: Updates indices for decoding using <code>indices_updater_decode</code> and sets <code>forward_metadata</code> to use <code>decode_wrappers</code>.</li>
+<li>Extend Mode: Determines if ragged forward is needed based on token count and wrapper count, then updates indices with <code>indices_updater_prefill</code>.</li>
+<li>Metadata Assignment: Sets <code>forward_metadata</code> with flags for ragged use and prefix extension.</li>
+</ol>
+<h3 id="forward_extend-and-forward_decode"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/layers/attention/flashinfer_backend.py#L223">forward_extend</a> and <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/layers/attention/flashinfer_backend.py#L277">forward_decode</a></h3>
+<ol>
+<li>For <code>forward_extend</code>, selects the appropriate wrapper based on ragged or paged attention. For <code>forward_decode</code>, picks the decode wrapper.</li>
+<li>Computes attention, manages key-value caching, and returns the reshaped output.</li>
+</ol>
+<h2 id="detokenizermanager-detokenize-and-send-to-tokenizermanager">DetokenizerManager Detokenize and Send to TokenizerManager</h2>
+<p><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/detokenizer_manager.py#L53">DetokenizerManager</a> is initialized by <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/server.py#L507"><code>launch_server</code></a> as a subprocess of Server to detokenize token ids returned by Scheduler and send back to TokenizerManager.</p>
+<h3 id="initialization_5"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/detokenizer_manager.py#L53">Initialization</a></h3>
+<p>Sets up ZeroMQ communication sockets and the tokenizer. Manages decoding status with <code>LimitedCapacityDict</code>.</p>
+<h3 id="event_loop-and-trim_eos"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/detokenizer_manager.py#L93">event_loop</a> and <a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/managers/detokenizer_manager.py#L78">trim_eos</a></h3>
+<ol>
+<li>Receives processed requests from the Scheduler, forwarding <code>BatchEmbeddingOut</code> directly or processing <code>BatchTokenIDOut</code> for detokenization.</li>
+<li>Splits token IDs into <code>read_ids</code> and <code>surr_ids</code>. Converts token IDs to text using <code>batch_decode</code>. Updates <code>DecodeStatus</code> with new offsets and detokenized text.</li>
+<li>Trims outputs at stop sequences, combines detokenized text with metadata into <code>BatchStrOut</code>, and sends it to TokenizerManager.</li>
+</ol>
+<h2 id="fastapi-wraps-the-output"><a href="https://github.com/sgl-project/sglang/blob/f8b0326934bacb7a7d4eba68fb6eddebaa6ff751/python/sglang/srt/server.py#L287">FastAPI Wraps the Output</a></h2>
+<ol>
+<li>DetokenizerManager sends <code>BatchStrOut</code> to TokenizerManager via <a href="https://libzmq.readthedocs.io/en/latest/">ZeroMQ</a>.</li>
+<li>TokenizerManager updates request states and prepares detokenized text for FastAPI.</li>
+<li>Finally in FastAPI, for streaming, use an async generator and <code>StreamingResponse</code> to send the response to the user.</li>
+<li>For non-streaming, collect and send the complete response using <code>ORJSONResponse</code> and return to the user.</li>
+</ol></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/code-walk-through/readme.md">sglang/code-walk-through/readme.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

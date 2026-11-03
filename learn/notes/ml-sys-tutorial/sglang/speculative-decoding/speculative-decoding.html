@@ -1,0 +1,51 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>speculative-decoding</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/speculative-decoding/speculative-decoding.md</div>
+<article class="note"><h2 id="speculative-decoding">Speculative Decoding</h2>
+<p>Speculative decoding is an optimization technique that accelerates inference. While traditional decoding is bottlenecked by memory access when generating one token at a time, speculative decoding leverages a smaller "draft" model to predict next K tokens in one round, achieving up to K times speedup with similar memory usage.</p>
+<p>This doc is mainly focused on high level SGLang implementation for speculative decoding, For detailed theoretical background, please refer to the original research papers:
+- <a href="https://arxiv.org/pdf/2211.17192">Accelerating Large Language Model Decoding with Speculative Sampling</a>
+- <a href="https://arxiv.org/pdf/2302.01318">Fast Inference from Transformers via Speculative Decoding</a></p>
+<h3 id="token-generation-process">Token Generation Process</h3>
+<h4 id="traditional-decoding">Traditional Decoding</h4>
+<p><img alt="Without Speculative Decoding" src="../../../../vendor/notes/ml-sys-tutorial/sglang/speculative-decoding/withoutSpec.png"></p>
+<p>Traditional decoding consists of two main stages:
+1. <strong>Prefill/Extend</strong>: Performs forward pass on the prefill tokens.
+2. <strong>Decode</strong>: Performs forward pass on the current token to generate the next token.</p>
+<h4 id="speculative-decoding_1">Speculative Decoding</h4>
+<p>Speculative decoding introduces a draft model to generate multiple tokens in parallel:
+<img alt="With Speculative Decoding 1" src="../../../../vendor/notes/ml-sys-tutorial/sglang/speculative-decoding/withSpec1.png"></p>
+<p>Compare to traditional decode stage, in speculative decode, it includes:
+1. <strong>Draft Prefill/Extend</strong>: Performs forward pass on prefill tokens using the draft model.
+2. <strong>Draft Decoding</strong>: Generates N draft tokens sequentially using the draft model.</p>
+<p><img alt="With Speculative Decoding 2" src="../../../../vendor/notes/ml-sys-tutorial/sglang/speculative-decoding/withSpec2.png"></p>
+<ol start="3">
+<li><strong>Target Verification</strong>: The target model verifies N draft tokens through a forward pass. There are three possible cases for verification:</li>
+</ol>
+<p>a. <strong>Full Match</strong>: All N draft tokens are accepted by the target model
+      - Best case scenario
+      - Returns N tokens in one round
+      - Achieves N times speedup</p>
+<p>b. <strong>No Match</strong>: None of the draft tokens are accepted
+      - Worst case scenario
+      - Returns only one token from the target model
+      - Performance equivalent to traditional decoding</p>
+<p>c. <strong>Prefix Match</strong>: Some initial draft tokens are accepted
+      - Most common scenario
+      - For example in above graph, draft tokens are "and it's so hot" and target model generates "and it's very warm", first two tokens ("and it's") are accepted, the rest are rejected, note the rejected tokens' KV cache need to be evicted.
+      - Partial speedup achieved based on number of accepted tokens</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/speculative-decoding/speculative-decoding.md">sglang/speculative-decoding/speculative-decoding.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

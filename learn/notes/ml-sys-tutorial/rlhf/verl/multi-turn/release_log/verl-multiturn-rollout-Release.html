@@ -1,0 +1,234 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SGLang, verl, OpenBMB and Tsinghua University: Pioneering End-to-End Multi-Turn RLHF</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/release_log/verl-multiturn-rollout-Release.md</div>
+<article class="note"><h1 id="sglang-verl-openbmb-and-tsinghua-university-pioneering-end-to-end-multi-turn-rlhf">SGLang, verl, OpenBMB and Tsinghua University: Pioneering End-to-End Multi-Turn RLHF</h1>
+<p>by: The SGLang Team, May 12, 2025</p>
+<p>We are thrilled to announce the release of the first fully functional, convergence-verified, end-to-end open source multi-turn Reinforcement Learning with Human Feedback (RLHF) framework, powered by SGLang and integrated with verl. This framework has been successfully integrated into the verl platform and is now open for use, providing a novel solution for Agentic reinforcement learning training.</p>
+<p>After two months of intense development and a final five-day sprint, our team has delivered a robust solution that enables asynchronous multi-turn dialogues and tool-calling in Agentic RL. This release marks a significant step forward in scalable RLHF for large language models.</p>
+<p>Pull Request: <a href="https://github.com/volcengine/verl/pull/1037">volcengine/verl#1037</a></p>
+<p>Training performance (Used multi-turn on GSM8K tasks with Qwen2.5-3B-Instruct, GRPO policy, FSDP+TP hybrid parallelism, tool-calling enabled, and 256 batch size on 8×H100 GPUs): https://wandb.ai/swordfaith/gsm8k_async_rl/runs/0pv3qwcy?nw=nwuserswordfaith</p>
+<h2 id="what-problem-we-solved">What Problem We Solved?</h2>
+<p>Multi-turn RLHF is critical for training language models to handle complex and interactive dialogues, such as coding tasks, where the outputs of the generated scripts are needed as feedback for the next generation. However, existing frameworks lacked multi-turn rollout support, with a standardized tool calling method.</p>
+<p>Our goals are：</p>
+<ul>
+<li>Support asynchronous multi-turn interactions with high efficiency.  </li>
+<li>Integrate tool-calling into RLHF workflows in an easily-extensible style.  </li>
+<li>Prove our training performance on complex, multi-turn suitable tasks.  </li>
+<li>Operate reliably in large-scale, distributed environments.  </li>
+</ul>
+<h2 id="our-solution">Our Solution</h2>
+<ol>
+<li><strong>From Batch-Level to Request-Level Rollout</strong> : We extended verl's rollout interface to support asynchronous, per-request multi-turn interactions, where each dialogue can independently span multiple rounds and tool calls, decoupling from the batch structure.</li>
+<li><strong>Generalized Tool Calling with Unified Schema</strong>: We support <code>OpenAIFunctionToolSchema</code>, convertible with verl's Model Context Protocol / Agent2Agent Protocol. This allows seamless tool integration across both training and inference workflows.</li>
+<li><strong>Parameter Injection Mechanism</strong>: Users can dynamically select tools during sampling (e.g., via <code>need_tools_kwargs</code>) and inject call parameters (<code>tool_kwargs</code>), streamlining tool integration.</li>
+<li><strong>GRPO Policy Gradient</strong>: We adopt the GRPO strategy (<code>adv_estimator = grpo</code>) for stable reward propagation over multi-turn sequences.</li>
+</ol>
+<h2 id="how-to-use-it">How to Use It</h2>
+<h3 id="environment-setup">Environment Setup</h3>
+<h4 id="create-a-new-docker-container">Create a New Docker Container</h4>
+<pre><code class="language-bash">docker run \
+    -it \
+    --shm-size 32g \
+    --gpus all \
+    -v /models/shared/.cache:/root/.cache \
+    --ipc=host \
+    --network=host \
+    --privileged \
+    --name sglang_{your-name} \
+    lmsysorg/sglang:dev \
+    /bin/zsh
+</code></pre>
+<p>To restart the container after exiting from it:</p>
+<pre><code class="language-bash">docker start -i sglang_{your-name}
+</code></pre>
+<h4 id="update-python">Update Python</h4>
+<pre><code class="language-bash">apt update
+apt install -y python3.10 python3.10-venv
+python3 -m ensurepip --upgrade
+</code></pre>
+<h4 id="use-python-virtual-environment">Use Python Virtual Environment</h4>
+<pre><code class="language-bash"># Create a virtual environment
+python3 -m venv ~/.python/verl-multiturn-rollout
+
+# Activate the virtual environment
+source ~/.python/verl-multiturn-rollout/bin/activate
+
+# Install uv
+python3 -m pip install uv
+</code></pre>
+<h4 id="clone-the-verl-main-repository">Clone the verl Main Repository</h4>
+<pre><code class="language-bash">cd ~
+git clone https://github.com/volcengine/verl.git
+cd verl
+</code></pre>
+<h4 id="set-up-the-python-environment">Set Up the Python Environment</h4>
+<pre><code class="language-bash"># Install SGLang
+python3 -m uv pip install -e &quot;.[sglang]&quot;
+
+# Manually install flash-attn
+python3 -m uv pip install wheel
+python3 -m uv pip install packaging
+python3 -m uv pip install flash-attn --no-build-isolation --no-deps
+
+# Install verl
+python3 -m uv pip install .
+python3 -m uv pip install -r ./requirements.txt
+</code></pre>
+<h3 id="8-gpu-sglang-test">8-GPU SGLang Test</h3>
+<h4 id="set-up-your-wandb_api_key-before-running">Set Up Your <code>WANDB_API_KEY</code> Before Running</h4>
+<p>Refer to <a href="https://community.wandb.ai/t/where-can-i-find-the-api-token-for-my-project/7914">this guide</a> if you're not sure where to find your API token.</p>
+<pre><code class="language-bash">export WANDB_API_KEY={YOUR_WANDB_API_KEY}
+
+# Define a timestamp function
+function now() {
+    date '+%Y-%m-%d-%H-%M'
+}
+</code></pre>
+<h4 id="download-the-dataset">Download the Dataset</h4>
+<pre><code class="language-bash">python3 ./examples/data_preprocess/gsm8k_multiturn_w_tool.py
+</code></pre>
+<h4 id="run">Run</h4>
+<pre><code class="language-bash"># First make sure the now() function is available in current shell
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
+# Set GPUs and run with better log organization
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+nohup bash examples/sglang_multiturn/run_qwen2.5-3b_gsm8k_multiturn.sh trainer.experiment_name=qwen2.5-3b_rm-gsm8k-sgl-multiturn-$(now) &gt; logs/gsm8k-$(now).log 2&gt;&amp;1 &amp;
+</code></pre>
+<h3 id="configurations">Configurations</h3>
+<h4 id="basic-configuration">Basic Configuration</h4>
+<p>To enable multi-turn rollout, make sure to configure the following fields in your rollout configuration:</p>
+<pre><code class="language-yaml">actor_rollout_ref:
+  rollout:
+    name: &quot;sglang_async&quot;
+    multi_turn:
+      enable: True
+</code></pre>
+<p>This configuration activates the AsyncSGLangRollout engine for multi-turn interaction during rollout.</p>
+<h4 id="custom-tool-configuration">Custom Tool Configuration</h4>
+<p>Tools are a critical component of our framework, which enables environment interactions, such as executing scripts, querying APIs, or calculating rewards. To integrate custom tools, you can define their behavior in a separate YAML file and reference it in the rollout configuration. To integrate a tool, follow these steps:</p>
+<h5 id="1-define-tool-logic-in-python">1. <strong>Define Tool Logic in Python</strong></h5>
+<p>Each tool must subclass <code>BaseTool</code>, and implement:</p>
+<ul>
+<li><code>create(instance_id, ...)</code>: Initialize tool state per rollout, can be skipped if the tool does not need to maintain state.</li>
+<li><code>execute(instance_id, parameters, ...)</code>: Perform the tool's core functionality (e.g. evaluate output, call APIs, do search, run code interpreter, etc.), the tool's response will be appended to the message history, and will support returning a step reward and tool metrics in future.</li>
+<li><code>calc_reward(instance_id)</code>: Compute the reward based on tool state and interaction.</li>
+<li><code>release(instance_id)</code>: Clean up any allocated resources, can be skipped if the tool does not need to maintain state.</li>
+</ul>
+<h5 id="2-describe-the-tool-in-yaml">2. <strong>Describe the Tool in YAML</strong></h5>
+<p>You must provide a schema for each tool using OpenAI's <code>function</code> calling format, including name, description, parameters, and types. The YAML file is then referenced in the rollout config.</p>
+<pre><code class="language-yaml">actor_rollout_ref:
+  rollout:
+    multi_turn:
+      tool_config_path: &lt;path_to_tool_yaml_file&gt;
+      format: chatml
+</code></pre>
+<ul>
+<li><code>tool_config_path</code> : Path to a YAML file defining all tool schemas and associated Python classes.</li>
+<li><code>format</code> : Format for tool interaction messages (currently supports <code>chatml</code> only).</li>
+</ul>
+<p><img alt="Tool_Lifecycle_and_Request_State_Transaction" src="../../../../../../vendor/notes/ml-sys-tutorial/rlhf/verl/multi-turn/imgs/Tool_Lifecycle_and_Request_State_Transaction.png"></p>
+<h4 id="example-gsm8k-tool-configuration">Example: GSM8K Tool Configuration</h4>
+<p>To illustrate how to configure a tool, we provide an example based on the Gsm8kTool, designed for evaluating answers to GSM8K math problems to calculate rewards. The tool configuration is defined <a href="https://github.com/volcengine/verl/blob/main/examples/sglang_multiturn/config/tool_config/gsm8k_tool_config.yaml">here</a>.</p>
+<p>Breakdown of the Configuration:</p>
+<ul>
+<li><strong>class_name</strong>: Specifies the Python class implementing the tool's logic. The class must be accessible in the codebase.</li>
+<li><strong>config</strong>: An optional field for additional tool-specific configurations used in <code>__init__</code> method (e.g., API keys, model parameters).</li>
+<li><strong>tool_schema</strong>: Defines the tool's interface using a schema compatible with OpenAIFunctionToolSchema.</li>
+<li><strong>type: "function"</strong>: Indicates the tool is a function-based tool.</li>
+<li><strong>function.name</strong>: The tool's identifier (calc_gsm8k_reward), used during tool selection.</li>
+<li><strong>function.description</strong>: A human-readable description of the tool's purpose, which will be used in the model chat template.</li>
+<li><strong>function.parameters</strong>: Describes the input parameters the tool expects. The required field defines the mandatory parameters, also will be used in the model chat template.</li>
+</ul>
+<h4 id="how-tool-interactions-work">How Tool Interactions Work</h4>
+<p>During rollout:</p>
+<ol>
+<li>Preprocess <code>generate_sequences_with_tools</code> prompts with intersection of available tools and sample_level <code>tool_kwargs</code> to generate prompt with sample specific tools and handle prompts in message list way.</li>
+<li>The LLM generates a response containing a structured function call (tool invocation) based on the schema.</li>
+<li><code>AsyncSGLangRollout</code> uses a <code>FunctionCallParser</code> to detect and extract tool calls from the output.</li>
+<li>The rollout engine calls <code>tool.execute()</code> with parsed arguments.</li>
+<li>The tool may:
+   - Return a textual tool response, which will be appended to the message history with <code>tool</code> role.
+   - Return a step reward and tool metrics, which can be used to calculate the final reward and monitor tool performance.
+   - Update internal tool state</li>
+<li>The engine appends the tool response to the message history and continues the dialogue.</li>
+<li>After the full rollout, the tool's <code>calc_reward()</code> is called to compute final reward.</li>
+</ol>
+<p>With this plugin-style architecture, tools can be flexibly reused across tasks and agents without changing the core engine or rollout loop.</p>
+<p><img alt="Multi-Turn_Rollout_Workflow" src="../../../../../../vendor/notes/ml-sys-tutorial/rlhf/verl/multi-turn/imgs/Multi-Turn_Rollout_Workflow.png"></p>
+<h2 id="challenges-and-methods">Challenges and Methods</h2>
+<p>We share the technical challenges encountered during development and our current solutions, welcoming community collaboration to maintain and improve the framework:</p>
+<ul>
+<li>
+<p><strong>Multi-Turn Loss Masking</strong>: Most existing RLHF frameworks assume single-turn generation patterns and lack support for granular, token-level loss masking across multiple dialogue turns. However, in multi-turn settings—especially with tool interactions—not every generated token should contribute to the learning signal. For example, some tool-generated responses should be excluded from the optimization process. We addressed this by designing a custom multi-turn loss masking mechanism, allowing fine-grained control over which tokens are included in policy gradient updates, thereby ensuring accurate reward computation.</p>
+</li>
+<li>
+<p><strong>Generalized Tool API Design</strong>: The environment in RLHF training scenarios can be complex, requiring customized tools for agents to interact with the external world. To support flexible and reusable tool integration, we designed a generalized tool interface. This design enables users to register tools with their customized functions into the rollout process. By unifying tool definitions in a schema-driven format, we make our framework highly extensible to easily add tools and reuse them across tasks and models without much modification.</p>
+</li>
+<li>
+<p><strong>SPMD Conflicts in Tool Invocation</strong>: In tensor-parallel (TP) environments, invoking external tools—such as API calls, script evaluators, or reward calculators—must be controlled to avoid concurrency issues. A naive implementation may result in the same tool being called multiple times in parallel across TP ranks, causing inconsistencies or deadlocks. To avoid this, all tool invocations are restricted to TP rank 0, with results broadcast to other ranks. This avoids performance bottlenecks due to redundant calls.</p>
+</li>
+<li>
+<p><strong>Asynchronous Rollout for Multi-Turn Interactions</strong>: Synchronous rollouts often suffer from the long-tail problem, where the slowest sample in a batch delays the entire pipeline. This issue is especially prominent in multi-turn tasks involving variable-length dialogues and tool calls. To address this, we implemented asynchronous rollout at the request level, allowing each dialogue to progress independently.</p>
+</li>
+<li>
+<p><strong>Event Loop Conflicts in Asynchronous Execution</strong>: During testing, we encountered a problem: <code>async_generate</code> deadlocked. After extensive investigation, we found that the root cause was the existence of multiple concurrent event loops, violating Python's asyncio design. SGLang internally manages its own asynchronous event loop to coordinate token streaming, multi-turn interaction, and memory-efficient generation. We mistakenly added a second event loop, thus making the program stuck forever. Our fix ensures that all async execution happens within SGLang's own loop by running the existing loop instead of invoking asyncio.run() inside async_generate.</p>
+</li>
+</ul>
+<h2 id="acknowledgments">Acknowledgments</h2>
+<p>We extend our gratitude to over ten contributors from both China and the United States:</p>
+<ul>
+<li>ModelBest/OpenBMB</li>
+<li>Tsinghua University</li>
+<li>SGLang RLHF Team</li>
+<li>verl Team</li>
+</ul>
+<h2 id="our-work-plan">Our Work Plan</h2>
+<p>(Continuously updating, track <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/issues/131">Multi-turn rollout Status &amp; Roadmap</a> for latest status and plans.)</p>
+<p>With the initial version stabilized and training verified, we are now expanding the capabilities and real-world applicability of our multi-turn RLHF framework. Our next-phase goals include:</p>
+<h3 id="stage-1-completed">Stage 1 (Completed)</h3>
+<ul>
+<li>Transition from batch-level to request-level async rollout with tool interaction</li>
+<li>Support FSDP multi-turn with guaranteed training accuracy</li>
+</ul>
+<h3 id="stage-2-currently-in-progress">Stage 2 (Currently In Progress)</h3>
+<ul>
+<li>Add support for real-world tools, such as Search and Code Interpreter</li>
+<li>Provide Qwen3 training examples</li>
+<li>Integrate FSDP2 for more scalable memory-efficient training</li>
+<li>Support multi-node training</li>
+<li>Add initial support for Vision Language Models (VLM)</li>
+<li>Support Megatron backend</li>
+</ul>
+<h3 id="stage-3">Stage 3</h3>
+<ul>
+<li>Introduce a new Agentic Trainer that supports fully asynchronous loops: fetch → rollout → reward calculation → filter micro-batch</li>
+<li>Support partial rollout and replay buffer, enabling fine-grained asynchronization and concurrency</li>
+<li>Expand tool coverage and task variety</li>
+</ul>
+<h3 id="stage-4">Stage 4</h3>
+<ul>
+<li>Introduce user interaction simulation for real user feedback modeling</li>
+</ul>
+<h3 id="framework-refactor">Framework Refactor</h3>
+<ul>
+<li>Combine <code>sglang</code> and <code>sglang_async</code> rollout engines to unify the interface</li>
+</ul>
+<p>We actively welcome the community to collaborate with us to push forward the frontier of RLHF research and applications.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/release_log/verl-multiturn-rollout-Release.md">rlhf/verl/multi-turn/release_log/verl-multiturn-rollout-Release.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

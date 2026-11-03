@@ -13,7 +13,7 @@ Steps 1-4 build your coding foundations, Steps 5-18 cover GPU programming and AI
 
 The [3-Month Schedule](#3-month-schedule) below turns the plan into a week-by-week routine. For a web version with every item linked and progress tracking, open [index.html](./index.html) in a browser.
 
-**New: the [Interactive Notebook](./learn/index.html)** — 14 chapters covering the whole arc (math → deep learning → transformers → GPUs & kernels → quantization → inference systems → parallelism → training → Trainium/TPU → agents → system design) as readable pages with step-through animations, calculators, and a flashcard system with spaced repetition. It also vendors Meta's 3D matmul visualizer. Serve the repo with `python3 -m http.server` and open `learn/`, or browse it on GitHub Pages if enabled.
+**New: the [Interactive Notebook](./learn/index.html)** — 14 chapters covering the whole arc (math → deep learning → transformers → GPUs & kernels → quantization → inference systems → parallelism → training → Trainium/TPU → agents → system design) as readable pages with step-through animations, calculators, and a flashcard system with spaced repetition. It also vendors Meta's 3D matmul visualizer, Sebastian Raschka's LLM Architecture Gallery data (109 models), and a [notes library](./learn/notes.html) of four open-source note collections (Stas Bekman's ML Engineering book, the SGLang/slime/verl developers' RL-systems notes, an ML system design interview guide, and an AI-engineering Q&A bank), and ships a narrated [audio course](./learn/index.html#audio) generated offline with Kokoro. Serve the repo with `python3 -m http.server` and open `learn/`, or browse it on GitHub Pages if enabled.
 
 ## 3-Month Schedule
 

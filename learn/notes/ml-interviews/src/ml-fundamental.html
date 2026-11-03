@@ -1,0 +1,450 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>&lt;a name=&quot;breadth&quot;&gt;&lt;/a&gt; 3. ML Fundamentals (Breadth)</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/ml-fundamental.md</div>
+<article class="note"><h1 id="3-ml-fundamentals-breadth"><a name="breadth"></a> 3. ML Fundamentals (Breadth)</h1>
+<p>As the name suggests, this interview is intended to evaluate your general knowledge of ML concepts both from theoretical and practical perspectives. Unlike ML depth interviews, the breadth interviews tend to follow a pretty similar structure and coverage amongst different interviewers and interviewees.</p>
+<p>The best way to prepare for this interview is to review your notes from ML courses as well some high quality online courses and material. In particular, I found the following resources pretty helpful.</p>
+<h1 id="1-courses-and-review-material">1. Courses and review material:</h1>
+<ul>
+<li><a href="https://www.coursera.org/learn/machine-learning">Andrew Ng's Machine Learning Course</a> (you can also find the <a href="https://www.youtube.com/watch?v=PPLop4L2eGk&amp;list=PLLssT5z_DsK-h9vYZkQkYNWcItqhlRJLN">lectures on Youtube</a> )</li>
+<li><a href="https://www.coursera.org/learn/machine-learning-projects">Structuring Machine Learning Projects</a></li>
+<li><a href="https://www.udacity.com/course/deep-learning-nanodegree--nd101">Udacity's deep learning nanodegree</a> or  <a href="https://www.coursera.org/specializations/deep-learning">Coursera's Deep Learning Specialization</a> (for deep learning)</li>
+</ul>
+<p>If you already know the concepts, the following resources are pretty useful for a quick review of different concepts:
+- <a href="https://www.youtube.com/watch?v=Gv9_4yMHFhI&amp;list=PLblh5JKOoLUICTaGLRoHQDuF_7q2GfuJF">StatQuest Machine Learning videos</a>
+- <a href="https://www.youtube.com/watch?v=qBigTkBLU6g&amp;list=PLblh5JKOoLUK0FLuzwntyYI10UQFUhsY9">StatQuest Statistics</a> (for statistics review - most useful for Data Science roles)
+- <a href="https://ml-cheatsheet.readthedocs.io/en/latest/">Machine Learning cheatsheets</a>
+- <a href="https://machinelearningflashcards.com/">Chris Albon's ML falshcards</a></p>
+<h1 id="2-ml-fundamentals-topics">2. ML Fundamentals Topics</h1>
+<p>Below are the most important topics to cover:</p>
+<h2 id="1-classic-ml-concepts">1. Classic ML Concepts</h2>
+<h3 id="ml-algorithms-categories">ML Algorithms' Categories</h3>
+<ul>
+<li>Supervised, unsupervised, and semi-supervised learning (with examples)<ul>
+<li>Classification vs regression vs clustering</li>
+</ul>
+</li>
+<li>Parametric vs non-parametric algorithms</li>
+<li>Linear vs Nonlinear algorithms</li>
+</ul>
+<h3 id="supervised-learning">Supervised learning</h3>
+<ul>
+<li>
+<p>Linear Algorithms</p>
+<ul>
+<li>Linear regression</li>
+<li>least squares, residuals,  linear vs multivariate regression</li>
+<li>Logistic regression</li>
+<li>cost function (equation, code),  sigmoid function, cross entropy</li>
+<li>Support Vector Machines</li>
+<li>Linear discriminant analysis</li>
+</ul>
+</li>
+<li>
+<p>Decision Trees</p>
+<ul>
+<li>Logits</li>
+<li>Leaves</li>
+<li>Training algorithm</li>
+<li>stop criteria</li>
+<li>Inference</li>
+<li>Pruning</li>
+</ul>
+</li>
+<li>
+<p>Ensemble methods</p>
+<ul>
+<li>Bagging and boosting methods (with examples)</li>
+<li>Random Forest</li>
+<li>Boosting</li>
+<li>Adaboost</li>
+<li>GBM</li>
+<li>XGBoost</li>
+</ul>
+</li>
+<li>
+<p>Comparison of different algorithms</p>
+<ul>
+<li>[TBD: LinkedIn lecture]</li>
+</ul>
+</li>
+<li>
+<p>Optimization</p>
+<ul>
+<li>Gradient descent (concept, formula, code)</li>
+<li>Other variations of gradient descent</li>
+<li>SGD</li>
+<li>Momentum</li>
+<li>RMSprop</li>
+<li>ADAM</li>
+</ul>
+</li>
+<li>
+<p>Loss functions</p>
+<ul>
+<li>Logistic Loss function </li>
+<li>Cross Entropy (remember formula as well)</li>
+<li>Hinge loss (SVM)</li>
+</ul>
+</li>
+<li>
+<p>Feature selection</p>
+</li>
+<li>Feature importance</li>
+<li>Model evaluation and selection</li>
+<li>Evaluation metrics<ul>
+<li>TP, FP, TN, FN</li>
+<li>Confusion matrix</li>
+<li>Accuracy, precision, recall/sensitivity, specificity, F-score</li>
+<li>how do you choose among these? (imbalanced datasets)</li>
+<li>precision vs TPR (why precision)</li>
+<li>ROC curve (TPR vs FPR, threshold selection)</li>
+<li>AUC (model comparison)</li>
+<li>Extension of the above to multi-class (n-ary) classification</li>
+<li>algorithm specific metrics [TBD]</li>
+</ul>
+</li>
+<li>Model selection<ul>
+<li>Cross validation</li>
+<li>k-fold cross validation (what's a good k value?)</li>
+</ul>
+</li>
+</ul>
+<h3 id="unsupervised-learning">Unsupervised learning</h3>
+<ul>
+<li>Clustering<ul>
+<li>Centroid models: k-means clustering</li>
+<li>Connectivity models: Hierarchical clustering</li>
+<li>Density models: DBSCAN</li>
+</ul>
+</li>
+<li>Gaussian Mixture Models</li>
+<li>Latent semantic analysis</li>
+<li>Hidden Markov Models (HMMs)<ul>
+<li>Markov processes</li>
+<li>Transition probability and emission probability</li>
+<li>Viterbi algorithm [Advanced]</li>
+</ul>
+</li>
+<li>Dimension reduction techniques<ul>
+<li>Principal Component Analysis (PCA)</li>
+<li>Independent Component Analysis (ICA)</li>
+<li>T-sne</li>
+</ul>
+</li>
+</ul>
+<h3 id="bias-variance-underfittingoverfitting">Bias / Variance (Underfitting/Overfitting)</h3>
+<ul>
+<li>Regularization techniques</li>
+<li>L1/L2 (Lasso/Ridge)</li>
+</ul>
+<h3 id="sampling">Sampling</h3>
+<ul>
+<li>sampling techniques</li>
+<li>Uniform sampling</li>
+<li>Reservoir sampling</li>
+<li>Stratified sampling</li>
+</ul>
+<h3 id="handling-data">Handling  data</h3>
+<ul>
+<li>Missing data </li>
+<li>Imbalanced data </li>
+<li>Data distribution shifts </li>
+</ul>
+<h3 id="computational-complexity-of-ml-algorithms">Computational complexity of ML algorithms</h3>
+<ul>
+<li>[TBD]</li>
+</ul>
+<h2 id="2-deep-learning">2. Deep learning</h2>
+<ul>
+<li>Feedforward NNs</li>
+<li>In depth knowledge of how they work</li>
+<li>[EX] activation function for classes that are not mutually exclusive</li>
+<li>RNN</li>
+<li>backpropagation through time (BPTT)</li>
+<li>vanishing/exploding gradient problem</li>
+<li>LSTM</li>
+<li>vanishing/exploding gradient problem</li>
+<li>gradient?</li>
+<li>Dropout</li>
+<li>how to apply dropout to LSTM?</li>
+<li>Seq2seq models</li>
+<li>Attention</li>
+<li>self-attention</li>
+<li>
+<ul>
+<li>Transformer architecture (in details, no kidding!)</li>
+</ul>
+</li>
+<li><a href="http://jalammar.github.io/illustrated-transformer/">Illustrated transformer</a> </li>
+<li>Embeddings (word embeddings)</li>
+</ul>
+<h2 id="3-statistical-ml">3. Statistical ML</h2>
+<h3 id="bayesian-algorithms">Bayesian algorithms</h3>
+<ul>
+<li>Naive Bayes</li>
+<li>Maximum a posteriori (MAP) estimation</li>
+<li>Maximum Likelihood (ML) estimation</li>
+</ul>
+<h3 id="statistical-significance">Statistical significance</h3>
+<ul>
+<li>R-squared</li>
+<li>P-values</li>
+</ul>
+<h2 id="4-other-topics">4. Other topics:</h2>
+<ul>
+<li>Outliers</li>
+<li>Similarity/dissimilarity metrics<ul>
+<li>Euclidean, Manhattan, Cosine, Mahalanobis (advanced)</li>
+</ul>
+</li>
+</ul>
+<h2 id="5-foundation-models-large-language-models-llms">5. Foundation Models &amp; Large Language Models (LLMs)</h2>
+<blockquote>
+<p>The biggest shift in 2026 ML interviews: LLMs / foundation models are now expected <strong>breadth</strong>, not a specialty. Below are the core concepts interviewers probe. For end-to-end GenAI <strong>system design</strong> (RAG, agents, serving), see <a href="../src/MLSD/ml-system-design.html">Chapter 4</a> and the <a href="https://github.com/alirezadir/Agentic-AI-Systems.git">Agentic AI Systems repo</a>.</p>
+</blockquote>
+<h3 id="transformer-llm-internals">Transformer &amp; LLM internals</h3>
+<ul>
+<li>Self-attention recap: scaled dot-product attention, <strong>why scale by √dₖ</strong> (keeps softmax out of saturation → stable gradients), multi-head attention</li>
+<li>Attention variants (memory / throughput tradeoffs): <strong>MHA → MQA (multi-query) → GQA (grouped-query) → MLA (multi-head latent, DeepSeek)</strong></li>
+<li>Positional encodings: absolute / learned, <strong>RoPE</strong> (rotary), ALiBi; long-context extension (position interpolation, YaRN)</li>
+<li><strong>KV cache</strong>: caches per-layer keys/values so each new token is O(n) instead of recomputing O(n²); dominates memory at long context × large batch</li>
+<li><strong>FlashAttention</strong> (IO-aware, tiled attention in SRAM) — why long-context training became practical</li>
+<li>Block internals: pre-norm vs post-norm, <strong>RMSNorm</strong>, <strong>SwiGLU / GeGLU</strong> activations</li>
+<li><strong>Mixture-of-Experts (MoE)</strong>: sparse expert routing, load balancing, active vs total params (Mixtral, DeepSeek-V3)</li>
+<li>Tokenization: <strong>BPE / byte-level BPE / SentencePiece</strong>, vocab size, context window</li>
+<li>Scaling laws (Chinchilla compute-optimal), emergent abilities</li>
+</ul>
+<h3 id="training-pipeline-pretraining-post-training">Training pipeline (pretraining → post-training)</h3>
+<ol>
+<li><strong>Pretraining</strong> — self-supervised next-token prediction on web-scale corpora</li>
+<li><strong>SFT / instruction tuning</strong> — supervised on (prompt → response) demonstrations</li>
+<li><strong>Preference alignment (RLHF &amp; alternatives)</strong> — align to human preferences &amp; safety</li>
+<li><strong>Reasoning RL</strong> — verifiable-reward RL for chain-of-thought reasoning models (o-series, DeepSeek-R1)</li>
+</ol>
+<h3 id="post-training-sft-rl-alignment-algorithms-2026">Post-training: SFT &amp; RL / alignment algorithms (2026)</h3>
+<p>A central 2026 interview theme is <strong>picking the right post-training method for your data &amp; compute</strong>. Modern stacks <em>layer</em> them (SFT → preference optimization → RL) rather than using one monolithic method.</p>
+<table>
+<thead>
+<tr>
+<th>Algorithm</th>
+<th>Data required</th>
+<th>Extra models needed</th>
+<th>Rel. cost</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>SFT</strong></td>
+<td>Curated instruction (prompt→response) demos</td>
+<td>none</td>
+<td>low</td>
+<td>Teach format / instruction-following (always first)</td>
+</tr>
+<tr>
+<td><strong>RLHF (PPO)</strong></td>
+<td>Human preference labels</td>
+<td>reward model + critic/value + reference</td>
+<td>high</td>
+<td>Classic; mostly displaced by simpler methods</td>
+</tr>
+<tr>
+<td><strong>DPO</strong></td>
+<td>Preference <strong>pairs</strong> (chosen vs rejected)</td>
+<td>reference model</td>
+<td>medium</td>
+<td>Default offline alignment; trains like SFT, no RL loop</td>
+</tr>
+<tr>
+<td><strong>SimPO</strong></td>
+<td>Preference pairs</td>
+<td>none (reference-free)</td>
+<td>med-low</td>
+<td>DPO without a reference model (avg-logprob implicit reward)</td>
+</tr>
+<tr>
+<td><strong>KTO</strong></td>
+<td><strong>Binary</strong> thumbs up/down (no pairs)</td>
+<td>none</td>
+<td>low</td>
+<td>Cheap / noisy feedback; only unpaired signal available</td>
+</tr>
+<tr>
+<td><strong>ORPO</strong></td>
+<td>Instruction demos only</td>
+<td>none</td>
+<td>low</td>
+<td>Merge SFT + preference tuning into one stage</td>
+</tr>
+<tr>
+<td><strong>GRPO</strong></td>
+<td>Prompts only (sample a <strong>group</strong> of responses, group-relative advantage)</td>
+<td>none (no critic)</td>
+<td>medium</td>
+<td>RL without a value net; reasoning / math (DeepSeek)</td>
+</tr>
+<tr>
+<td><strong>RLVR</strong></td>
+<td>Tasks with <strong>verifiable</strong> reward (unit tests, math answer, valid JSON)</td>
+<td>automated verifier</td>
+<td>medium</td>
+<td>Code / math / tool-use where correctness is checkable</td>
+</tr>
+</tbody>
+</table>
+<p>Key talking points: DPO collapses the reward model + RL loop into a single supervised loss on pairs; <strong>GRPO drops the critic</strong> (group-normalized rewards → lower memory than PPO); <strong>GRPO / RLVR power reasoning models</strong>; algorithm rankings are <strong>scale-dependent</strong> (online RL can win at ~1.5B while SimPO can win at ~7B). Also know DAPO (stabilizing long chain-of-thought RL) and RLAIF (AI feedback in place of human labels).</p>
+<h3 id="parameter-efficient-fine-tuning-peft">Parameter-efficient fine-tuning (PEFT)</h3>
+<ul>
+<li>Full fine-tune vs PEFT tradeoffs (compute, storage, catastrophic forgetting)</li>
+<li><strong>LoRA / QLoRA</strong> (low-rank adapters; QLoRA fine-tunes on a quantized base), adapters, prefix / prompt tuning</li>
+<li>Key hyperparameters: LoRA rank / α, learning rate, epochs, batch size</li>
+</ul>
+<h3 id="inference-serving-optimization">Inference &amp; serving optimization</h3>
+<ul>
+<li><strong>Quantization</strong>: PTQ vs QAT; INT8 / INT4 (GPTQ, AWQ), <strong>FP8</strong>, <strong>KV-cache quantization</strong> (KV can exceed weights at long context)</li>
+<li><strong>Paged attention / continuous batching</strong> (vLLM), prefix caching</li>
+<li><strong>Speculative decoding</strong> (draft + verify), distillation, <strong>MoE</strong> for sparse compute</li>
+<li>Parallelism: tensor / pipeline / sequence; prefill vs decode phases</li>
+</ul>
+<h3 id="decoding-in-context-learning">Decoding &amp; in-context learning</h3>
+<ul>
+<li>Decoding: greedy, beam, <strong>temperature, top-k, top-p (nucleus)</strong>, repetition penalty; structured / constrained decoding (JSON / grammar)</li>
+<li>In-context learning: zero / few-shot, <strong>chain-of-thought</strong>, self-consistency; <strong>test-time compute / inference-time scaling</strong> (reasoning models)</li>
+<li>Adding knowledge: <strong>RAG vs long-context vs fine-tuning</strong> (tradeoffs)</li>
+</ul>
+<h3 id="generative-model-evaluation-2026-eval-is-the-new-system-design">Generative model evaluation (2026: <em>"eval is the new system design"</em>)</h3>
+<ul>
+<li>Why classic metrics fail for open-ended generation; <strong>hallucination</strong> &amp; calibration</li>
+<li><strong>RAG triad</strong> (RAGAS): faithfulness, answer relevance, context relevance; retrieval metrics (recall@k, MRR, nDCG)</li>
+<li><strong>LLM-as-judge</strong>, pairwise win-rate / Arena (Elo), golden sets &amp; regression testing</li>
+<li>Agent metrics: tool-selection quality, task / step success, trajectory adherence</li>
+<li>Benchmarks (MMLU, GPQA, SWE-bench, …); safety / red-teaming, jailbreak robustness</li>
+</ul>
+<h2 id="6-multimodal-generative-ai">6. Multimodal &amp; Generative AI</h2>
+<h3 id="multimodal-foundation-models-fms">Multimodal foundation models (FMs)</h3>
+<ul>
+<li>Idea: a shared representation across modalities (text, image, audio, video, action)</li>
+<li><strong>Fusion approaches</strong>: contrastive dual-encoder (<strong>CLIP / SigLIP</strong>); projection / adapter into LLM token space (<strong>LLaVA</strong>); cross-attention (Flamingo); early vs late fusion; native / "omni" any-to-any (GPT-4o, Gemini)</li>
+<li>Unified understanding <strong>and</strong> generation; image / audio tokenizers (VQ-VAE) for autoregressive generation</li>
+</ul>
+<h3 id="vision-language-models-vlms">Vision-Language Models (VLMs)</h3>
+<ul>
+<li>Architecture: <strong>vision encoder (ViT / SigLIP / DINOv2) → projector → LLM</strong></li>
+<li>Tasks: VQA, captioning, <strong>OCR / document understanding</strong>, grounding / detection, chart / UI understanding</li>
+<li>Examples: GPT-4o, Gemini, Claude, Qwen-VL, <strong>LLaVA</strong>, <strong>PaliGemma</strong>, InternVL</li>
+<li>Training: image-text pretraining + visual instruction tuning</li>
+</ul>
+<h3 id="vision-language-action-models-vlas">Vision-Language-Action models (VLAs)</h3>
+<ul>
+<li>VLMs extended to <strong>embodied / robotic control</strong> — perceive → understand instruction → output actions, often in a single forward pass</li>
+<li>Action representation: <strong>discrete action tokens</strong> (RT-2, OpenVLA) vs <strong>continuous via diffusion / flow-matching action heads</strong> (π0)</li>
+<li>Examples:</li>
+<li><strong>RT-2</strong> (Google DeepMind) — built on PaLI-X / PaLM-E VLMs; transfers web knowledge + chain-of-thought to robot control</li>
+<li><strong>OpenVLA</strong> — 7B, open; DINOv2 + SigLIP vision + Llama-2; trained on 970k real demos; beats RT-2-X (55B) with ~7× fewer params</li>
+<li><strong>π0 (Pi-Zero)</strong> — PaliGemma VLM + <strong>flow-matching</strong> action expert; ~50 Hz high-frequency dexterous control</li>
+<li>Use cases: robot manipulation, humanoids, generalist robot policies; data from teleop demos + Open X-Embodiment</li>
+</ul>
+<h3 id="diffusion-vs-autoregressive-generation">Diffusion vs autoregressive generation</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><strong>Autoregressive (AR)</strong></th>
+<th><strong>Diffusion</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>How</td>
+<td>predict next token sequentially</td>
+<td>iterative denoising from noise</td>
+</tr>
+<tr>
+<td>Likelihood</td>
+<td>exact</td>
+<td>variational / score-based</td>
+</tr>
+<tr>
+<td>Strength</td>
+<td>discrete sequences, variable length, reasoning</td>
+<td>continuous high-dim (image / video / audio), high fidelity</td>
+</tr>
+<tr>
+<td>Speed</td>
+<td>1 forward / token (KV-cache helps)</td>
+<td>many denoising steps (cut via distillation / consistency / <strong>flow matching</strong>)</td>
+</tr>
+<tr>
+<td>Examples</td>
+<td>text (GPT), image tokens (Parti, VAR), audio (AudioLM)</td>
+<td>image (Stable Diffusion, Imagen), <strong>video (Sora, Veo — DiT)</strong>, audio / music (Stable Audio), robot actions (π0)</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Diffusion deep-dive</strong>: forward / reverse process (DDPM), score / noise prediction, <strong>latent diffusion</strong> (Stable Diffusion), <strong>DiT</strong> (diffusion transformers, used for video), <strong>classifier-free guidance</strong>, fast samplers (DDIM), <strong>flow matching / rectified flow</strong> (SD3, π0)</li>
+<li><strong>AR deep-dive</strong>: discretize a modality into tokens → next-token prediction; enables unified token-based multimodal models; image AR (next-scale prediction / VAR), audio (AudioLM / MusicGen)</li>
+<li>Emerging: <strong>text diffusion / masked diffusion LMs</strong>; consistency &amp; few-step models; unified AR + diffusion stacks</li>
+</ul>
+<h1 id="3-ml-fundamentals-sample-questions">3. ML Fundamentals Sample Questions</h1>
+<ul>
+<li>What is machine learning and how does it differ from traditional programming?</li>
+<li>What are different types of machine learning techniques?</li>
+<li>What is the difference between supervised and unsupervised learning?</li>
+<li>What is semi-supervised learning?</li>
+<li>What are stages of building machine learning models?</li>
+<li>Can you explain the bias-variance trade-off in machine learning?</li>
+<li>What is overfitting and how do you prevent it?</li>
+<li>Why and how do you split data into train, test, and validation set?</li>
+<li>What is cross-validation and why is it important?</li>
+<li>Can you explain the concept of regularization and its types (L1, L2, etc.)? </li>
+<li>How Do You Handle Missing or Corrupted Data in a Dataset</li>
+<li>What is a decision tree and how does it work?</li>
+<li>Can you explain logistic regression?</li>
+<li>Can you explain the K-Nearest Neighbors (KNN) algorithm?</li>
+<li>Compare K-means and KNN algorithms.</li>
+<li>Explain decision-tree based algorithms (random forest, GBDT)</li>
+<li>What is gradient descent and how does it work?</li>
+<li>Can you explain the support vector machine (SVM) algorithm? what is Kernel SVM?</li>
+<li>Can you explain neural networks and how they work?</li>
+<li>What is deep learning and how does it differ from traditional machine learning?</li>
+<li>Can you explain the backpropagation algorithm and its role in training neural networks?</li>
+<li>What is a convolutional neural network (CNN) and how does it work?</li>
+<li>What is transfer learning and how is it used in practice?</li>
+<li><a href="https://www.simplilearn.com/tutorials/machine-learning-tutorial/machine-learning-interview-questions">45 ML interview questions</a></li>
+</ul>
+<h3 id="llm-genai-multimodal-sample-questions-2026">LLM / GenAI / Multimodal sample questions (2026)</h3>
+<ul>
+<li>Walk through a transformer block. Why divide attention scores by √dₖ?</li>
+<li>What is the KV cache and why does it matter for inference? How does its memory scale?</li>
+<li>Compare MHA, MQA, and GQA. Why did Llama adopt GQA?</li>
+<li>What is RoPE and why are rotary embeddings preferred over learned positional embeddings?</li>
+<li>When would you choose RAG vs fine-tuning vs long-context? </li>
+<li>Compare SFT, DPO, GRPO, and RLVR — data requirements, what extra models each needs, and when to use each.</li>
+<li>Why does GRPO drop the critic network, and how does it estimate advantage?</li>
+<li>What is LoRA / QLoRA and when would you use PEFT over full fine-tuning?</li>
+<li>Explain quantization (INT8/INT4, FP8) and KV-cache quantization. What's the accuracy/latency tradeoff?</li>
+<li>How does speculative decoding speed up generation?</li>
+<li>How do you evaluate an LLM / RAG system? What is the RAG triad and LLM-as-judge?</li>
+<li>How does a VLM combine a vision encoder with an LLM? (e.g., LLaVA / PaliGemma)</li>
+<li>What is a VLA model? Contrast discrete action tokens (RT-2, OpenVLA) vs flow-matching action heads (π0).</li>
+<li>Diffusion vs autoregressive generation — how do they differ and when is each used (image/video/audio/text)?</li>
+<li>What is classifier-free guidance? What is flow matching / rectified flow?</li>
+<li>What is a Mixture-of-Experts model? Distinguish active vs total parameters.</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/ml-fundamental.md">src/ml-fundamental.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

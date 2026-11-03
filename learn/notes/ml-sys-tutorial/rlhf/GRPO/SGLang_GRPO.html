@@ -1,0 +1,328 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GRPO</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/GRPO/SGLang_GRPO.md</div>
+<article class="note"><h1 id="grpo">GRPO</h1>
+<p>This is the dev-log from SGLang team to support GRPO in <a href="https://huggingface.co/docs/trl/index">TRL</a>. Group Relative Policy Optimization (GRPO),  a variant of Proximal Policy Optimization (PPO), enhances mathematical reasoning abilities while concurrently optimizing the memory usage of PPO. This doc will first introduce how GRPO works and then show how we add SGLang as an alternative inference backend for TRL, specifically the <a href="https://huggingface.co/docs/trl/main/en/grpo_trainer">GRPO Trainer</a>, which also functions in the <a href="https://github.com/huggingface/open-r1">Open-R1</a> project.</p>
+<h2 id="how-grpo-works">How GRPO works</h2>
+<p>Compared with PPO, GRPO doesn't have the <strong>value/critic model</strong> to estimate total value. The algorithm computes the normalized reward for each output to derive advantages and updates the <strong>reward model</strong> to enhance training performance. In the context of GRPO, the term "update" refers specifically to the parameter updates of the policy model using gradients computed from the loss function. This means each training iteration adjusts the model's weights to maximize the advantage while maintaining proximity to a reference policy.</p>
+<p>GRPO is composed of four steps:</p>
+<ul>
+<li>Generating completions</li>
+<li>Computing the advantage</li>
+<li>Estimating the KL divergence</li>
+<li>Computing the loss</li>
+</ul>
+<div align="center">
+<img src="./grpo-main.png" width="100%">
+</div>
+
+<h3 id="generating-completions">Generating completions</h3>
+<p>At each training step, we sample a batch of prompts and generate a set of $G$ completions for each prompt (denoted as $o_{i = 1, 2, ..., G}$).</p>
+<h3 id="computing-the-advantage">Computing the advantage</h3>
+<p>For each of the $G$ sequences, we compute the reward using a <strong>reward model</strong>. To align with the comparative nature of reward models—typically trained on datasets of comparisons between outputs for the same question—the advantage is calculated to reflect these relative comparisons. It is normalized as follows:</p>
+<p>$$\hat{A}_{i,t} = \frac{r_i - \text{mean}(r)}{\text{std}(r)}$$</p>
+<p>This approach gives the method its name: <strong>Group Relative Policy Optimization (GRPO)</strong>, since it uses the relative reward to compute the advantage.</p>
+<p>Hugging Face uses the above equation to compute advantages. In <a href="https://arxiv.org/abs/2402.03300">GRPO paper</a>, the author named it Outcome Supervision RL with GRPO. The author also found another method named Process Supervision RL with GRPO.</p>
+<p><strong>Supervision Reinforcement Learning (Supervision RL)</strong> combines traditional reinforcement learning with explicit guidance from labeled or structured data during training. It leverages direct supervision to enhance learning efficiency and model performance.</p>
+<p><strong>Process Supervision RL</strong> specifically uses intermediate step-wise rewards rather than evaluating only final outcomes. It provides detailed, step-by-step feedback to the model, thus facilitating fine-grained optimization of policy decisions at every generation step.</p>
+<p>We can also leverage the information in each step. Formally, given the question <em>q</em> and <em>G</em> sampled outputs {$o_1$, $o_2$, … , $o_G$}, a process reward model is R = {{$r_1^{index(1)}$, …, $r_1^{index(K_1)}$}, … , {$r_G^{index(1)}$, …, $r_G^{index(K_G)}$}}, where  $index(K_j)$ is the end token index of $K_j$-th completion.</p>
+<p>Normalize each reward:</p>
+<p>$$
+\tilde{r}_i^{index(j)} = \frac{r_i^{index(j)} - mean(R)}{std(R)}
+$$</p>
+<p>The advantages of each output in each step:</p>
+<p>$$
+\hat{A}<em index_j_geq="index(j)\geq" t>{i,t} = \sum</em>
+$$}\tilde r_i^{index(j)</p>
+<h3 id="estimating-the-kl-divergence">Estimating the KL divergence</h3>
+<p>KL divergence is estimated using the approximator, which is defined as follows:</p>
+<p>$$
+\mathrm{D}<em _theta="\theta">{\mathrm{KL}}[\pi</em> - 1
+$$}||\pi_{\mathrm{ref}}] = \frac{\pi_{\mathrm{ref}}(O_{i,t} \mid q, O_{i,&lt;t})}{\pi_{\theta}(O_{i,t} \mid q, O_{i,&lt;t})} - \log \frac{\pi_{\mathrm{ref}}(O_{i,t} \mid q, O_{i,&lt;t})}{\pi_{\theta}(O_{i,t} \mid q, O_{i,&lt;t})</p>
+<h2 id="computing-the-loss">Computing the loss</h2>
+<p>The objective is to <strong>maximize the advantage</strong> while ensuring that the model <strong>remains close to the reference policy</strong>. Consequently, the loss is defined as follows:</p>
+<p>$$
+\mathcal{L}<em i="1">{\text{GRPO}}(\theta) = -\frac{1}{G} \sum</em> \right]}^{G} \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \frac{\pi_{\theta}(O_{i,t} \mid q, O_{i,&lt;t})}{\pi_{\text{ref}}(O_{i,t} \mid q, O_{i,&lt;t})<em i_t="i,t">{\text{nograd}} \hat{A}</em>]
+$$} - \beta D_{\text{KL}}[\pi_{\theta} \parallel \pi_{\text{ref}</p>
+<ul>
+<li>the first term represents the scaled advantage</li>
+<li>the second term penalizes deviations from the reference policy through KL divergence.</li>
+</ul>
+<p>In the original paper, this formulation is generalized to account for multiple updates after each generation by leveraging the <strong>clipped surrogate objective</strong>:</p>
+<p>$$
+\mathcal{L}<em i="1">{\text{GRPO}}(\theta) = -\frac{1}{G} \sum</em>}^{G} \frac{1}{|o_i|} \sum_{t=1}^{|o_i|} \left[ \min \left( \frac{\pi_{\theta}(O_{i,t} \mid q, O_{i,&lt;t})}{\pi_{\text{old}}(O_{i,t} \mid q, O_{i,&lt;t})} \hat{A<em _theta="\theta">{i,t}, \mathrm{clip} \left( \frac{\pi</em>}(O_{i,t} \mid q, O_{i,&lt;t})}{\pi_{\text{old}}(O_{i,t} \mid q, O_{i,&lt;t})}, 1-\epsilon, 1+\epsilon \right) \hat{A<em _text_KL="\text{KL">{i,t} \right) \right] - \beta D</em>]
+$$}}[\pi_{\theta} \parallel \pi_{\text{ref}</p>
+<p>where $clip(⋅,1−\epsilon,1+\epsilon)$ ensures that updates stay close to the reference policy by keeping the policy ratio between $1−\epsilon$ and $1+\epsilon$. However, since TRL follows the original paper in performing only one update per generation, we can simplify the loss to the first form.</p>
+<h2 id="customized-grpo">Customized GRPO</h2>
+<p>To support GRPO in TRL, we need to customize the GRPO Trainer. First, we can take a look at how inference engines are used in the <a href="https://github.com/huggingface/trl/blob/main/trl/trainer/grpo_trainer.py">GRPO Trainer</a>.</p>
+<h3 id="conditional-setup-and-import">Conditional Setup and Import</h3>
+<p>The code conditionally imports vLLM modules and uses a configuration flag (<code>args.use_vllm</code>) to enable/disable vLLM's generation engine. This is controlled through the <code>self.use_vllm</code> flag in the trainer's constructor.</p>
+<h3 id="initialization-and-dedicated-gpu-selection">Initialization and Dedicated GPU Selection</h3>
+<ul>
+<li><strong>Dedicated Device Assignment</strong></li>
+</ul>
+<p>When <code>use_vllm</code> is True, the trainer (but only on the main process) determines a dedicated GPU for generation. For example:</p>
+<pre><code class="language-python">if self.accelerator.is_main_process:
+    vllm_device = self.args.vllm_device
+    if vllm_device == &quot;auto&quot;:
+        if torch.cuda.device_count() == 1:
+            vllm_device = &quot;cuda:0&quot;
+        else:
+            vllm_device = f&quot;cuda:{self.accelerator.num_processes}&quot;
+</code></pre>
+<p>This logic assigns one GPU (or a GPU outside of those used for training) exclusively for the vLLM generation task, thereby detaching generation work from the training GPUs.</p>
+<ul>
+<li><strong>Patching for Compatibility</strong></li>
+</ul>
+<p>Since vLLM isn't inherently designed to work with the distributed setup from <code>accelerate</code>, the code applies two patches:</p>
+<pre><code class="language-python">world_size_patch = patch(&quot;torch.distributed.get_world_size&quot;, return_value=1)
+profiling_patch = patch(&quot;vllm.worker.worker.Worker._assert_memory_footprint_increased_during_profiling&quot;, return_value=None)
+with world_size_patch, profiling_patch:
+    self.llm = LLM(
+        model=model.name_or_path,
+        device=vllm_device,
+        gpu_memory_utilization=self.args.vllm_gpu_memory_utilization,
+        dtype=self.args.vllm_dtype,
+        enable_prefix_caching=True,
+        max_model_len=self.args.vllm_max_model_len,
+    )
+self.sampling_params = SamplingParams(
+    temperature=args.temperature,
+    max_tokens=self.max_completion_length,
+)
+</code></pre>
+<p>These patches make sure that:</p>
+<ol>
+<li>The vLLM engine sees a <strong>"world size"</strong> of 1 (since it's running on a dedicated device).</li>
+<li>Certain profiling checks that aren't applicable in this setting are bypassed.</li>
+</ol>
+<ul>
+<li><strong>Synchronization</strong></li>
+</ul>
+<p>After setting up vLLM, the main process calls <code>self.accelerator.wait_for_everyone()</code> to ensure all processes are synchronized.When using vLLM, the main process is responsible for loading the model weights. This can cause process desynchronization and seems to lead to DeepSpeed hanging during initialization. To prevent this, this function ensures <strong>all processes are synchronized</strong> after the dedicated generation device is set up.</p>
+<h3 id="using-vllm-for-generation-during-training">Using vLLM for Generation During Training</h3>
+<ul>
+<li><strong>Moving Weights to vLLM</strong></li>
+</ul>
+<p>Before generating completions, the trainer calls <strong><code>_move_model_to_vllm(self)</code></strong>. This method extracts the model's state (merging adapters if needed) and loads the weights into the vLLM engine's GPU worker:</p>
+<pre><code class="language-python">if self.accelerator.is_main_process:
+    llm_model = self.llm.llm_engine.model_executor.driver_worker.model_runner.model
+    llm_model.load_weights(state_dict.items())
+</code></pre>
+<p>This transfer is key because vLLM is responsible for <strong>generating text</strong>, and its internal model must reflect <strong>the latest training weights</strong>.</p>
+<p>The method <code>llm_model.load_weights(state_dict.items())</code> is initially used to load model weights into vLLM during setup. Subsequent updates during training are also done by updating vLLM weights from disk.</p>
+<ul>
+<li><strong>Generation Workflow</strong></li>
+</ul>
+<p>In the <code>_prepare_inputs</code> method, when using vLLM:</p>
+<ol>
+<li>The main process gathers <strong>all prompt texts</strong> across GPUs.</li>
+<li>It then <strong>generates completions</strong> with <code>outputs = self.llm.generate(all_prompts_text, sampling_params=self.sampling_params, use_tqdm=False)</code>.</li>
+<li>The completions are <strong>extracted</strong>, and the results are <strong>broadcast</strong> to all processes so that every GPU gets its corresponding slice of generated text.</li>
+</ol>
+<ul>
+<li><strong>Detach Generation from Training</strong></li>
+</ul>
+<p>By detaching the generation task to a dedicated GPU placement group, the training GPUs remain fully occupied with gradient computations.</p>
+<h2 id="support-sglang-in-grpo-trainer">Support SGLang in GRPO Trainer</h2>
+<p>Here, we support SGLang as an inference backend alongside other inference engines in the <code>GRPOTrainer</code>. Unlike other inference engines—which run as an in-process engine using dedicated classes (e.g. <code>LLM</code>, <code>SamplingParams</code>) and requires patching of distributed methods—SGLang is deployed as a standalone server with HTTP endpoints (compatible with OpenAI's APIs). As a result, our integration leverages HTTP requests to manage weight updates and generate completions.</p>
+<p>To substitute other inference engines with <strong>SGLang</strong>, we must account for the differences in API and internal architecture. The following steps outline the necessary modifications:</p>
+<ul>
+<li>
+<p><strong>Checkpoint-based Updates</strong></p>
+<ul>
+<li>
+<p>Update the <code>GRPOConfig</code> by adding a <code>checkpoint_path</code> parameter.</p>
+</li>
+<li>
+<p>Write model checkpoints at regular intervals.</p>
+</li>
+<li>
+<p>Use the existing <code>/update_weights_from_disk</code> endpoint provided by the SGLang server.</p>
+</li>
+</ul>
+</li>
+</ul>
+<p>This approach avoids modifying SGLang’s internal initialization routines and leverages its existing, stable checkpoint-loading capabilities.</p>
+<h3 id="import-and-availability-check">Import and Availability Check</h3>
+<p>Instead of importing in-process engine classes for SGLang, we introduce a configuration flag (<code>use_sglang</code>) in our arguments (e.g., in <code>GRPOConfig</code>). This flag signals that generation should be offloaded to a SGLang server. Since SGLang is accessed via HTTP calls, there's no need to import objects like <code>SGLangEngine</code>. Instead, we ensure that the SGLang server is reachable (or launch it within our code) and then use helper utilities (from <code>sglang.utils</code>) to manage the server lifecycle.</p>
+<h3 id="initialization-on-a-dedicated-gpu">Initialization on a Dedicated GPU</h3>
+<ul>
+<li><strong>Server Launch and Device Assignment</strong></li>
+</ul>
+<p>Rather than creating an in-process generation engine, we launch the SGLang server as an external process on a dedicated GPU. For example, in the trainer's <code>__init__</code>, we added:</p>
+<pre><code class="language-python">if self.args.use_sglang:
+    # Assign a dedicated GPU for the SGLang server (e.g., &quot;cuda:1&quot;)
+    sglang_gpu_id = self.args.sglang_device.split(':')[-1]
+    sglang_command = (
+        f&quot;CUDA_VISIBLE_DEVICES={sglang_gpu_id} python -m sglang.launch_server &quot;
+        f&quot;--model-path {model_id} --host 0.0.0.0&quot;
+    )
+    from sglang.utils import launch_server_cmd, wait_for_server
+    self.server_process, port = launch_server_cmd(sglang_command)
+    wait_for_server(f&quot;http://localhost:{port}&quot;)
+    self.sglang_server_url = f&quot;http://localhost:{port}&quot;
+</code></pre>
+<p>This command dedicates one GPU exclusively for the SGLang server, which will handle all generation requests.</p>
+<ul>
+<li><strong>Process Synchronization</strong></li>
+</ul>
+<p>After launching the server, we call:</p>
+<pre><code class="language-python">self.accelerator.wait_for_everyone()
+</code></pre>
+<p>to ensure that all distributed processes are synchronized before proceeding.</p>
+<h3 id="generation-and-weight-synchronization">Generation and Weight Synchronization</h3>
+<ul>
+<li><strong>Weight Synchronization</strong></li>
+</ul>
+<p>SGLang offers several weight update strategies, each suited to a different deployment setting:</p>
+<p><strong>update_weights_from_distributed</strong> uses NCCL (NVIDIA Collective Communications Library) for high-performance GPU-to-GPU communication. It's ideal for fully distributed training setups across multiple nodes.</p>
+<p><strong>update_weights_from_tensor</strong>, in contrast, is designed for intra-node, cross-process updates. It’s particularly useful for inference servers like VerlEngine using HybridEngine. This method passes tensors via shared memory between CPU or GPU processes, and the receiving process directly copies them into model parameters. It does not rely on NCCL or HTTP. Instead, it uses pointer sharing and explicit copy operations. As a result, parameters are never transmitted over HTTP during updates. When migrating from veRL Engine to veRL Server, only lightweight metadata needs to be transferred. This minor overhead is a reasonable tradeoff for the greater flexibility that a server-based architecture provides.</p>
+<p>In vLLM, update weights are done in-process via a helper like <code>_move_model_to_vllm()</code>. For SGLang, weight updates occur externally through its HTTP API. For SGLang, weight updates occur externally. We implement a helper function <code>_update_sglang_weights()</code> that calls SGLang's /update_weights_from_tensor API to update the server's model state:</p>
+<ul>
+<li><strong>About SGLang update weights</strong></li>
+</ul>
+<p>The <code>_update_sglang_weights</code> function updates the model's weights on the SGLang server by serializing the model's parameters using MultiprocessingSerializer. It then sends the serialized tensors to the server via an HTTP POST request to the <code>/update_weights_from_tensor</code> endpoint. This method directly transfers tensors between processes and can optionally flush the cache after the update. The approach avoids disk-based checkpoints and relies on tensor communication for more efficient weight synchronization.</p>
+<p>This function:</p>
+<p>- Serializes model parameters using MultiprocessingSerializer.</p>
+<p>- Sends an HTTP POST request to SGLang's <code>/update_weights_from_tensor</code> API.</p>
+<p>- Flushes the cache after the update.</p>
+<pre><code class="language-python">def _update_sglang_weights(self):
+        &quot;&quot;&quot;
+        Update the model weights on the SGLang server via its tensor-based update API.
+        This function only be called in main_process.
+        &quot;&quot;&quot;
+        payload = {
+            &quot;serialized_named_tensors&quot;: [
+                MultiprocessingSerializer.serialize(list(self.model.named_parameters()), output_str=True)
+            ],
+            &quot;flush_cache&quot;: True, # flush cache after update weights
+        }
+        try:
+            response = requests.post(
+                f&quot;{self.sglang_server_url}/update_weights_from_tensor&quot;,
+                json=payload,
+                timeout=60,
+            )
+        except requests.RequestException as e:
+            raise RuntimeError(f&quot;Weight update request failed: {e}&quot;)
+        res_json = response.json()
+        if not res_json.get(&quot;success&quot;, False):
+            raise RuntimeError(
+                f&quot;Failed to update weights on SGLang server: {res_json.get('message', 'No message provided')}&quot;
+            )
+</code></pre>
+<ul>
+<li><strong>Generation Call</strong></li>
+</ul>
+<p>In the <code>_prepare_inputs()</code> method, we replace the in-process generation call with an HTTP request to SGLang's <code>/generate</code> endpoint:</p>
+<pre><code class="language-python">if self.use_sglang:
+    # Update weights if the training step has advanced.
+    if self.state.global_step != self._last_loaded_step:
+        self._update_sglang_weights()
+        self._last_loaded_step = self.state.global_step
+
+    # Gather all prompt texts from all processes.
+    all_prompts_text = gather_object(prompts_text)
+    if self.accelerator.is_main_process:
+        import requests
+        payload = {
+            &quot;text&quot;: all_prompts_text,
+            &quot;sampling_params&quot;: self.sglang_sampling_params,
+        }
+        response = requests.post(f&quot;{self.sglang_server_url}/generate&quot;, json=payload)
+        generated_texts = response.json().get(&quot;text&quot;, [])
+        completion_ids = [self.processing_class.encode(text) for text in generated_texts]
+    else:
+        completion_ids = [None] * len(all_prompts_text)
+
+    # Broadcast and slice the generated completions.
+    completion_ids = broadcast_object_list(completion_ids, from_process=0)
+    process_slice = slice(
+        self.accelerator.process_index * len(prompts),
+        (self.accelerator.process_index + 1) * len(prompts),
+    )
+    completion_ids = completion_ids[process_slice]
+    completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
+    completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+    prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+</code></pre>
+<ul>
+<li><strong>Broadcasting Results</strong></li>
+</ul>
+<p>We then broadcast the generated completions from the main process across all processes using <code>broadcast_object_list()</code> and slice the results according to each process's index.</p>
+<h3 id="api-and-integration-adjustments"><strong>API and Integration Adjustments</strong></h3>
+<ul>
+<li><strong>Parameter Differences</strong></li>
+</ul>
+<p>Since SGLang's API mimics OpenAI's endpoints, we pass sampling parameters as a <strong>JSON payload</strong> (e.g., <code>temperature</code>, <code>max_new_tokens</code>) to the <code>/generate</code> endpoint.</p>
+<ul>
+<li><strong>Error Handling and Device Checks</strong></li>
+</ul>
+<p>We update error messages and checks for SGLang without needing to patch distributed functions—since SGLang runs as an external service, it operates independently of the training environment.</p>
+<h3 id="overall-code-changes-recap"><strong>Overall Code Changes Recap</strong></h3>
+<ul>
+<li><strong>Backend Flags</strong></li>
+</ul>
+<p>Added <code>use_sglang</code> (and retained <code>use_vllm</code>) in configuration to let users choose the inference backend.</p>
+<ul>
+<li><strong>Server Initialization</strong></li>
+</ul>
+<p>In the <code>__init__</code> method, if <code>use_sglang</code> is True, launch the SGLang server on a dedicated GPU and set <code>self.sglang_server_url</code>.</p>
+<ul>
+<li><strong>Weight Updates</strong></li>
+</ul>
+<p>Implemented a robust <strong><code>_update_sglang_weights()</code></strong> function that ensures the SGLang server updates its model weights from the latest checkpoint, with error handling and cache flushing.</p>
+<ul>
+<li><strong>Generation Branch</strong></li>
+</ul>
+<p>Modified <strong><code>_prepare_inputs()</code></strong> to branch based on the selected backend:</p>
+<ul>
+<li><strong>SGLang Branch</strong></li>
+</ul>
+<p>Uses HTTP calls to SGLang's <code>/generate</code> endpoint, then converts returned texts to token IDs, broadcasts, and postprocesses.</p>
+<h3 id="testing-and-next-steps">Testing and Next Steps</h3>
+<ol>
+<li><strong>Test the SGLang Server</strong></li>
+</ol>
+<p>Ensure that the SGLang server launches correctly on the dedicated GPU and that its <code>/generate</code> and <code>/update_weights_from_disk</code> endpoints respond as expected.</p>
+<ol start="2">
+<li><strong>Integration Test</strong></li>
+</ol>
+<p>Run the modified GRPOTrainer on a small dataset and verify that:</p>
+<ul>
+<li>Weights are updated on the SGLang server when the training step advances.</li>
+<li>Generation results are correctly broadcast and postprocessed.</li>
+<li>The overall training loop runs without errors.</li>
+</ul>
+<h2 id="summary">Summary</h2>
+<p>To support SGLang in TRL, we:</p>
+<ol>
+<li>Introduce a configuration flag (e.g. use_sglang) and assign a dedicated GPU for the SGLang server.</li>
+<li>Launch the SGLang server externally using a command (with appropriate GPU assignment) and wait for it to initialize.</li>
+<li>Replace the in-process generation call in _prepare_inputs() with an HTTP POST to the SGLang /generate endpoint.</li>
+<li>Implement a helper to update model weights on the SGLang server via its /update_weights_from_disk API.</li>
+<li>Adjust parameter names, error handling, and synchronization logic to match SGLang's external server API.</li>
+</ol>
+<h1 id="references">References</h1>
+<ul>
+<li>SGLang Documentation – https://docs.sglang.ai/backend</li>
+<li>HuggingFace GRPO Trainer Documentation - https://huggingface.co/docs/trl/main/en/grpo_trainer</li>
+<li>Speeding Up Training - https://huggingface.co/docs/trl/main/en/speeding_up_training?vllm+examples=GRPO#vllm-for-fast-generation-in-online-methods</li>
+<li>GRPO Trainer in TRL - https://github.com/huggingface/trl/blob/main/trl/trainer/grpo_trainer.py</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/GRPO/SGLang_GRPO.md">rlhf/GRPO/SGLang_GRPO.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

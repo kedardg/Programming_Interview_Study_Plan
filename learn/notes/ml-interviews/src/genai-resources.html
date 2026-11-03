@@ -1,0 +1,51 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenAI Learning Resources</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/genai-resources.md</div>
+<article class="note"><h1 id="genai-learning-resources">GenAI Learning Resources</h1>
+<p>This page collects supplementary resources for the LLM, multimodal AI, RAG, agentic AI, and GenAI system-design topics covered in <a href="../src/ml-fundamental.html">ML Fundamentals</a> and <a href="../src/MLSD/ml-system-design.html">ML System Design</a>.</p>
+<h2 id="educativeio">Educative.io</h2>
+<p>Choose resources based on the gap you need to close rather than completing every course.</p>
+<h3 id="genai-and-llm-foundations">GenAI and LLM foundations</h3>
+<ul>
+<li><a href="https://www.educative.io/courses/generative-ai-handbook">Generative AI Handbook</a> - A short introduction to LLMs, prompting, fine-tuning, vector databases, RAG, diffusion models, and agents.</li>
+<li><a href="https://www.educative.io/courses/llm-bootcamp">LLM Bootcamp</a> - A deeper path through transformers, embeddings, vector databases, fine-tuning, LoRA/QLoRA, RAG, evaluation, and production trade-offs.</li>
+<li><a href="https://www.educative.io/path/become-an-llm-engineer">Become an LLM Engineer</a> - A broader skill path for building practical LLM applications.</li>
+</ul>
+<h3 id="rag-and-production-systems">RAG and production systems</h3>
+<ul>
+<li><a href="https://www.educative.io/courses/rag-llm">Build a RAG System with LangChain</a> - Covers the end-to-end RAG pipeline, including embeddings, vector storage, generation, and optimization.</li>
+<li><a href="https://www.educative.io/courses/advanced-rag-techniques">Advanced RAG Techniques</a> - Focuses on retrieval quality and more advanced RAG configurations.</li>
+<li><a href="https://www.educative.io/courses/llmops">LLMOps</a> - Covers evaluation, observability, feedback loops, reliability, scaling, latency, and cost for production LLM systems.</li>
+</ul>
+<h3 id="agents-and-agentic-systems">Agents and agentic systems</h3>
+<ul>
+<li><a href="https://www.educative.io/courses/agentic-ai-systems">Agentic AI Systems</a> - Introduces agent architecture and system-design decisions for autonomous workflows.</li>
+<li><a href="https://www.educative.io/courses/agentic-design-patterns">Agentic Design Patterns</a> - Covers tools, retrieval, memory, routing, and evaluators as building blocks for agents.</li>
+<li><a href="https://www.educative.io/courses/build-ai-agents-and-multi-agent-systems-with-crewai">Build AI Agents and Multi-Agent Systems with CrewAI</a> - A hands-on introduction to single-agent and multi-agent workflows.</li>
+</ul>
+<h3 id="interview-and-system-design-preparation">Interview and system-design preparation</h3>
+<ul>
+<li><a href="https://www.educative.io/courses/generative-ai-system-design">Grokking the Generative AI System Design</a> - Covers system design for text, image, speech, and video generation, including training, inference, scaling, and evaluation.</li>
+<li><a href="https://www.educative.io/courses/grokking-the-machine-learning-interview">Grokking the Machine Learning Interview</a> - Reviews practical ML concepts and end-to-end interview case studies.</li>
+<li><a href="https://www.educative.io/courses/grokking-the-machine-learning-system-design-interview">Grokking the Machine Learning System Design Interview</a> - Focuses on structured ML system-design reasoning, production trade-offs, and mock interviews.</li>
+</ul>
+<h2 id="additional-repositories">Additional repositories</h2>
+<ul>
+<li><a href="https://github.com/alirezadir/Agentic-AI-Systems">Agentic AI Systems</a> - System-design notes, implementation examples, and interview preparation for agentic AI.</li>
+<li><a href="https://github.com/alirezadir/Production-Level-Deep-Learning">Production Level Deep Learning</a> - Production ML and deep learning system-design material.</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/genai-resources.md">src/genai-resources.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

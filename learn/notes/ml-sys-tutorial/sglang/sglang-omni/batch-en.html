@@ -1,0 +1,321 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A Batch Size Debate: Performance Validation and Scheduling Trade-offs in SGLang Omni</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/sglang-omni/batch-en.md</div>
+<article class="note"><h1 id="a-batch-size-debate-performance-validation-and-scheduling-trade-offs-in-sglang-omni">A Batch Size Debate: Performance Validation and Scheduling Trade-offs in SGLang Omni</h1>
+<p>In <a href="../../sglang/sglang-omni/cpu-first-class-citizen.html">Revisiting CPU Resources as a First-Class Citizen in Speech Model Serving</a>, we discussed a rather awkward problem: throughput from the same commit can change substantially with host contention. Without controlling the test environment, an apparent optimization may simply coincide with a quieter machine. What looks like a CPU contention problem raises a more fundamental question: how do we create a rigorous experimental environment that isolates one variable at a time? If the performance of the same commit can be affected by subtle factors such as available CPU resources and contention, explicit variables such as model serving parameters deserve at least as much scrutiny.</p>
+<p>Over the past few days, we have made some small but interesting attempts to optimize Code2Wav batching for MiniCPM-o 4.5. Put simply, we explored its batching parameters. Intuitively, if we no longer wait to form a batch, could raising the batch size limit from 1 to 8 really make performance worse? A community contributor observed exactly that on an A800, while my validation on an H200 produced the opposite result:</p>
+<table>
+<thead>
+<tr>
+<th>Code2Wav collection policy</th>
+<th style="text-align: right;">Batch limit</th>
+<th style="text-align: right;">Mean throughput (requests/s)</th>
+<th style="text-align: right;">Relative to FIFO batch size = 8</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FIFO, collecting in arrival order</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4.100</td>
+<td style="text-align: right;">−27.5%</td>
+</tr>
+<tr>
+<td>FIFO, the mainline policy at the time</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;"><strong>5.652</strong></td>
+<td style="text-align: right;">Baseline</td>
+</tr>
+<tr>
+<td>Reference-aware, collecting only requests with the same reference audio</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">4.971</td>
+<td style="text-align: right;">−12.0%</td>
+</tr>
+<tr>
+<td>Reference-aware, the configuration proposed in the PR</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">4.862</td>
+<td style="text-align: right;">−14.0%</td>
+</tr>
+</tbody>
+</table>
+<p>These results used a single H200, the first 200 requests from the full SeedTTS EN data source, concurrency 16, and no deliberate batching wait. Each mixed-reference configuration was repeated three times. After every server startup, we ran and excluded another 50 warmup requests, with consistent CPU affinity and contention checks. The full experiment record is available <a href="https://github.com/sgl-project/sglang-omni/pull/2271#issuecomment-5751596133">here</a>.</p>
+<p>Initially, I was quite confident that larger batches (<code>max_batch_size=8</code>) should help when we do not wait to form them (<code>max_batch_wait_ms=0</code>). As we investigated, more trade-offs emerged. In this short article, we want to <strong>share how we turned a seemingly small parameter question into controlled experiments that could be tested one by one, and the lessons we drew from them</strong>.</p>
+<ol>
+<li>Distinguish concurrency, scheduler batches, and the computational batches inside the model to understand where the debate began.</li>
+<li>Use three sets of experiments to examine the performance effects of collection policy, batch limits, and result emission timing separately.</li>
+</ol>
+<p>Thanks to Shihao Zhu, Sun, Charlie, and everyone who helped with PR reviews, repeated measurements, and discussions of the mechanisms involved. This article follows the experiment records from that time. Some aspects remain incompletely explained, and further feedback is very welcome.</p>
+<h2 id="the-intuitive-benefits-of-batching">The Intuitive Benefits of Batching</h2>
+<p>As is widely understood, batching organizes multiple requests into one processing operation, giving them an opportunity to share fixed overhead and computational resources. This motivation will be familiar to anyone working on LLM serving: processing requests individually requires repeated dispatch, whereas a batched model call can advance several requests at once. However, that shared processing can happen at different levels. Seeing “batch size = 8” in a configuration tells us very little about the computation actually performed by the GPU.</p>
+<p>In SGLang Omni's <a href="https://github.com/sgl-project/sglang-omni/tree/89e60d0bf216bacd0e072d79f969550469614662/benchmarks">benchmarking system</a>, we need to distinguish client concurrency from batch sizes at different levels:</p>
+<p>First comes client concurrency, which limits the number of requests in flight across the entire system. Those requests may be traveling over the network, undergoing preprocessing, waiting for upstream generation, or already reaching the final waveform generation stage. Concurrency 16 therefore does not mean that every stage always has 16 executable requests in its queue.</p>
+<p>Once requests reach a stage, its scheduler collects a batch of ready work. This is the scheduler batch discussed in this article. Specifically, we are examining batching in the Code2Wav stage of MiniCPM-o 4.5: <code>max_batch_size</code> caps the number collected at once, while <code>max_batch_wait_ms</code> sets the deliberate waiting budget for forming a larger batch. A limit of 8 with zero wait means collecting at most 8 currently available requests. If only 2 can be collected when the previous batch finishes and the next begins, those 2 are processed without waiting for the remaining 6 slots to fill.</p>
+<p>Even if the scheduler collects 8 requests, the model may not be able to process them in a single computation. Input conditions, sequence lengths, and the batch forms supported by the backend can require further grouping. In the code2wav implementation, for example, the scheduler's batch of up to 8 requests is grouped again by resolved reference audio identity; only requests with compatible references have an opportunity to batch within a group. One outer call may contain actual GPU batching, or it may simply wrap the execution of several small groups. The former can improve computational efficiency, while the latter can still reduce scheduler round-trips. Additional GPU batching benefits require multiple compatible requests within a group. If all 8 references differ, internal computation may still proceed one request at a time, so reduced scheduling overhead and increased computational parallelism must be examined separately.</p>
+<p>Furthermore, <code>max_batch_wait_ms=0.0</code> removes only the collection window reserved for additional requests to join the batch. Requests may still wait in a queue for the previous batch, groups may execute serially within a batch, and completed results may wait for the entire batch to return. <strong>Removing deliberate batching waits eliminates one cost; it does not mean that larger batches must be faster.</strong></p>
+<h2 id="minicpm-os-code2wav-batching-policy">MiniCPM-o's Code2Wav Batching Policy</h2>
+<p>MiniCPM-o's batching policy makes these distinctions concrete. We tested the speech generation path of MiniCPM-o 4.5, a multi-stage scenario of the kind described in our <a href="../../sglang/sglang-omni/why-sglang-omni-en.html">framework design article</a>. From input understanding and content generation to audio token generation and waveform reconstruction, a request passes through stages with different computational characteristics. These changes focused on the final Code2Wav stage; the other stages were not modified.</p>
+<p>Following the data flow, the upstream Talker produces discrete codec tokens for the target speech, and Code2Wav uses those tokens together with reference audio conditioning to generate waveforms. Flow / CFM first generates mel acoustic features, and HiFT converts those features into playable audio. The reference audio supplies conditioning such as the target voice; together with the target speech tokens generated by Talker, it forms the input to the Code2Wav module.</p>
+<p>Originally, <a href="https://github.com/sgl-project/sglang-omni/pull/2254">PR #2254</a> added batching to Code2Wav, which had previously processed requests individually. The scheduler could collect multiple requests, and the model path could handle multiple token sequences. Inputs of different lengths require padding while retaining their valid lengths for subsequent computation and output trimming. Notice also that the <a href="https://github.com/sgl-project/sglang-omni/blob/89e60d0bf216bacd0e072d79f969550469614662/sglang_omni/models/minicpm_o/components/code2wav.py#L129-L200">HiFT implementation</a> groups again by valid mel length. Even with a shared reference, Flow and HiFT may therefore execute different batches.</p>
+<p>Before PR 2254, this Code2Wav path did not support batching multiple requests. Early commits introduced batching but kept the default batch size at 1, recommending that users opt into batch size 4 with a 10 ms wait. I continued this work in <a href="https://github.com/sgl-project/sglang-omni/pull/2264">PR #2264</a>, cleaning up the implementation, adding tests, and enabling batching by default. This follows a principle I often emphasize:</p>
+<blockquote>
+<p>Once a feature has demonstrated correctness and performance benefits in a clearly defined target scenario, it should be enabled by default so users can benefit without extra configuration. Developers need to take responsibility for their implementations rather than claim improvements and leave validation to users. Whether or not AI helped write the code, we should explain the conditions under which it applies, perform the necessary regression checks, and remove superseded code paths that no longer serve a purpose. Exploratory PRs are also welcome when benefits remain unconfirmed, but they should disclose experimental conditions and uncertainty rather than present an untested idea as an established optimization.</p>
+</blockquote>
+<p>The author of PR 2254 handled this work carefully, providing both the batching implementation and notes on performance and quality concerns. The subsequent measurements were part of our joint effort to understand its boundaries.</p>
+<p>Beyond enabling it by default and refactoring the code style, my largest change was actually the following <a href="https://github.com/sgl-project/sglang-omni/blob/89e60d0bf216bacd0e072d79f969550469614662/sglang_omni/models/minicpm_o/config.py#L112-L130">configuration</a>:</p>
+<pre><code class="language-python">def code2wav_stage(*, gpu: int, process: str) -&gt; StageConfig:
+    return StageConfig(
+        name=&quot;code2wav&quot;,
+        process=process,
+        factory_path=f&quot;{PKG}.stages.create_code2wav_executor&quot;,
+        factory=FactoryArgs(
+            max_batch_size=8,
+            max_batch_wait_ms=0.0,
+            batch_wait_when_idle=False,
+        ),
+        # Note (Chenyang): As a general comment and my usual understanding
+        # of SGLang Omni, SGLang Omni has a poor runtime which leads to a
+        # underutilized GPU/SMs. To address this, we recommend users to set
+        # batchs for your compute but never wait for grouping the batchs.
+        # As SGLang Omni Runtime moves better, we shall probably wait several
+        # ms for grouping the batchs, but right now, set it to 0.0.
+        gpu=gpu,
+        terminal=True,
+    )
+</code></pre>
+<p><code>max_batch_size</code> allows up to 8 requests to be collected at once, while <code>max_batch_wait_ms</code> sets the deliberate waiting budget to zero. <code>batch_wait_when_idle</code> constrains waiting behavior when idle; with a zero budget, it introduces no additional wait. Although my choice of <code>max_batch_size</code> differed slightly from the author's, <code>max_batch_wait_ms = 0.0</code> was the more important difference. The inspiration came from the discussion around <a href="https://github.com/sgl-project/sglang-omni/pull/2202">PR 2202</a>:</p>
+<p>My reasoning was that if we spend additional time waiting to form a batch, ideally the GPU should have other work to do during that interval, allowing request collection and computation to overlap. For short, frequent TTS requests, if the GPU has no executable work while the CPU waits for the next request to fill a batch, that deliberate wait can delay the critical path. I therefore started with a zero waiting budget for the MiniCPM-o implementation at the time. Increasing it should depend on whether it delivers enough additional batching benefit, rather than on runtime improvements alone.</p>
+<p>As another configuration example, Fun-CosyVoice3's <a href="https://github.com/sgl-project/sglang-omni/blob/89e60d0bf216bacd0e072d79f969550469614662/sglang_omni/models/fun_cosyvoice3/config.py#L147-L160">vocoder collection configuration</a> uses a 30 ms waiting budget, after which the collected requests participate in Flow batching. It serves a different computational path from MiniCPM-o Code2Wav's zero-wait configuration. The difference alone does not establish which value is better; each waiting budget needs its own end-to-end evaluation.</p>
+<p>Returning to Code2Wav batching, the scheduler collects requests in FIFO order with a maximum batch size of 8, but the internal vocoder does not compute directly over that incoming batch. It groups requests again by reference audio. The key loop in <a href="https://github.com/sgl-project/sglang-omni/blob/89e60d0bf216bacd0e072d79f969550469614662/sglang_omni/models/minicpm_o/stages.py#L174-L219"><code>vocode_code2wav_payloads</code></a> is:</p>
+<pre><code class="language-python">waveforms_by_index = {}
+for group_indices in groups.values():
+    group_waveforms = model.vocode(
+        [codec_tokens[idx] for idx in group_indices],
+        references[group_indices[0]],
+    )
+    for idx, waveform in zip(group_indices, group_waveforms, strict=True):
+        waveforms_by_index[idx] = waveform
+</code></pre>
+<p><code>groups</code> collects the indices of requests sharing a reference. The outer loop calls <code>model.vocode</code> for each group, passing only that group's tokens and shared reference, then stores the waveforms. The function returns the batch's results only after all groups have finished, so earlier groups wait for later ones. In our discussion, we called this wait caused by returning the whole batch together intra-batch head-of-line blocking, or HOL. Since completed waveforms could be delivered earlier, changing the emission timing offers a potential benefit.</p>
+<p>For illustration, suppose an outer batch contains 8 requests split by reference into five groups of sizes 3, 2, 1, 1, and 1. Flow then processes five small batches. When the first group finishes, its three requests still wait for the remaining four groups.</p>
+<p>Removing HOL has costs of its own. The H200 experiments below show end-to-end regressions from both attempts to remove it; understanding exactly which costs were incurred requires logs and profiling.</p>
+<h2 id="controlled-experiments-to-evaluate-hol-removal">Controlled Experiments to Evaluate HOL Removal</h2>
+<p>To address this waiting, <a href="https://github.com/sgl-project/sglang-omni/pull/2271">PR #2271</a> proposed skipping incompatible references during collection, ensuring that each batch contains only one reference group. This policy was called reference-aware batching. The author also reduced the default maximum batch size from 8 to 4. Initial A800 experiments on SeedTTS-50 measured 2.406 and 2.444 requests/s for reference-aware B4 and B8. Against the historical FIFO B8 result of 1.851 requests/s listed in the PR, these represent improvements of about 30.0% and 32.0%. Against B1 in the same table, at 2.226 requests/s, the gains are about 8.1% and 9.8%. Each percentage therefore needs an explicit comparison baseline.</p>
+<p>I was surprised by these conclusions, including the author's earlier <a href="https://github.com/sgl-project/sglang-omni/pull/2264#issuecomment-5748101622">follow-up experiment</a> in PR 2264 showing batch size 8 performing worse than batch size 1, and decided to test two claims:</p>
+<ol>
+<li>Does batch size 8 really perform worse than batch size 1?</li>
+<li>Does reference-aware batching really perform better than FIFO batching?</li>
+</ol>
+<p>The second trade-off is fairly intuitive: reference-aware batching must filter compatible requests and may also fragment the outer batch, increasing scheduler round-trips. Those costs must be compared with the benefit of reducing HOL. Initially, I did not have a clear explanation for batch size = 8 performing worse than batch size = 1. Given the grouping and collective emission described above, however, zero deliberate waiting does not rule out that possibility; experiments are still needed.</p>
+<p>I also noticed that the experimental design in PR 2271 might not isolate the effects rigorously enough, so I looked for clues:</p>
+<ol>
+<li>PR 2271 tested only 50 samples with client concurrency already at 16. Such a small workload could produce substantial measurement error.</li>
+<li>As discussed above, short, frequent TTS requests are highly sensitive to available CPU cores. Unfortunately, not every developer may be aware of this, so the new validation needed to control that variable, following the CPU contention discussion in <a href="../../sglang/sglang-omni/cpu-first-class-citizen.html">Revisiting CPU Resources as a First-Class Citizen in Speech Model Serving</a>.</li>
+<li>The experiments changed two parameters: whether reference-aware batching was enabled and the maximum batch size. We should control these separately to evaluate their individual effects.</li>
+</ol>
+<p>We therefore kept the four configurations from the opening table: FIFO batch size = 1 versus FIFO batch size = 8 to examine batching benefits; FIFO batch size = 8 versus reference-aware batch size = 8 to isolate collection policy; and reference-aware batch size = 8 versus batch size = 4 to examine the limit under the new policy.</p>
+<h3 id="samples-warmup-and-cpu-resources-all-define-the-experiment">Samples, Warmup, and CPU Resources All Define the Experiment</h3>
+<p>As noted earlier, 50 requests can quickly reveal anomalies, but a short test is more exposed to startup and drain effects. A few long sentences, the reference audio mix, and runtime fluctuations can also have a larger influence on the final result. This experiment therefore used the first 200 requests from SeedTTS EN, containing 131 distinct audio references. Each mixed-reference configuration was repeated three times, with 50 warmup requests after every server startup excluded from the measured results. Warmup reduces interference from first execution, cache initialization, and similar effects, while repeated runs reveal how much a configuration fluctuates on its own. They serve different purposes and cannot replace one another.</p>
+<p>Beyond the GPU, we pinned <code>OMNI_CI_CPUSET=80-95,176-191</code>, corresponding to 16 physical cores and their SMT siblings on NUMA 1 of that machine. We reused the CI <code>ContentionSampler</code>, sampling every two seconds and rejecting and retrying a run if peak CPU use by foreign tasks inside the cpuset, <code>peak_foreign_cores</code>, exceeded 2.0. These controls fixed the available core set and monitored contention from external tasks. I emphasize CPU resources because our <a href="../../sglang/sglang-omni/cpu-first-class-citizen.html">earlier investigation of CI fluctuations</a> showed how sensitive short computations and frequent speech-serving dispatches are to the host: if a thread gets CPU time late, the next GPU work may be dispatched late as well. Fixing the GPU model while leaving CPU resources uncontrolled can make a few percentage points of improvement hard to interpret. No run in this experiment triggered the contamination rule, but sampling every two seconds can still miss shorter interference. Passing the check only means passing the specified detection criteria.</p>
+<h3 id="removing-hol-can-also-fragment-scheduler-batches">Removing HOL Can Also Fragment Scheduler Batches</h3>
+<p>With these controls, we obtained the opening results: FIFO batch size = 8 improved throughput by about 37.9% over batch size = 1, while reference-aware batch size = 8 fell about 12% behind FIFO batch size = 8. To understand the regression and why my conclusion differed from the author's, we looked more closely at the server logs:</p>
+<table>
+<thead>
+<tr>
+<th>Mixed-reference configuration</th>
+<th style="text-align: right;">Mean scheduler batch size</th>
+<th style="text-align: right;">Mean reference groups per batch</th>
+<th style="text-align: right;">Outer Code2Wav calls recorded in logs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FIFO batch size = 8</td>
+<td style="text-align: right;">7.13</td>
+<td style="text-align: right;">4.93</td>
+<td style="text-align: right;">About 30</td>
+</tr>
+<tr>
+<td>Reference-aware batch size = 8</td>
+<td style="text-align: right;">1.58</td>
+<td style="text-align: right;">1.00</td>
+<td style="text-align: right;">About 137</td>
+</tr>
+<tr>
+<td>Reference-aware batch size = 4</td>
+<td style="text-align: right;">1.46</td>
+<td style="text-align: right;">1.00</td>
+<td style="text-align: right;">About 148</td>
+</tr>
+</tbody>
+</table>
+<p>These call counts follow the <a href="https://github.com/sgl-project/sglang-omni/pull/2271#issuecomment-5751596133">published server-log accounting</a> and help compare mechanisms across configurations. They are not GPU kernel counts, nor should they be assumed to cover exactly the 200 measured requests and used to reconstruct the mean batch size.</p>
+<p>With 131 references among 200 requests, opportunities for several requests sharing a reference to be ready in the same collection window are limited. Reference-aware collection guarantees groups=1 but often collects only one or two requests, leaving most of the batch size = 8 capacity unused. FIFO keeps several reference groups within one outer call. It still computes them group by group, but reduces repeated exits from the compute path, collection of the next batch, dispatch, and return.</p>
+<p>The outer call count rises from about 30 to about 137, roughly 4.6 times as many. That does not mean total overhead increases to 4.6 times its original value, but it identifies a concrete cost exchanged for the removed intra-batch HOL wait. The logs support the interpretation that, for this H200 workload, FIFO's amortization of outer overhead outweighed the benefit of reducing HOL by splitting scheduler batches. Finer profiling is still needed to attribute the difference to Python, communication, synchronization, or GPU execution.</p>
+<p>To further examine the reference mix, we used <code>--no-ref-audio</code> as a control sharing the default reference. At batch size = 8, FIFO and reference-aware achieved 7.122 and 7.069 requests/s, only about 0.7% apart. The policies converging after removing reference differences supports this explanation. However, the control also changes the input and reference-conditioning work, and it has limited repetitions, so it cannot exclude every other influence. See the <a href="https://github.com/sgl-project/sglang-omni/pull/2271#issuecomment-5751596133">control results</a>.</p>
+<h2 id="testing-the-batch-limit-separately">Testing the Batch Limit Separately</h2>
+<p>Since reference-aware collection rarely forms large batches in this workload, its similar performance at batch size = 4 and batch size = 8 is unsurprising. But that does not establish whether FIFO's limit should drop from 8 to 4, so we kept mainline FIFO and ran a separate batch-size experiment.</p>
+<p>This experiment again used an H200, concurrency 16, zero wait, CPU pinning, and contention checks every two seconds, but moved to GPU 0 and <code>OMNI_CI_CPUSET=48-63,144-159</code>, with 16 warmup requests per run. Because the GPU, CPU set, and warmup count differed from the previous experiment, the two sets of results must be interpreted separately rather than pooled as repetitions of one experiment.</p>
+<p>On three repetitions of official SeedTTS-50, FIFO batch size = 1 achieved 3.689, 3.811, and 3.988 requests/s, while batch size = 8 achieved 4.406, 4.816, and 4.819. The respective means were 3.829 and 4.680, a gain of about 22% for batch size = 8. These short tests also illustrate variability: the highest and lowest results differed by about 8.1% at batch size = 1 and 9.4% at batch size = 8, using the minimum as the denominator. One run is therefore far from enough to judge a change of just a few percent.</p>
+<p>We then tested prefixes of different lengths from the full EN data source, obtaining the following trend:</p>
+<table>
+<thead>
+<tr>
+<th>Requests</th>
+<th style="text-align: right;">Unique references</th>
+<th style="text-align: right;">FIFO batch size = 1</th>
+<th style="text-align: right;">FIFO batch size = 4</th>
+<th style="text-align: right;">FIFO batch size = 8</th>
+<th style="text-align: right;">batch size = 8 relative to batch size = 1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>50</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">4.100</td>
+<td style="text-align: right;">4.439</td>
+<td style="text-align: right;">5.138</td>
+<td style="text-align: right;">+25%</td>
+</tr>
+<tr>
+<td>100</td>
+<td style="text-align: right;">64</td>
+<td style="text-align: right;">4.056</td>
+<td style="text-align: right;">4.823</td>
+<td style="text-align: right;">5.391</td>
+<td style="text-align: right;">+33%</td>
+</tr>
+<tr>
+<td>200</td>
+<td style="text-align: right;">131</td>
+<td style="text-align: right;">4.109</td>
+<td style="text-align: right;">5.174</td>
+<td style="text-align: right;">5.684</td>
+<td style="text-align: right;">+38%</td>
+</tr>
+<tr>
+<td>400</td>
+<td style="text-align: right;">253</td>
+<td style="text-align: right;">4.072</td>
+<td style="text-align: right;">5.298</td>
+<td style="text-align: right;">5.833</td>
+<td style="text-align: right;">+43%</td>
+</tr>
+</tbody>
+</table>
+<p>Throughput is in requests/s. <strong>Each configuration in this table has only one clean run and is used to observe trends; the first 50 requests from full EN and official SeedTTS-50 are different workloads.</strong> The independent experiment record is available <a href="https://github.com/sgl-project/sglang-omni/pull/2271#issuecomment-5751642645">here</a>.</p>
+<p>These results support keeping batch size = 8 under the tested H200 conditions, but they do not establish it as a universal optimum. Longer prefixes change run duration, reference composition, sentence lengths, and the proportion of time spent draining the workload. We cannot attribute the increase from 25% to 43% entirely to having more samples. Nor did these experiments exhaust larger batch sizes or search nonzero waiting times.</p>
+<p>As for the different A800 results, the hardware, host environment, and experimental procedure have not been fully aligned. We cannot attribute the discrepancy to GPU architecture simply because the cards differ. A better next step is to repeat the same inputs, code, and procedure across machines, then examine how individual costs change. The H200 results provide a comparison to explain; they do not invalidate the value of the A800 observation.</p>
+<h2 id="earlier-results-change-when-subsequent-requests-arrive">Earlier Results Change When Subsequent Requests Arrive</h2>
+<p>FIFO has lower outer overhead, but returning the whole batch together still introduces waiting. I therefore tried a compromise: preserve FIFO collection and the computations within each group, but return each reference group's results as soon as it finishes, directly reducing the wait for completed results. This early-emit policy does not filter references during collection and appeared capable of retaining much of the existing benefit while allowing completed requests to leave sooner.</p>
+<p>We used a switch on the same experimental code to select wait-all or early-emit, fixing the H200, first 200 requests, concurrency 16, zero wait, and CPU set, and excluding 50 warmup requests after every startup. Each mixed-reference arm was repeated three times, and all passed the CPU contamination check. The results were:</p>
+<table>
+<thead>
+<tr>
+<th>Emission policy, both FIFO batch size = 8</th>
+<th style="text-align: right;">Mean throughput (requests/s)</th>
+<th style="text-align: right;">Mean latency (s)</th>
+<th style="text-align: right;">Mean reference groups</th>
+<th style="text-align: right;">GPU utilization</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Wait-all, return after the whole batch finishes</td>
+<td style="text-align: right;"><strong>5.730</strong></td>
+<td style="text-align: right;"><strong>2.739</strong></td>
+<td style="text-align: right;">4.96</td>
+<td style="text-align: right;">About 74%</td>
+</tr>
+<tr>
+<td>Early-emit, return each completed group</td>
+<td style="text-align: right;">4.729</td>
+<td style="text-align: right;">3.291</td>
+<td style="text-align: right;">5.08</td>
+<td style="text-align: right;">About 89%</td>
+</tr>
+</tbody>
+</table>
+<p>Early emission reduced throughput by about 17.5% and increased mean latency by about 20.1%. The collected batch size remained around 7, and the number of reference groups was also broadly unchanged. See the setup and full results <a href="https://github.com/sgl-project/sglang-omni/pull/2271#issuecomment-5751688038">here</a>.</p>
+<p>Here is the explanation I could think of:</p>
+<p>In this MiniCPM-o test configuration, Thinker, Talker, and Code2Wav share one GPU, and the client uses a closed loop with a concurrency limit of 16. Each completed request releases its concurrency slot and lets the client send a replacement. The emission policy therefore affects when subsequent requests enter the server.</p>
+<p>Returning to the example of 8 requests split into groups A through E, wait-all keeps Group A waiting after it finishes until the entire batch completes. Those 8 concurrency slots stay occupied until all results are emitted together, so their replacements are delayed:</p>
+<pre><code class="language-text">time →
+Group A ████
+Group B      ████
+Group C          ████
+Group D              ████
+Group E                  ████
+          └──────── emit all 8 ────────┘
+</code></pre>
+<p>Other in-flight requests may still execute upstream work or complete and trigger replacements, however, so this does not imply that Code2Wav has exclusive use of the GPU.</p>
+<p>Early-emit returns Group A's 3 results as soon as it finishes, allowing their replacements to be sent sooner. After network transit and preprocessing, the new requests' Thinker / Talker work may compete with the remaining Code2Wav computation and stretch later groups:</p>
+<pre><code class="language-text">time →
+Group A ████  → emit A now
+Group B      ██████           ← stretched by new prefill
+new thinker      ████████
+Group C            ██████
+Group D                  ██████
+Group E                        ██████
+</code></pre>
+<p>This explanation is consistent with the observations, but the data has not established whether new requests' prefill is the main source of interference, much less whether it accounts for the entire 17.5% loss. Overhead in the return path itself and the precise overlap among Thinker, Talker, and Code2Wav still require GPU timeline evidence. In the single-run shared-reference control, wait-all and early-emit achieved 7.087 and 6.994 requests/s, about 1.3% apart. That is also consistent with there being little room for earlier emission when there is only one group, but it does not replace a complete causal investigation.</p>
+<p>Another observation deserves attention: early-emit increased GPU utilization while completing fewer requests. Spending more time busy does not necessarily mean completing user work more efficiently. When stages share resources, the ultimate measures remain end-to-end throughput, latency, and quality; higher utilization alone does not establish a successful optimization.</p>
+<p>After two days of investigation, our chosen configuration remained unchanged: FIFO on the H200, batch size = 8, and maximum batch wait time = 0 😂. On the surface, we had made no progress:</p>
+<table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>Intended benefit</th>
+<th>Costs to weigh</th>
+<th>Result in this H200 experiment</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FIFO + wait-all</td>
+<td>Amortize outer collection and dispatch overhead</td>
+<td>Earlier groups wait for later groups</td>
+<td>Retained as default</td>
+</tr>
+<tr>
+<td>Reference-aware</td>
+<td>Reduce intra-batch waiting from mixed references</td>
+<td>Sparse compatible requests shrink batches and increase scheduler round-trips</td>
+<td>Throughput regression</td>
+</tr>
+<tr>
+<td>FIFO + early-emit</td>
+<td>Preserve collection while returning completed results sooner</td>
+<td>Return overhead and changed refill timing may affect shared-resource contention</td>
+<td>Throughput and latency regression</td>
+</tr>
+</tbody>
+</table>
+<h2 id="how-we-want-to-validate-an-optimization">How We Want to Validate an Optimization</h2>
+<p>These experiments support an engineering decision: retain FIFO batch size = 8 with no deliberate waiting under the tested H200 conditions. They also leave work to do, including explaining the A800/H200 discrepancy and identifying the specific resource contention under early-emit. To me, rigorous development requires understanding a request's complete lifecycle across stages and designing controlled experiments around it.</p>
+<p>First, we should report how much faster something became alongside how much it already fluctuates. Reference-aware batch size = 4 and batch size = 8 differed by only about 2.2% in the policy experiment, while recorded run-to-run throughput variation was about 3%–7%. We do not have enough evidence to call that a stable difference. The 12%–14% policy regressions and 17.5% early-emit regression warrant more attention, but exceeding the observed variation does not automatically constitute a statistical significance test.</p>
+<p>To draw conclusions about smaller gains, we need more independent repetitions, interleaved or randomized A/B execution order, and per-run differences with confidence intervals. Hundreds of requests within one run share queueing, resource contention, and environmental changes; they cannot simply be treated as hundreds of independent experiments. More samples and more experimental repetitions both help, but provide different evidence.</p>
+<p>Quality validation must not become less demanding because the performance numbers look good. PR 2271 observed two short-sentence WER outliers at batch size = 8. WER divides the number of word substitutions, deletions, and insertions by the reference word count. Short sentences have small denominators, so a few errors can produce a large percentage change. For example, 3 word errors in a 4-word sentence produce a WER of 75%. Whenever we observe potential performance benefits, we must check whether correctness is affected.</p>
+<p>My first reaction in the group discussion was also to interpret these outliers as random error. For a complete experimental conclusion, however, we need to revisit the anomalous samples, compare generated audio, ASR transcripts, and text normalization in paired tests, and repeat runs to see whether the issue reproduces consistently. Batching involves padding, valid lengths, and the mapping between inputs and outputs. All deserve inspection, and performance results cannot replace quality gates.</p>
+<p>Even with a correct implementation, changing batch shapes can change kernel selection or floating-point reduction order, producing slightly different numerical results for the same input. <a href="https://docs.pytorch.org/docs/stable/notes/numerical_accuracy.html#batched-computations-or-slice-computations">PyTorch's numerical accuracy notes</a> specifically discuss differences between batched and individual computations. <strong>Batch invariance means that the result for the same input does not change with batch size or composition; the concern here is the absence of that invariance.</strong> Such differences are not limited to neural encoders and may also occur in decoders, Flow, or vocoders. Numerical differences do not necessarily imply lower quality, however, and cannot directly explain these WER outliers; the specific paths and samples still require validation. For related discussion of numerical differences in inference, see our team's article <a href="https://www.linkedin.com/pulse/rl-%E8%AE%AD%E6%8E%A8%E4%B8%8D%E4%B8%80%E8%87%B4%E7%9A%84%E6%A0%B9%E6%BA%90%E5%85%B6%E5%AE%9E%E5%9C%A8-inference-%E7%B3%BB%E7%BB%9F%E4%B8%AD%E5%B9%BF%E6%B3%9B%E5%AD%98%E5%9C%A8-xinyu-lu-zbxbc/">The Roots of RL Training–Inference Mismatch Are Widespread in Inference Systems</a>.</p>
+<p>These expectations should become part of everyday development. A PR should tell reviewers what changed, which baseline it uses, its inputs and environment, and how warmup and contaminated runs were handled. Logs should let reviewers trace actual batch sizes, grouping, and emission behavior. Just as our <a href="../../sglang/sglang-omni/tts-refactor.html">earlier TTS refactor</a> brought repeated lifecycle management into the framework, we want reliable measurement methods to become part of the benchmark and CI infrastructure, so the next contributor can reuse them instead of rediscovering which conditions matter.</p>
+<p>We still want SGLang Omni developers to have confidence in validated optimizations, making parameters that suit the target scenario the defaults and reducing the burden on users to tune everything themselves. That confidence comes from reproducible evidence and a willingness to publish unexpected results. Reference-aware and early-emit did not win in these experiments, but they helped us understand scheduling costs and feedback. A community contribution's value extends beyond whether it was ultimately merged.</p>
+<p>If this kind of work interests you, you are very welcome to contribute to <a href="https://github.com/sgl-project/sglang-omni">SGLang Omni</a>. You could start by reproducing a comparison across hardware, collecting a more complete GPU timeline, studying how reference distributions affect batches, or opening an issue with timestamps and reproduction steps to test whether client refill timing causes actual batch sizes to repeat periodically. We need people who know kernels, and people willing to carefully examine benchmarks, anomalous samples, and scheduling details.</p>
+<p>We hope to build an inference framework whose optimizations can be explained both when they work and when changing conditions make them fail. Following an unexpected result until it can be explained and reproduced, then putting that understanding into code and tests, is substantial systems work in its own right. It is also the kind of engineering practice I hope more of us will undertake together in SGLang Omni.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/sglang-omni/batch-en.md">sglang/sglang-omni/batch-en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

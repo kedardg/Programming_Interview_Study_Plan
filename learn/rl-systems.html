@@ -1,0 +1,505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RL Post-Training Systems</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links"><a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html" class="here">RL Systems</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<main>
+<h1>RL Post-Training Systems: RLVR, Agentic RL and the Trainer–Rollout Machine</h1>
+<p class="dim">The <a href="training.html">training chapter</a> explained <em>what</em> RLHF, DPO and GRPO optimize. This chapter is about the machine that runs them at frontier scale: an inference engine generating millions of rollouts, verifiers and environments scoring them, a distributed trainer updating a dense or mixture-of-experts policy, and the weight-sync loop that ties them together. It is the systems counterpart of post-training — and the part a model-customization lead actually spends their time on.</p>
+
+<h2 id="why">1. Why RL after SFT, and which objective</h2>
+<p>Supervised fine-tuning teaches a model to imitate demonstrations. It cannot teach the model to <em>search over its own outputs</em>: to try a derivation, notice it fails a check, and prefer the attempt that passes. RL closes that gap by sampling from the model, scoring the samples, and pushing probability toward what scored well. For a decade the scoring came from humans (RLHF: a reward model trained on preferences, optimized with PPO). The 2025 shift — DeepSeek-R1, Tulu 3's "RL with verifiable rewards", Kimi K1.5 — was to score with <strong>verifiers</strong> instead: an exact-answer checker for math, unit tests for code, a compiler, a schema validator. Verifiable rewards are cheap, unhackable in ways reward models are not, and scale to millions of problems. The visible side effect is the <em>reasoning-length effect</em>: when the reward only cares about the final answer, the policy learns to spend more tokens thinking, because longer chains of thought pass the checker more often.</p>
+<p>The objectives are a family with one shared skeleton — a policy-gradient weighted by an advantage, kept near the old policy by a ratio clip or a KL penalty — and different answers to "where does the baseline come from?":</p>
+<table class="cmp">
+<tr><th>Objective</th><th>Baseline / advantage</th><th>Extra machinery</th><th>Known for</th></tr>
+<tr><td><strong>PPO</strong> (RLHF classic)</td><td>Learned value model V(s) per token, GAE</td><td>Clipped ratio, KL to a frozen reference model, value loss</td><td>Stable but needs a critic as large as the policy — memory and compute doubled</td></tr>
+<tr><td><strong>GRPO</strong> (DeepSeekMath / R1)</td><td>Group mean (and std) of G sampled answers to the same prompt</td><td>No critic; clipped ratio; KL term (often dropped in practice)</td><td>Made RLVR cheap enough to run at scale</td></tr>
+<tr><td><strong>DAPO</strong></td><td>Group-relative, as GRPO</td><td>Clip-higher (asymmetric ε), dynamic sampling (drop all-correct / all-wrong groups), token-level loss aggregation, overlong-response shaping</td><td>The engineering fixes that make GRPO train long reasoning stably</td></tr>
+<tr><td><strong>Dr. GRPO</strong></td><td>Group mean only</td><td>Removes length and std normalization that bias toward long wrong answers</td><td>Shorter, equally accurate responses</td></tr>
+<tr><td><strong>GSPO</strong> (Qwen3)</td><td>Group-relative</td><td>Importance ratio at the <em>sequence</em> level, length-normalized, instead of per token</td><td>Stable RL for MoE models where per-token ratios explode as routing shifts</td></tr>
+<tr><td><strong>RLOO / REINFORCE++</strong></td><td>Leave-one-out mean of the other samples; global batch baseline</td><td>Plain REINFORCE with variance reduction</td><td>Simplicity; competitive with PPO at a fraction of the cost</td></tr>
+</table>
+<p>Written out, the GRPO objective for one prompt q with G sampled responses o₁…o_G of lengths |oᵢ| is:</p>
+<div class="formula">J(θ) = (1/G) Σᵢ (1/|oᵢ|) Σₜ min( rᵢ,ₜ(θ)·Âᵢ , clip(rᵢ,ₜ(θ), 1−ε, 1+ε)·Âᵢ ) − β·KL(π_θ ‖ π_ref)<br><br>where  rᵢ,ₜ(θ) = π_θ(oᵢ,ₜ | q, oᵢ,&lt;t) / π_old(oᵢ,ₜ | q, oᵢ,&lt;t)      ← importance ratio per token<br>       Âᵢ = (Rᵢ − mean(R₁..R_G)) / std(R₁..R_G)                 ← one advantage per response, shared by all its tokens<br>       DAPO: ε_high &gt; ε_low; aggregate Σₜ over all tokens in the batch (not per response); Dr. GRPO: drop 1/|oᵢ| and the std</div>
+<p>Read it as: every token of a response that beat its siblings gets pushed up, every token of a response that lost gets pushed down, by the same amount; the clip stops any token from moving more than ε in ratio per update; the KL (when used) stops the policy drifting far from where the reward model or verifier is trustworthy.</p>
+
+<div class="card">
+<h3>Animation: one GRPO group, from scores to clipped per-token updates</h3>
+<canvas id="grpoViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="grpoSample">Sample a new group</button>
+  <button class="btn secondary" id="grpoStep">Step: scores → advantages → ratios</button>
+  <label class="ctl">Policy solve rate <input type="range" id="grpoP" min="5" max="95" value="40"> <span id="grpoPl">40%</span></label>
+  <label class="ctl">ε <input type="range" id="grpoEps" min="5" max="40" value="20"> <span id="grpoEl">0.20</span></label>
+</div>
+<p class="caption">Eight responses to the same prompt are scored by a verifier (1 = passes, 0 = fails). The group mean is the baseline; advantages are the centered, normalized scores. The bottom strip shows one response's tokens with their importance ratios π_θ/π_old: green tokens are pushed up, red down, and <strong>hatched tokens are clipped</strong> — their ratio already moved past 1±ε so they contribute zero gradient this step. Push the solve rate to 95% and watch the group become all-correct: every advantage is zero and the prompt teaches nothing (DAPO's dynamic sampling drops such groups before they waste a rollout).</p>
+</div>
+
+<div class="formula"># GRPO loss in PyTorch — the whole algorithm fits in a screen.
+# logp_new/logp_old: (B, T) per-token log-probs of the sampled tokens under current and rollout-time policy
+# rewards: (B,) scalar per response; group_ids: (B,) which prompt each response belongs to; mask: (B, T) 1 on model tokens
+def grpo_loss(logp_new, logp_old, rewards, group_ids, mask, eps_low=0.2, eps_high=0.28, token_level=True):
+    adv = torch.zeros_like(rewards)
+    for g in group_ids.unique():                       # group-relative advantage, one scalar per response
+        idx = group_ids == g
+        r = rewards[idx]
+        adv[idx] = (r - r.mean()) / (r.std() + 1e-6)   # Dr. GRPO: drop the std here
+    ratio = torch.exp(logp_new - logp_old)              # (B, T) importance ratio per token
+    a = adv[:, None]                                   # broadcast the response advantage to its tokens
+    unclipped = ratio * a
+    clipped = torch.clamp(ratio, 1 - eps_low, 1 + eps_high) * a   # DAPO clip-higher: eps_high > eps_low
+    per_tok = -torch.min(unclipped, clipped) * mask
+    if token_level:                                    # DAPO: every token in the batch weighs the same
+        return per_tok.sum() / mask.sum()
+    return (per_tok.sum(1) / mask.sum(1)).mean()      # original GRPO: normalize per response first</div>
+
+<h2 id="machine">2. The trainer–rollout machine</h2>
+<p>Here is the thing nobody tells you before your first RL job: <strong>RL post-training is mostly inference</strong>. Each step must <em>generate</em> hundreds of thousands to millions of tokens of fresh samples before a single gradient is computed, and generation is decode — bandwidth-bound, sequential, long-tailed (<a href="inference.html">Chapter 11</a>). A production RL system is therefore two systems bolted together:</p>
+<ol>
+<li><strong>Rollout</strong>: an inference engine (vLLM or SGLang) holding the current policy weights generates G responses per prompt for a batch of prompts, with continuous batching, paged KV, and — crucially — prefix caching so the G siblings share the prompt's KV.</li>
+<li><strong>Reward</strong>: verifiers, sandboxes, environments or reward models score every response (often on CPUs, often the second bottleneck).</li>
+<li><strong>Advantage</strong>: group statistics; optionally a reference-model forward pass for the KL term and an old-policy forward pass to recompute log-probs under the trainer's numerics.</li>
+<li><strong>Train</strong>: the distributed trainer (FSDP2 or Megatron-LM; <a href="parallelism.html">Chapter 12</a>) runs forward+backward over the sampled tokens with the loss above and takes one (or a few) optimizer steps.</li>
+<li><strong>Weight sync</strong>: the new weights are pushed back into the inference engine — resharded from the trainer's FSDP/ZeRO layout into the engine's tensor-parallel (and expert-parallel) layout — and the loop repeats.</li>
+</ol>
+
+<div class="card">
+<h3>Animation: where the time goes in one RL step</h3>
+<canvas id="loopViz" class="viz" width="900" height="330"></canvas>
+<div class="controls">
+  <label class="ctl">Topology
+    <select id="loopMode">
+      <option value="colo">Colocated, synchronous (verl HybridFlow style)</option>
+      <option value="disagg">Disaggregated, synchronous (separate rollout &amp; trainer pools)</option>
+      <option value="async">Disaggregated, asynchronous (Miles / prime-rl style, staleness ≤ 1)</option>
+    </select>
+  </label>
+  <button class="btn" id="loopPlay">▶ Play</button>
+  <button class="btn secondary" id="loopReset">Reset</button>
+  <span class="dim" id="loopStats"></span>
+</div>
+<p class="caption">Two lanes of GPUs across three RL steps. Rollout (blue) dominates and has a <em>long tail</em>: the step cannot finish until the longest response finishes, so most of the engine's GPUs idle (grey) waiting for a few stragglers. Colocated: the same GPUs time-slice between engine and trainer, so the trainer is idle during rollout and vice versa, but weight sync is a cheap local copy. Disaggregated: trainer GPUs sit idle while rollout runs — unless you go asynchronous and let the trainer consume step k's rollouts while the engine already generates step k+1 with slightly stale weights. The utilization number shows why async won for long-horizon RL.</p>
+</div>
+
+<h3>Colocated vs disaggregated</h3>
+<p><strong>Colocated</strong> (verl's HybridFlow design: a single Python controller on Ray drives both roles on the same GPUs) is simplest: one pool, weights move by CUDA IPC or an in-process reshard, no second cluster to schedule. The cost is time-slicing — while the engine generates, the trainer's FSDP shards are offloaded or idle; while the trainer steps, the engine's KV cache is torn down. It is the right default for dense models up to tens of billions of parameters and for teams that want one job to debug.</p>
+<p><strong>Disaggregated</strong> (the slime/Miles lineage, NeMo RL's server-based design, prime-rl) runs rollout and training on separate pools, each provisioned for its own regime: rollout GPUs with high TP/EP for a fast engine, trainer GPUs with FSDP/Megatron for throughput. It adds a real network hop for weights (NCCL broadcast from trainer rank 0 to every engine replica, or a parameter server), but it unlocks the big win: <strong>asynchrony</strong>.</p>
+<h3>Synchronous vs asynchronous</h3>
+<p>Synchronous RL waits for every rollout in the batch, then trains, then syncs. Asynchronous RL lets the engine keep generating with weights from one or two steps ago while the trainer works; completed trajectories flow through a replay buffer. The samples are now <em>off-policy</em> — generated by π_old rather than π_θ — which the importance ratio already in the objective handles, provided staleness is bounded (typically ≤1–2 steps) and the ratio is clipped or truncated. Kimi K1.5's "partial rollouts" push further: a response that didn't finish within the step's budget is paused and resumed under the next weights. The reward is near-full utilization of both pools; the price is reasoning about staleness, and the engineering of a correct, resumable buffer.</p>
+<h3>Weight sync mechanics</h3>
+<p>The trainer holds parameters sharded across data-parallel ranks (FSDP2 / ZeRO-3); the engine wants them sharded by tensor parallelism (and expert parallelism for MoE) across its own ranks. Sync therefore means: all-gather each parameter on the trainer side, re-split it into the engine's TP layout, and broadcast it over NCCL to every engine replica — for a 70B BF16 model that is 140 GB moving every step, which at NVLink/InfiniBand speeds is seconds, not minutes, but adds up over thousands of steps. Colocated systems skip the network by handing CUDA IPC handles between processes on the same GPU. Either way the engine must <em>also</em> flush its prefix cache after sync (cached KV was computed by stale weights) — forgetting this is a classic silent bug.</p>
+<h3>Rollout throughput is the bottleneck; the knobs</h3>
+<ul>
+<li><strong>Prefix caching across the group</strong>: G siblings share the prompt's KV (RadixAttention in SGLang, automatic prefix caching in vLLM) — prefill is paid once per prompt, not G times.</li>
+<li><strong>Length budgets and overlong shaping</strong>: cap max tokens and penalize (DAPO's soft overlong punishment) rather than hard-truncate, which teaches nothing about the cut-off answers.</li>
+<li><strong>Over-generation and early stop</strong>: sample 1.5× the prompts you need and stop the step when enough groups are complete — the long tail belongs to a few prompts.</li>
+<li><strong>Partial rollouts</strong>: pause stragglers and resume them next step (Kimi K1.5).</li>
+<li><strong>Speculative decoding</strong> with the model's own MTP head where available (<a href="architectures.html#mtp">Chapter 5</a>), and FP8 KV cache for memory.</li>
+<li><strong>Engine-side batching for MoE</strong>: expert parallelism with DeepEP-style dispatch so that 37B-active models decode at reasonable batch sizes (<a href="parallelism.html">Chapter 12</a>).</li>
+</ul>
+
+<h2 id="rewards">3. Reward functions and verifiers</h2>
+<p>The reward function is the specification; the policy will satisfy exactly what you wrote, not what you meant. Three families:</p>
+<ul>
+<li><strong>Rule-based verifiers</strong>: exact or normalized answer match (math), unit tests in a sandbox (code), compilers and type checkers, JSON-schema validators, string constraints. Cheap, deterministic, and the backbone of RLVR. Their weakness is brittleness — a checker that accepts "\boxed{42}" but not "42" trains a model to always box; a test suite with one weak test trains a model to game that test.</li>
+<li><strong>Model-based rewards</strong>: reward models trained on preferences, or LLM judges with rubrics. Necessary for open-ended quality (helpfulness, style, safety) where no verifier exists. The policy <em>will</em> find the reward model's blind spots — verbosity, sycophancy, confident formatting — so judges need held-out evaluation, ensembles, or periodic retraining.</li>
+<li><strong>Shaping and auxiliary rewards</strong>: a small format reward (did it use the required tags?), length penalties, per-step rewards in multi-turn tasks. Useful early, dangerous if they dominate: a policy will optimize the easy format reward and ignore the hard correctness one.</li>
+</ul>
+
+<div class="card">
+<h3>Animation: reward hacking a brittle checker</h3>
+<canvas id="hackViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="hackPlay">▶ Train</button>
+  <button class="btn secondary" id="hackFix">Fix the checker</button>
+  <button class="btn secondary" id="hackReset">Reset</button>
+</div>
+<p class="caption">The checker gives full credit if the response <em>contains</em> the correct number anywhere. For a while, measured reward (blue) and true accuracy (green, from a held-out strict verifier) rise together. Then the policy discovers it can list several candidate numbers — measured reward keeps climbing while true accuracy collapses. "Fix the checker" switches to extracting the <em>final</em> answer only; measured reward drops to honest levels and the two curves re-couple. This divergence is the single most important plot to watch in any RL run.</p>
+</div>
+
+<div class="formula"># Two verifiable rewards. Keep them pure functions: (prompt, response, ground_truth) -> float.
+import re, subprocess, tempfile, textwrap, os
+
+def math_reward(response: str, answer: str) -> float:
+    """Extract the FINAL answer (last \\boxed{} or last number) and compare after normalization."""
+    boxed = re.findall(r"\\boxed\{([^{}]*)\}", response)
+    cand = boxed[-1] if boxed else (re.findall(r"-?\d+(?:\.\d+)?(?:/\d+)?", response) or [""])[-1]
+    norm = lambda s: s.replace(" ", "").replace(",", "").rstrip(".").lstrip("+")
+    try:                                    # numeric compare tolerates 0.5 vs 1/2
+        return float(abs(eval(norm(cand)) - eval(norm(answer))) < 1e-6)
+    except Exception:
+        return float(norm(cand) == norm(answer))
+
+def code_reward(response: str, tests: str, timeout_s: float = 5.0) -> float:
+    """Run hidden unit tests against the extracted code in a throwaway process. Production: a container/sandbox."""
+    m = re.search(r"```python\n(.*?)```", response, re.S)
+    if not m:
+        return 0.0                           # format failure is a zero, not a crash
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "sol.py")
+        open(path, "w").write(m.group(1) + "\n\n" + textwrap.dedent(tests))
+        try:
+            r = subprocess.run(["python3", "-I", path], capture_output=True, timeout=timeout_s, cwd=d)
+            return 1.0 if r.returncode == 0 else 0.0
+        except subprocess.TimeoutExpired:
+            return 0.0                       # infinite loops are failures, not hangs of your trainer</div>
+<p>Two operational notes. First, reward computation is a <em>service</em>: tens of thousands of sandboxed test runs per step need their own CPU pool, timeouts, and isolation (a policy will eventually write code that deletes files or forks bombs). Second, log the reward <em>distribution</em>, not just the mean — a bimodal group (all 0 or all 1) carries no gradient, and a creeping reward with flat held-out accuracy is hacking.</p>
+
+<h2 id="envs">4. Environments and harnesses for agentic RL</h2>
+<p>Single-turn RLVR scores one response. <strong>Agentic RL</strong> trains a policy that acts over many turns — issue a tool call, read the observation, act again — until a terminal reward (did the pull request pass the hidden tests? did the booking succeed?). This is the training-side mirror of <a href="agents.html">Chapter 18</a>'s agent loop, and it changes the machine in three ways:</p>
+<ol>
+<li><strong>Rollouts become trajectories through an environment.</strong> The engine generates a turn; the harness executes the tool call in a sandbox (a container with a repo, a browser, an API mock); the observation is appended; the engine generates the next turn. Generation and execution interleave, so the environment's latency is now inside the rollout critical path.</li>
+<li><strong>Environments are a separate scalable service.</strong> The pattern standardized by <strong>OpenEnv</strong> (a Gym-style <code>reset / step / state</code> API over containerized environments, from the PyTorch and Hugging Face communities) and by <strong>NeMo Gym</strong> (environments and reward "resource servers" that trainers call over HTTP) is: environments run as independent server pools, each episode is a session, and the trainer never needs to know what is inside the container. Libraries like <em>verifiers</em>, <em>prime-rl</em> and <em>SkyRL</em> build the same shape in their own idiom. The APIs are still moving; the shape is settled.</li>
+<li><strong>The loss is masked to model tokens only.</strong> A trajectory contains the policy's tokens (thoughts, tool calls, answers) and the environment's tokens (tool outputs, test logs). You must train only on the former — the policy did not produce the test log and must not be pushed to "predict" it. Getting this mask wrong is the most common agentic-RL bug, and it manifests as a model that hallucinates tool outputs.</li>
+</ol>
+
+<div class="card">
+<h3>Animation: a multi-turn coding-agent episode and its loss mask</h3>
+<canvas id="epViz" class="viz" width="900" height="340"></canvas>
+<div class="controls">
+  <button class="btn" id="epStep">Next turn</button>
+  <button class="btn secondary" id="epReset">Reset</button>
+  <span class="dim" id="epStats"></span>
+</div>
+<p class="caption">The episode: task prompt → the agent edits a file → runs tests → reads a failure → edits again → tests pass → terminal reward 1.0. The token strip below shows the full context as it grows: <strong>policy tokens (green) are in the loss</strong>; environment tokens (grey — tool outputs and test logs) are masked out, and the prompt is masked too. Credit assignment: every policy token in the episode receives the same terminal advantage (GRPO-style), which works surprisingly well for short episodes and is exactly what breaks down for 50-turn ones — hence research on per-step rewards and turn-level advantages.</p>
+</div>
+
+<div class="formula"># A minimal Gym-style environment for a tool task, and the loss mask over a multi-turn trajectory.
+class RepoEnv:
+    """One episode = one sandboxed repo with a failing test suite. Mirrors the OpenEnv reset/step/state shape."""
+    def reset(self, task_id):
+        self.box = Sandbox.start(image="repo-tasks", task=task_id)   # container with the repo checked out
+        self.turns = 0
+        return {"prompt": self.box.read("TASK.md"), "tools": TOOL_SCHEMAS}   # observation for the policy
+
+    def step(self, action):
+        """action: a parsed tool call {"name": "edit"|"run_tests"|"submit", "args": {...}}"""
+        self.turns += 1
+        if action["name"] == "edit":
+            obs = self.box.apply_patch(action["args"]["patch"])
+        elif action["name"] == "run_tests":
+            obs = self.box.run("pytest -q", timeout=120)              # env latency is on the rollout critical path
+        else:                                                         # submit: terminal, hidden tests decide reward
+            passed = self.box.run("pytest -q hidden/", timeout=300).returncode == 0
+            return "", float(passed), True, {"turns": self.turns}
+        done = self.turns >= MAX_TURNS                                # episode budget; a truncated episode gets 0
+        return obs[-4000:], 0.0, done, {}                             # (observation, reward, done, info)
+
+def build_loss_mask(segments):
+    """segments: list of (token_ids, source) with source in {"prompt", "policy", "env"}.
+    Returns flat token ids and a mask that is 1 ONLY on tokens the policy generated."""
+    ids, mask = [], []
+    for toks, src in segments:
+        ids.extend(toks)
+        mask.extend([1] * len(toks) if src == "policy" else [0] * len(toks))
+    return torch.tensor(ids), torch.tensor(mask)
+# The same mask multiplies per-token loss in grpo_loss() above; env tokens still sit in the context for attention,
+# they simply contribute no gradient. Forgetting this trains the model to imitate tool outputs.</div>
+
+<h2 id="data">5. Data and curriculum for RL</h2>
+<p>RL data is prompts, not answers — but <em>which</em> prompts decides whether a step teaches anything. A prompt the policy always solves yields a group of all-1s (zero advantage); a prompt it never solves yields all-0s (also zero). The useful prompts are the ones with a solve rate in the middle, where the group contains both successes and failures to contrast. Practical pipeline:</p>
+<ul>
+<li><strong>Pre-filter by solve rate</strong>: sample a few responses per prompt with the SFT checkpoint, keep prompts with pass rates roughly in [0.1, 0.9]. Re-estimate periodically; the band moves as the policy improves.</li>
+<li><strong>Dynamic sampling</strong> (DAPO): at rollout time, discard groups that come back all-correct or all-wrong and keep sampling until the batch is full of informative groups. It costs rollout compute and buys gradient signal.</li>
+<li><strong>Curriculum</strong>: order or weight prompts by difficulty so the policy sees solvable-but-hard problems; some recipes schedule the length budget upward over training.</li>
+<li><strong>Domain mixing</strong>: math, code, logic puzzles, and agentic tasks in one run, with per-domain reward normalization so no domain's reward scale dominates.</li>
+<li><strong>Regression control</strong>: mix in SFT data (or add an SFT loss term) so chat quality, instruction following and safety do not decay while the model gets better at the verifier's tasks; evaluate every checkpoint on a broad suite and select by it (<a href="customization.html">Chapter 14</a>).</li>
+</ul>
+
+<h2 id="scale">6. Scaling RL to frontier models</h2>
+<h3>MoE-specific problems</h3>
+<p>Mixture-of-experts policies add a failure mode: as weights update, the router's top-k choices flip, so the <em>same token</em> is processed by different experts under π_θ and π_old. Per-token importance ratios then swing wildly for reasons unrelated to the policy's actual behavior, and PPO/GRPO-style training destabilizes. The fixes are to compute ratios at the sequence level with length normalization (<strong>GSPO</strong>), or to pin the routing from rollout time during the training forward pass ("routing replay"). Expert parallelism also has to exist on both sides — the engine needs EP for throughput, the trainer for memory — and weight sync must map expert shards between them.</p>
+<h3>Long rollouts and memory</h3>
+<p>Reasoning models generate 8K–64K-token responses; agentic episodes grow longer still. On the engine side this is <a href="inference.html#kv-cache">KV cache</a> arithmetic (a 32K-token response at 160 KB/token of GQA KV is 5 GB per sequence); on the trainer side it is activation memory for forward+backward over long sequences — sequence parallelism, gradient checkpointing and micro-batching by token count rather than sequence count (<a href="training.html">Chapter 13</a>).</p>
+
+<div class="card">
+<h3>Interactive: the rollout-vs-train cost model for one RL step</h3>
+<div class="controls">
+  <label class="ctl">Prompts / step <input type="range" id="cN" min="64" max="2048" step="64" value="512"> <span id="cNl"></span></label>
+  <label class="ctl">Samples / prompt (G) <input type="range" id="cG" min="4" max="64" step="4" value="16"> <span id="cGl"></span></label>
+  <label class="ctl">Mean response tokens <input type="range" id="cL" min="1000" max="32000" step="1000" value="8000"> <span id="cLl"></span></label>
+</div>
+<div class="controls">
+  <label class="ctl">Active params (B) <input type="number" id="cA" value="37" min="1" max="1000" style="width:70px"></label>
+  <label class="ctl">Engine decode tok/s per 8-GPU node <input type="number" id="cTP" value="20000" min="500" step="500" style="width:90px"></label>
+  <label class="ctl">Rollout nodes <input type="range" id="cRN" min="1" max="64" value="16"> <span id="cRNl"></span></label>
+  <label class="ctl">Trainer nodes <input type="range" id="cTN" min="1" max="64" value="8"> <span id="cTNl"></span></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="kTok">–</div><div class="l">tokens generated / step</div></div>
+  <div class="box"><div class="v" id="kRoll">–</div><div class="l">rollout time (ideal, no tail)</div></div>
+  <div class="box"><div class="v" id="kTrain">–</div><div class="l">train step (fwd+bwd @40% MFU)</div></div>
+  <div class="box"><div class="v" id="kRatio">–</div><div class="l">rollout : train time</div></div>
+</div>
+<p class="caption">Illustrative numbers — plug in your own measured engine throughput. With the defaults (a DeepSeek-V3-class MoE, 512 prompts × 16 samples × 8K tokens ≈ 67M tokens/step) rollout takes several times longer than the gradient step even on twice the hardware, before the long tail makes it worse. That ratio is why rollout pools are larger than trainer pools, why asynchrony matters, and why a 2× engine speedup (speculative decoding, FP8 KV, better EP) is worth more than any trainer optimization. Train FLOPs use 6 × active params × tokens (<a href="deep-learning.html">the 6ND rule</a>) plus one extra forward for old-policy log-probs.</p>
+</div>
+
+<h3>Trainium and other accelerators</h3>
+<p>Because rollout dominates and is "just inference", it is the first thing to move to cheaper hardware: a Trainium rollout pool feeding a GPU trainer is a legitimate topology if the engine stack (NxD Inference, static shapes, <a href="hardware.html">NKI kernels</a> for the hot paths) delivers parity on the model, and the weight-sync path can translate layouts across vendors. The parity question — same log-probs within tolerance — matters more here than in serving, because off-policy drift between an engine and a trainer with different numerics shows up as a mysterious ratio distribution. Measure KL between engine and trainer log-probs on identical samples before you trust a mixed-hardware loop.</p>
+<h3>Fault tolerance and observability</h3>
+<p>RL jobs run for days across hundreds of GPUs and dozens of CPU sandboxes; something fails every few hours. The system needs: checkpointing of policy, optimizer <em>and</em> replay buffer state; deterministic resume (same RNG streams for sampling); engine replicas that can be restarted and re-synced mid-step; sandbox pools that are disposable. Watch these curves every run, each diagnoses something specific:</p>
+<table class="cmp">
+<tr><th>Curve</th><th>Healthy</th><th>If it misbehaves</th></tr>
+<tr><td>Mean reward (train) vs held-out accuracy</td><td>Rise together</td><td>Diverging = reward hacking or verifier bug</td></tr>
+<tr><td>Response length</td><td>Grows then plateaus for reasoning tasks</td><td>Runaway growth = length exploitation (check Dr. GRPO normalization, overlong shaping); collapse = format reward dominating</td></tr>
+<tr><td>Policy entropy</td><td>Decreases slowly</td><td>Collapse to near-zero = premature sharpening, exploration dead (raise ε_high, lower lr, add entropy bonus)</td></tr>
+<tr><td>KL to reference</td><td>Small, steady growth</td><td>Spikes = instability; often follows a bad weight sync or MoE routing shift</td></tr>
+<tr><td>Clip fraction</td><td>A few percent of tokens</td><td>Large = policy moving too fast per step, or stale rollouts (async) beyond the staleness bound</td></tr>
+<tr><td>Fraction of zero-advantage groups</td><td>Low</td><td>High = prompts too easy/hard; refresh the solve-rate filter</td></tr>
+</table>
+
+<h2 id="eval">7. Evaluating an RL'd model</h2>
+<p>Two pitfalls specific to RL. First, <strong>pass@1 vs pass@k</strong>: RLVR reliably raises pass@1 — the model's first answer is right more often — but several studies found the base model's pass@k at large k can match or exceed the RL'd model's, suggesting much of the gain is <em>sharpening</em> the distribution onto solutions the base model could already sample, rather than discovering new ones. Whether RL expands capability or concentrates it is an open debate; for a product you usually want sharpening, but report both numbers. Second, <strong>evaluation contamination through the verifier</strong>: if your RL prompts overlap your eval set (or your reward model was trained on it), the eval measures memorization of the reward, not generalization. Keep held-out verifiers and held-out prompt distributions, and check for behavioral regressions — verbosity, over-refusal, instruction-following drift — on a broad suite, not only the target domain. The methodology (what to measure, how to make it defensible to a customer) is <a href="customization.html">Chapter 14</a>'s subject.</p>
+
+<h2 id="frameworks">8. The framework landscape</h2>
+<p>These move fast; the <em>roles</em> are stable even where the APIs are not. Choose by topology and by which engine/trainer pairing your team already operates.</p>
+<table class="cmp">
+<tr><th>Framework</th><th>Architecture</th><th>Good for</th><th>Trade-offs</th></tr>
+<tr><td><strong>verl</strong> (ByteDance / volcengine)</td><td>HybridFlow: single Python controller on Ray; colocated or split placement; vLLM/SGLang rollout; FSDP or Megatron trainer; PPO/GRPO/DAPO and agentic loops</td><td>The most used open RLHF/RLVR stack; dense and MoE; large community of recipes (DAPO was built on it)</td><td>Many moving parts; Ray operations; async support newer than its sync path</td></tr>
+<tr><td><strong>Miles</strong> (slime lineage)</td><td>SGLang-native rollouts, Megatron trainer, disaggregated and asynchronous by design</td><td>Enterprise-scale MoE RL where rollout throughput and async utilization dominate</td><td>Younger; tied to the SGLang + Megatron pairing</td></tr>
+<tr><td><strong>NeMo RL + NeMo Gym</strong> (NVIDIA)</td><td>Trainers (Megatron/DTensor) call environments and rewards exposed as servers; Gym provides the environment/reward server framework</td><td>Agentic RL where environments are heterogeneous services; NVIDIA stack shops</td><td>Heavier platform; best inside the NeMo ecosystem</td></tr>
+<tr><td><strong>OpenEnv</strong> (PyTorch + Hugging Face community)</td><td>An open specification and hub for Gym-style agentic environments running in containers (reset/step/state), consumable by any trainer</td><td>Sharing and reusing environments across frameworks</td><td>A spec plus environments, not a trainer</td></tr>
+<tr><td><strong>TRL</strong> (Hugging Face)</td><td>GRPOTrainer with optional vLLM rollout server</td><td>The fastest path to a first GRPO run on a single node; prototyping reward functions</td><td>Not built for frontier-scale disaggregation</td></tr>
+<tr><td><strong>OpenRLHF</strong></td><td>Ray + vLLM + DeepSpeed/ZeRO</td><td>PPO/GRPO/REINFORCE++ with a smaller codebase</td><td>Less MoE and agentic depth</td></tr>
+<tr><td><strong>SkyRL · prime-rl · verifiers</strong></td><td>Async-first, environment-centric designs (prime-rl decentralized/async; verifiers as a library of env + reward abstractions)</td><td>Long-horizon agentic RL research; async training</td><td>Research-grade; APIs evolve monthly</td></tr>
+</table>
+<div class="formula"># Illustrative verl-style config sketch (field names vary by version — read the repo's examples)
+algorithm:
+  adv_estimator: grpo            # or gae (PPO), rloo
+  kl_ctrl: {kl_coef: 0.0}        # many RLVR recipes drop the KL term
+data:
+  train_batch_size: 512          # prompts per step
+  max_prompt_length: 2048
+  max_response_length: 8192      # the length budget; pair with overlong shaping
+actor_rollout_ref:
+  model: {path: Qwen/Qwen3-30B-A3B}        # a MoE policy
+  rollout:
+    name: sglang                 # or vllm
+    n: 16                        # G samples per prompt
+    tensor_model_parallel_size: 4
+    gpu_memory_utilization: 0.8
+  actor:
+    strategy: fsdp               # or megatron for larger MoE
+    ppo_mini_batch_size: 128
+    clip_ratio_low: 0.2
+    clip_ratio_high: 0.28        # DAPO clip-higher
+    loss_agg_mode: token-mean    # DAPO token-level aggregation
+reward_model:
+  reward_manager: custom         # path to the verifiable reward function (math_reward / code_reward above)
+trainer:
+  n_gpus_per_node: 8
+  nnodes: 16
+  save_freq: 20                  # checkpoint policy + optimizer (+ buffer, if async)</div>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li><strong>Objectives</strong>: DeepSeekMath (GRPO) and the DeepSeek-R1 report; DAPO (ByteDance Seed, 2025); "Understanding R1-Zero-like training" (Dr. GRPO); Group Sequence Policy Optimization (GSPO, Qwen); Tulu 3 (the RLVR recipe, AI2).</li>
+<li><strong>Systems</strong>: HybridFlow (the verl paper) for the single-controller colocated design; the slime and Miles repositories for SGLang-native disaggregated/async RL; Kimi K1.5 and K2 technical reports for partial rollouts and large-scale RL infrastructure; the NeMo Gym and OpenEnv documentation for the environment-server pattern.</li>
+<li><strong>Evaluation debate</strong>: "Does RL really incentivize reasoning capacity in LLMs beyond the base model?" (pass@k analysis) and responses.</li>
+<li>In this notebook: <a href="training.html">Training</a> for the objectives' origins, <a href="inference.html">Inference</a> and <a href="parallelism.html">Parallelism</a> for the engine and trainer internals, <a href="agents.html">Agents</a> for the loop you are training, <a href="customization.html">Customization &amp; Evals</a> for deciding when RL is even the right tool, and the <a href="flashcards.html">RL Systems</a> flashcard deck.</li>
+</ul>
+
+<div class="footer-nav"><a href="customization.html">← Customization &amp; Evals</a><a href="robot-learning.html">RL &amp; Robotics →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+function onTheme(f){new MutationObserver(f).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+
+// ---------- 1. GRPO group ----------
+(function(){
+const cv=document.getElementById('grpoViz'),ctx=cv.getContext('2d');
+const G=8,T=14;let scores=[],ratios=[],stage=0;
+const pS=document.getElementById('grpoP'),eS=document.getElementById('grpoEps');
+pS.oninput=()=>{document.getElementById('grpoPl').textContent=pS.value+'%';};
+eS.oninput=()=>{document.getElementById('grpoEl').textContent=(eS.value/100).toFixed(2);draw();};
+function sample(){const p=pS.value/100;scores=Array.from({length:G},()=>Math.random()<p?1:0);
+  ratios=Array.from({length:T},()=>Math.exp((Math.random()-0.5)*0.9));stage=0;draw();}
+function stats(){const m=scores.reduce((a,b)=>a+b,0)/G;const sd=Math.sqrt(scores.reduce((a,b)=>a+(b-m)**2,0)/G);return {m,sd,adv:scores.map(s=>sd>1e-6?(s-m)/sd:0)};}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2');
+  const {m,sd,adv}=stats();const eps=eS.value/100;
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  ctx.fillText('Prompt: "Find the sum of all integers n with n² < 50 and n > 0."  (ground truth: 28)',20,24);
+  // responses
+  for(let i=0;i<G;i++){const x=20+i*108,y=44;
+    ctx.fillStyle=css('--bg-card');ctx.strokeStyle=bd;rr(ctx,x,y,98,54,8);ctx.fill();ctx.stroke();
+    ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('response '+(i+1),x+8,y+16);
+    if(stage>=1){ctx.fillStyle=scores[i]?acc2:'#e5604c';ctx.font='bold 13px sans-serif';ctx.fillText(scores[i]?'✓ R=1':'✗ R=0',x+8,y+36);}
+    if(stage>=2){const a=adv[i];ctx.fillStyle=a>0?acc2:a<0?'#e5604c':dim;ctx.font='11px monospace';ctx.fillText('Â='+(a>=0?'+':'')+a.toFixed(2),x+8,y+50);}
+  }
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  if(stage===0)ctx.fillText('Step 1: the verifier scores each response.',20,122);
+  else if(stage===1)ctx.fillText('Step 2: baseline = group mean '+m.toFixed(3)+' (std '+sd.toFixed(3)+'). Advantage = (R − mean) / std, shared by all tokens of that response.',20,122);
+  else ctx.fillText(sd<1e-6?'All responses scored the same → every advantage is 0 → no gradient. Dynamic sampling (DAPO) would drop this group.':'Step 3: per-token importance ratios for response 1, clipped to [1−ε, 1+ε] = ['+(1-eps).toFixed(2)+', '+(1+eps).toFixed(2)+'].',20,122);
+  // token strip for response 1
+  if(stage>=2&&sd>1e-6){
+    const a=adv[0];ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.fillText('response 1 tokens — ratio π_θ/π_old (advantage '+(a>=0?'+':'')+a.toFixed(2)+')',20,160);
+    const toks=['Let','n','range','1','..','7',':','sum','=','1+2+…+7','=','28','\\boxed{','28}'];
+    for(let t=0;t<T;t++){const x=20+t*61,y=175,r=ratios[t];const clipped=r>1+eps||r<1-eps;
+      const up=(a>0)!==(r<1); // sign of gradient direction irrelevant for color: color by advantage sign
+      ctx.fillStyle=a>0?acc2:'#e5604c';ctx.globalAlpha=clipped?0.35:0.9;rr(ctx,x,y,56,46,6);ctx.fill();ctx.globalAlpha=1;
+      if(clipped){ctx.save();ctx.beginPath();rr(ctx,x,y,56,46,6);ctx.clip();ctx.strokeStyle=css('--bg');ctx.lineWidth=2;for(let k=-46;k<56;k+=8){ctx.beginPath();ctx.moveTo(x+k,y+46);ctx.lineTo(x+k+46,y);ctx.stroke();}ctx.restore();}
+      ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.textAlign='center';ctx.fillText(toks[t],x+28,y+18);ctx.fillText(r.toFixed(2),x+28,y+36);ctx.textAlign='left';}
+    const nclip=ratios.filter(r=>r>1+eps||r<1-eps).length;
+    ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('solid = contributes gradient, hatched = clipped (ratio outside the band): '+nclip+' of '+T+' tokens clipped this step. Clip fraction is a health metric — a few % is normal.',20,250);
+    ctx.fillText('GRPO averages the per-token terms within each response, then across the group; DAPO sums over all tokens in the batch so long responses are not down-weighted.',20,272);
+  }
+  ctx.fillStyle=dim;ctx.fillText('Group size G = '+G+'. Each prompt costs G full generations — rollout, not training, is the expensive part.',20,H-16);
+}
+document.getElementById('grpoSample').onclick=sample;
+document.getElementById('grpoStep').onclick=()=>{stage=Math.min(2,stage+1);draw();};
+sample();onTheme(draw);
+})();
+
+// ---------- 2. trainer–rollout loop ----------
+(function(){
+const cv=document.getElementById('loopViz'),ctx=cv.getContext('2d');
+const sel=document.getElementById('loopMode');let t=0,timer=null;
+// phases per mode: lanes [engine, trainer]; each item {start,len,type}
+const ROLL=22,TAIL=8,REW=3,TRAIN=10,SYNC=2;
+function plan(mode){
+  const e=[],tr=[];let cur=0;
+  for(let s=0;s<3;s++){
+    if(mode==='colo'){e.push({s:cur,l:ROLL,ty:'roll'});e.push({s:cur+ROLL,l:TAIL,ty:'tail'});tr.push({s:cur,l:ROLL+TAIL,ty:'idle'});cur+=ROLL+TAIL;
+      e.push({s:cur,l:REW,ty:'rew'});tr.push({s:cur,l:REW,ty:'idle'});cur+=REW;
+      e.push({s:cur,l:TRAIN,ty:'idle'});tr.push({s:cur,l:TRAIN,ty:'train'});cur+=TRAIN;
+      e.push({s:cur,l:SYNC,ty:'sync'});tr.push({s:cur,l:SYNC,ty:'sync'});cur+=SYNC;}
+    else if(mode==='disagg'){e.push({s:cur,l:ROLL,ty:'roll'});e.push({s:cur+ROLL,l:TAIL,ty:'tail'});tr.push({s:cur,l:ROLL+TAIL,ty:'idle'});cur+=ROLL+TAIL;
+      e.push({s:cur,l:REW,ty:'rew'});tr.push({s:cur,l:REW,ty:'idle'});cur+=REW;
+      e.push({s:cur,l:TRAIN,ty:'idle'});tr.push({s:cur,l:TRAIN,ty:'train'});cur+=TRAIN;
+      e.push({s:cur,l:SYNC+2,ty:'sync'});tr.push({s:cur,l:SYNC+2,ty:'sync'});cur+=SYNC+2;}
+    else { // async: engine always generating; trainer trains previous step's data; sync overlaps
+      const start=s*(ROLL+TAIL+REW);e.push({s:start,l:ROLL,ty:'roll'});e.push({s:start+ROLL,l:TAIL,ty:'tail'});e.push({s:start+ROLL+TAIL,l:REW,ty:'rew'});
+      if(s===0)tr.push({s:0,l:ROLL+TAIL+REW,ty:'idle'});
+      else {tr.push({s:start,l:TRAIN,ty:'train'});tr.push({s:start+TRAIN,l:SYNC+2,ty:'sync'});tr.push({s:start+TRAIN+SYNC+2,l:ROLL+TAIL+REW-TRAIN-SYNC-2,ty:'idle'});}
+      cur=start+ROLL+TAIL+REW;}
+  }
+  return {e,tr,total:cur};
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const mode=sel.value,P=plan(mode);const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const col={roll:'#5b8cff',tail:'#9fb8ff',rew:'#f2a65a',train:'#38c6a0',sync:'#b07cff',idle:'rgba(128,128,128,0.18)'};
+  const x0=120,pw=W-x0-30,sc=pw/P.total;
+  const lanes=[['Rollout engine GPUs',P.e,60],['Trainer GPUs',P.tr,150]];
+  let busy={e:0,tr:0};
+  lanes.forEach(([name,items,y],li)=>{
+    ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText(name,20,y+22);
+    items.forEach(it=>{if(it.s>=t)return;const l=Math.min(it.l,t-it.s);ctx.fillStyle=col[it.ty];ctx.fillRect(x0+it.s*sc,y,l*sc-1,40);
+      if(it.ty!=='idle'){if(li===0)busy.e+=l;else busy.tr+=l;}});
+  });
+  // legend
+  const L=[['roll','rollout (decode)'],['tail','long-tail stragglers'],['rew','reward / verifier'],['train','gradient step'],['sync','weight sync'],['idle','idle']];
+  L.forEach(([k,l],i)=>{const x=20+i*145,y=225;ctx.fillStyle=col[k];ctx.fillRect(x,y,12,12);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText(l,x+16,y+10);});
+  const el=Math.min(t,P.total);
+  const ue=el?Math.round(100*busy.e/el):0,ut=el?Math.round(100*busy.tr/el):0;
+  const notes={colo:'Same GPUs play both roles: zero overlap possible, cheap local sync. Utilization = whichever role is active.',
+    disagg:'Separate pools, still synchronous: trainer idles for the whole rollout, engine idles during training. Sync crosses the network.',
+    async:'Engine never stops; trainer consumes step k while engine generates k+1 with ≤1-step-stale weights. Importance ratios absorb the staleness.'};
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText(notes[mode],20,265);
+  document.getElementById('loopStats').textContent='t='+Math.min(t,P.total)+'/'+P.total+' — engine busy '+ue+'%, trainer busy '+ut+'%';
+  ctx.fillStyle=dim;ctx.fillText('time →  (3 RL steps; the tail is the last few long responses the whole step waits for)',x0,H-14);
+}
+function tick(){const P=plan(sel.value);if(t<P.total){t++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('loopPlay').textContent='▶ Play';}}
+document.getElementById('loopPlay').onclick=function(){if(timer){stop();return;}const P=plan(sel.value);if(t>=P.total)t=0;this.textContent='⏸ Pause';timer=setInterval(tick,90);};
+document.getElementById('loopReset').onclick=()=>{stop();t=0;draw();};
+sel.onchange=()=>{stop();t=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 3. reward hacking ----------
+(function(){
+const cv=document.getElementById('hackViz'),ctx=cv.getContext('2d');
+let step=0,timer=null,fixed=false,hist=[];
+function model(s){ // measured reward and true accuracy as functions of training step
+  const learn=0.25+0.55*(1-Math.exp(-s/40));
+  if(!fixed){const hack=s>60?Math.min(1,(s-60)/50):0;const measured=Math.min(0.98,learn+hack*(0.98-learn));const truth=learn*(1-0.8*hack);return {measured,truth};}
+  return {measured:learn,truth:learn};
+}
+function tick(){if(step<150){step++;hist.push(model(step));draw();}else stop();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2');
+  const x0=60,y0=H-50,pw=W-x0-30,ph=H-100;
+  ctx.strokeStyle=bd;ctx.lineWidth=1;
+  for(let p=0;p<=1;p+=0.25){const y=y0-ph*p;ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x0+pw,y);ctx.stroke();ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='right';ctx.fillText(Math.round(p*100)+'%',x0-8,y+4);}
+  function line(key,color){ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.beginPath();hist.forEach((h,i)=>{const x=x0+pw*i/150,y=y0-ph*h[key];i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();}
+  line('measured',acc);line('truth',acc2);
+  ctx.textAlign='left';ctx.fillStyle=acc;ctx.font='bold 12px sans-serif';ctx.fillText('measured reward (checker: "contains the right number")',x0+10,24);
+  ctx.fillStyle=acc2;ctx.fillText('true accuracy (held-out strict verifier)',x0+420,24);
+  if(!fixed&&step>60){ctx.fillStyle='#e5604c';ctx.font='12px sans-serif';ctx.fillText('↑ policy discovers: list many numbers, one will match',x0+pw*0.42,y0-ph*0.95+40);}
+  if(fixed){ctx.fillStyle=acc2;ctx.font='12px sans-serif';ctx.fillText('checker fixed: extract the FINAL answer only — curves re-couple',x0+10,44);}
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('training steps →',x0,H-14);
+  const last=hist[hist.length-1];if(last){ctx.fillStyle=txt;ctx.font='12px monospace';ctx.textAlign='right';ctx.fillText('gap: '+Math.round(100*(last.measured-last.truth))+' pts',x0+pw,H-14);}
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('hackPlay').textContent='▶ Train';}}
+document.getElementById('hackPlay').onclick=function(){if(timer){stop();return;}if(step>=150){step=0;hist=[];}this.textContent='⏸ Pause';timer=setInterval(tick,40);};
+document.getElementById('hackFix').onclick=()=>{fixed=true;hist=hist.map((h,i)=>model(i+1));draw();};
+document.getElementById('hackReset').onclick=()=>{stop();step=0;hist=[];fixed=false;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 4. agentic episode + loss mask ----------
+(function(){
+const cv=document.getElementById('epViz'),ctx=cv.getContext('2d');
+const TURNS=[
+ {who:'env',label:'task prompt',text:'Fix failing test test_parse_date in utils/dates.py',n:9},
+ {who:'policy',label:'agent: thought + tool call',text:'The parser ignores timezone offsets. edit(utils/dates.py, +handle %z)',n:11},
+ {who:'env',label:'tool output',text:'patch applied (3 lines)',n:4},
+ {who:'policy',label:'agent: tool call',text:'run_tests()',n:3},
+ {who:'env',label:'tool output (test log)',text:'FAILED test_parse_date — ValueError: unconverted data remains: Z',n:10},
+ {who:'policy',label:'agent: thought + tool call',text:'Need to map Z to +00:00 before strptime. edit(utils/dates.py, replace Z)',n:12},
+ {who:'env',label:'tool output',text:'patch applied (1 line)',n:4},
+ {who:'policy',label:'agent: tool call',text:'run_tests()',n:3},
+ {who:'env',label:'tool output (test log)',text:'12 passed in 0.41s',n:5},
+ {who:'policy',label:'agent: submit',text:'submit()  → hidden tests: pass → reward 1.0',n:4}];
+let k=0;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc2=css('--accent2');
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  // transcript
+  for(let i=0;i<k;i++){const t=TURNS[i],y=22+i*20;ctx.fillStyle=t.who==='policy'?acc2:dim;ctx.font=t.who==='policy'?'bold 12px sans-serif':'12px sans-serif';
+    ctx.fillText((t.who==='policy'?'▶ ':'  ')+t.label+':  '+t.text,20,y);}
+  // token strip
+  const y=236;let x=20;let tot=0,pol=0;
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.fillText('context tokens so far  (green = policy tokens, in the loss; grey = prompt / environment tokens, masked)',20,y-10);
+  for(let i=0;i<k;i++){const t=TURNS[i];for(let j=0;j<t.n;j++){ctx.fillStyle=t.who==='policy'?acc2:'rgba(128,128,128,0.35)';ctx.fillRect(x,y,12,26);x+=13;tot++;if(t.who==='policy')pol++;}x+=6;}
+  if(k===TURNS.length){ctx.fillStyle=acc2;ctx.font='bold 13px sans-serif';ctx.fillText('terminal reward 1.0 → advantage broadcast to all '+pol+' policy tokens; env tokens get none',20,y+50);}
+  document.getElementById('epStats').textContent='turn '+k+'/'+TURNS.length+' — '+tot+' tokens in context, '+pol+' trainable ('+(tot?Math.round(100*pol/tot):0)+'%)';
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('Each policy turn is one engine generation; each env turn is a sandbox execution on the rollout critical path.',20,H-12);
+}
+document.getElementById('epStep').onclick=()=>{if(k<TURNS.length){k++;draw();}};
+document.getElementById('epReset').onclick=()=>{k=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 6. cost model ----------
+(function(){
+const $=id=>document.getElementById(id);
+function fmt(n){return n>=1e9?(n/1e9).toFixed(1)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'K':String(Math.round(n));}
+function tm(s){return s>=3600?(s/3600).toFixed(1)+' h':s>=60?(s/60).toFixed(1)+' min':s.toFixed(0)+' s';}
+function upd(){
+  const N=+$('cN').value,G=+$('cG').value,L=+$('cL').value,A=+$('cA').value*1e9,TP=+$('cTP').value,RN=+$('cRN').value,TN=+$('cTN').value;
+  $('cNl').textContent=N;$('cGl').textContent=G;$('cLl').textContent=fmt(L);$('cRNl').textContent=RN;$('cTNl').textContent=TN;
+  const toks=N*G*L;const roll=toks/(TP*RN);
+  const flops=6*A*toks+2*A*toks; // fwd+bwd on new policy + one fwd for old-policy logprobs
+  const nodeFlops=8*989e12*0.40;const train=flops/(nodeFlops*TN);
+  $('kTok').textContent=fmt(toks);$('kRoll').textContent=tm(roll);$('kTrain').textContent=tm(train);$('kRatio').textContent=(roll/train).toFixed(1)+' : 1';
+}
+['cN','cG','cL','cA','cTP','cRN','cTN'].forEach(id=>$(id).oninput=upd);upd();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,455 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>&lt;a name=&quot;ml-coding&quot;&gt;&lt;/a&gt; 2. ML/Data Coding :robot:</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLC/ml-coding.md</div>
+<article class="note"><h1 id="2-mldata-coding-robot"><a name="ml-coding"></a> 2. ML/Data Coding :robot:</h1>
+<p>This page is the canonical index for ML coding interview practice. Work through one category at a time: implement the prompt without looking, compare with the linked answer, test edge cases, and explain the trade-offs aloud.</p>
+<p>The catalog is intentionally divided by interview skill rather than framework:</p>
+<ol>
+<li><strong>Classic ML</strong> — algorithms, data preparation, metrics, and training fundamentals.</li>
+<li><strong>Language Models (LM)</strong> — tokenization, attention, decoding, and sequence batching.</li>
+<li><strong>Generative AI (GenAI)</strong> — adaptation, retrieval, preference learning, and generation primitives.</li>
+<li><strong>Agentic AI coding</strong> — tools, orchestration, memory, retries, permissions, and termination.</li>
+</ol>
+<p>Every catalog row has an answer. Python answers are deliberately interview-sized and self-contained; a few established visual exercises use an existing notebook as their answer.</p>
+<h2 id="how-to-use-this-chapter">How to use this chapter</h2>
+<ol>
+<li>Pick a question and restate its input, output, shapes, and assumptions.</li>
+<li>Implement a correct baseline without opening the answer.</li>
+<li>Test a normal case and at least one boundary or failure case.</li>
+<li>Compare with the linked answer, then discuss complexity and production trade-offs.</li>
+<li>Revisit <strong>Easy</strong> questions in 15 minutes, <strong>Medium</strong> questions in 20–35 minutes, and <strong>Hard</strong> questions in 40–60+ minutes.</li>
+</ol>
+<p>Run all Python answer tests from the repository root:</p>
+<pre><code class="language-bash">uv run --with numpy python -m unittest discover -s src/MLC/tests -p &quot;test_*.py&quot;
+</code></pre>
+<p>Difficulty colors: <img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"> <img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"> <img alt="Hard" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-hard.svg"></p>
+<h2 id="priority-ml-coding-problems">Priority ML coding problems</h2>
+<h3 id="classic-ml">Classic ML</h3>
+<p>These questions cover the core implementation patterns expected in general ML, applied-science, and data-focused interviews.</p>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Difficulty</th>
+<th>Tags</th>
+<th>Company tags</th>
+<th>Answer</th>
+<th>Interview focus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Numerically stable softmax and cross-entropy</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td><code>NumPy</code>, probability, numerical stability</td>
+<td>Apple, Meta, Google, Amazon</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/softmax_cross_entropy.py">Python</a></td>
+<td>Max subtraction, log-sum-exp, shapes, class-index validation</td>
+</tr>
+<tr>
+<td>Linear regression with gradient descent</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>regression, optimization, vectorization</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/linear_regression.py">Python</a> · <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/linear_regression_md.ipynb">Notebook</a></td>
+<td>MSE gradients, bias, feature scale, convergence</td>
+</tr>
+<tr>
+<td>Logistic regression with gradient descent</td>
+<td><img alt="Hard" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-hard.svg"></td>
+<td>classification, optimization, numerical stability</td>
+<td>Google, Meta, Amazon</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/logistic_regression.py">Python</a> · <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/logistic_regression_md.ipynb">Notebook</a></td>
+<td>Stable sigmoid, binary targets, gradients, decision threshold</td>
+</tr>
+<tr>
+<td>k-nearest neighbors</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>distance, vectorization, classification</td>
+<td>Uber, LinkedIn, Meta</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/knn.py">Python</a> · <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/k_nearest_neighbors.ipynb">Notebook</a></td>
+<td>Pairwise distances, top-k selection, ties, time and memory cost</td>
+</tr>
+<tr>
+<td>k-means clustering</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>clustering, unsupervised learning, convergence</td>
+<td>Uber, LinkedIn, Google, Amazon</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/kmeans.py">Python</a> · <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/k_means_2.ipynb">Notebook</a></td>
+<td>Initialization, assignment/update steps, empty clusters</td>
+</tr>
+<tr>
+<td>Decision-tree split</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>trees, Gini impurity, search</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/decision_tree_split.py">Python</a> · <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/decision_tree.ipynb">Notebook</a></td>
+<td>Candidate thresholds, weighted impurity, stopping conditions</td>
+</tr>
+<tr>
+<td>Principal component analysis</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>linear algebra, dimensionality reduction, SVD</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/pca.py">Python</a></td>
+<td>Centering, component ordering, explained variance</td>
+</tr>
+<tr>
+<td>2D convolution</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>deep learning, computer vision, tensor shapes</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/conv2d.py">Python</a> · <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/convolution.ipynb">Notebook</a></td>
+<td>Output shape, stride, cross-correlation versus convolution</td>
+</tr>
+<tr>
+<td>Binary metrics and ROC-AUC</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>evaluation, ranking, class imbalance</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/binary_metrics_roc_auc.py">Python</a></td>
+<td>Zero denominators, tied scores, rank interpretation</td>
+</tr>
+<tr>
+<td>Reservoir sampling</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>streaming, probability, sampling</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/reservoir_sampling.py">Python</a></td>
+<td>Unknown stream length, uniform inclusion probability, O(k) memory</td>
+</tr>
+<tr>
+<td>Linear SVM and hinge loss</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>margin methods, optimization, classification</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/svm.ipynb">Notebook</a></td>
+<td>Hinge loss, margin violations, regularization</td>
+</tr>
+<tr>
+<td>Perceptron learning rule</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>online learning, linear classification</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/perceptron.ipynb">Notebook</a></td>
+<td>Update condition, convergence assumptions, decision boundary</td>
+</tr>
+<tr>
+<td>Feedforward neural network and backpropagation</td>
+<td><img alt="Hard" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-hard.svg"></td>
+<td>neural networks, chain rule, gradients</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks/feedforward.ipynb">Notebook</a></td>
+<td>Forward cache, gradient flow, parameter updates, shape checks</td>
+</tr>
+<tr>
+<td>Multiclass metrics and macro averaging</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>evaluation, confusion matrix, averaging</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/multiclass_metrics.py">Python</a></td>
+<td>Per-class counts, macro versus micro, absent classes</td>
+</tr>
+<tr>
+<td>Multinomial Naive Bayes for text</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>NLP, probability, smoothing</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/multinomial_naive_bayes.py">Python</a></td>
+<td>Log space, Laplace smoothing, unseen tokens, independence assumption</td>
+</tr>
+<tr>
+<td>Matrix factorization for recommendations</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>recommendation, embeddings, SGD</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/matrix_factorization.py">Python</a></td>
+<td>Observed entries, regularization, latent rank, cold start</td>
+</tr>
+<tr>
+<td>Gradient-boosting residual step</td>
+<td><img alt="Hard" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-hard.svg"></td>
+<td>ensembles, residual fitting, regression trees</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/gradient_boosting_step.py">Python</a></td>
+<td>Negative gradients, weak learner, learning-rate shrinkage</td>
+</tr>
+<tr>
+<td>Train/validation/test split without leakage</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>data splitting, reproducibility, stratification</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/dataset_split.py">Python</a></td>
+<td>Disjoint indices, class balance, train-only fitting</td>
+</tr>
+<tr>
+<td>Feature standardization with training statistics</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>preprocessing, leakage, numerical stability</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/feature_standardization.py">Python</a></td>
+<td>Fit/transform separation, constant features, shape validation</td>
+</tr>
+<tr>
+<td>Missing values and unseen categories</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>preprocessing, imputation, categorical encoding</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/categorical_preprocessing.py">Python</a></td>
+<td>Training-only state, unknown bucket, all-missing columns</td>
+</tr>
+<tr>
+<td>Uniform, weighted, and stratified sampling</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>sampling, imbalance, reproducibility</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/sampling_strategies.py">Python</a></td>
+<td>Replacement, normalized weights, per-class guarantees</td>
+</tr>
+<tr>
+<td>Sample-weighted losses and streaming metrics</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>evaluation, streaming, distributed aggregation</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/classic_ml/streaming_weighted_mean.py">Python</a></td>
+<td>Weight by sample count, mergeable state, empty state</td>
+</tr>
+</tbody>
+</table>
+<h3 id="language-models-lm">Language Models (LM)</h3>
+<p>These questions move from text features to the token, attention, and decoding mechanics used by modern language models.</p>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Difficulty</th>
+<th>Tags</th>
+<th>Company tags</th>
+<th>Answer</th>
+<th>Interview focus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TF-IDF</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>NLP, sparse features, information retrieval</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/tfidf.py">Python</a></td>
+<td>Token counts, document frequency, smoothing, vocabulary order</td>
+</tr>
+<tr>
+<td>Scaled dot-product attention</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>attention, transformer, masking</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/scaled_dot_product_attention.py">Python</a></td>
+<td>Q/K/V shapes, 1/sqrt(d_k), masking before stable softmax</td>
+</tr>
+<tr>
+<td>Learn and apply byte-pair encoding</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>tokenization, BPE, vocabulary</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/byte_pair_encoding.py">Python</a></td>
+<td>Pair counts, deterministic merges, unseen-word encoding</td>
+</tr>
+<tr>
+<td>Build a causal attention mask</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>transformer, masking, autoregressive decoding</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/causal_attention_mask.py">Python</a></td>
+<td>Query/key semantics, padding, boolean-mask convention</td>
+</tr>
+<tr>
+<td>Sinusoidal positional encoding</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>transformer, position, vectorization</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/sinusoidal_position_encoding.py">Python</a></td>
+<td>Alternating sine/cosine channels, odd widths, shape</td>
+</tr>
+<tr>
+<td>Temperature, top-k, and top-p sampling</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>decoding, probability, generation</td>
+<td>Anthropic, OpenAI, DeepMind</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/top_k_top_p_sampling.py">Python</a></td>
+<td>Filtering order, renormalization, deterministic tests</td>
+</tr>
+<tr>
+<td>Append-only KV cache</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>inference, attention, latency, memory</td>
+<td>Anthropic, OpenAI, Meta, Perplexity</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/kv_cache.py">Python</a></td>
+<td>Cache shape, capacity, prefill versus decode, memory growth</td>
+</tr>
+<tr>
+<td>Pad variable-length token batches</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>batching, padding, masks</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/language_models/padded_batches.py">Python</a></td>
+<td>Padding ID, validity mask, empty sequences, batch shape</td>
+</tr>
+</tbody>
+</table>
+<h3 id="generative-ai-genai">Generative AI (GenAI)</h3>
+<p>These are compact implementations of common fine-tuning, retrieval, alignment, and generation building blocks.</p>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Difficulty</th>
+<th>Tags</th>
+<th>Company tags</th>
+<th>Answer</th>
+<th>Interview focus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LoRA update for a linear layer</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>fine-tuning, low rank, linear algebra</td>
+<td>Meta, Google, Anthropic, OpenAI, Databricks</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/genai/lora_linear.py">Python</a></td>
+<td>Matrix shapes, alpha/r scaling, parameter savings, merging</td>
+</tr>
+<tr>
+<td>Symmetric contrastive loss</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>embeddings, InfoNCE, multimodal</td>
+<td>OpenAI, Anthropic, DeepMind, Midjourney</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/genai/contrastive_loss.py">Python</a></td>
+<td>Normalization, temperature, in-batch negatives, two directions</td>
+</tr>
+<tr>
+<td>Exact cosine top-k retrieval for RAG</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>RAG, embeddings, retrieval, ranking</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/genai/rag_retrieval.py">Python</a></td>
+<td>Normalization, top-k ordering, zero vectors, production ANN trade-offs</td>
+</tr>
+<tr>
+<td>Direct Preference Optimization loss</td>
+<td><img alt="Hard" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-hard.svg"></td>
+<td>alignment, preference learning, fine-tuning</td>
+<td>Anthropic, OpenAI, DeepMind, Meta</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/genai/dpo_loss.py">Python</a></td>
+<td>Policy/reference log-probability gaps, beta, stable log-sigmoid</td>
+</tr>
+<tr>
+<td>Classifier-free guidance combination</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>diffusion, guidance, generation</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/genai/classifier_free_guidance.py">Python</a></td>
+<td>Conditional/unconditional predictions, guidance scale trade-off</td>
+</tr>
+</tbody>
+</table>
+<h3 id="agentic-ai-coding">Agentic AI coding</h3>
+<p>These questions test the deterministic control plane around a model. The reference answers keep permissions, budgets, retries, and termination in code rather than relying on prompt text alone.</p>
+<table>
+<thead>
+<tr>
+<th>Problem</th>
+<th>Difficulty</th>
+<th>Tags</th>
+<th>Company tags</th>
+<th>Answer</th>
+<th>Interview focus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Validate JSON tool arguments</td>
+<td><img alt="Easy" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-easy.svg"></td>
+<td>tools, schema, validation</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/agentic_ai/tool_argument_validation.py">Python</a></td>
+<td>Required fields, types, enums, unexpected arguments</td>
+</tr>
+<tr>
+<td>Permission-aware tool registry</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>tools, permissions, function calling</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/agentic_ai/tool_registry.py">Python</a></td>
+<td>Registration, signature binding, side-effect approval boundary</td>
+</tr>
+<tr>
+<td>Planner/executor boundary</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>planning, orchestration, tracing</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/agentic_ai/planner_executor.py">Python</a></td>
+<td>Bounded plan, structured results, partial failure</td>
+</tr>
+<tr>
+<td>Retry with idempotency</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>reliability, retries, side effects</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/agentic_ai/retry_with_idempotency.py">Python</a></td>
+<td>Transient errors, exponential backoff, duplicate suppression</td>
+</tr>
+<tr>
+<td>Sliding-window conversation memory</td>
+<td><img alt="Medium" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-medium.svg"></td>
+<td>memory, context window, token budget</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/agentic_ai/sliding_window_memory.py">Python</a></td>
+<td>Pinned instructions, recent history, eviction, summarization trade-off</td>
+</tr>
+<tr>
+<td>Bounded agent tool-use loop</td>
+<td><img alt="Hard" src="../../../../vendor/notes/ml-interviews/src/MLC/assets/difficulty-hard.svg"></td>
+<td>agents, tools, termination, safety</td>
+<td>—</td>
+<td><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/problems/agentic_ai/bounded_agent_loop.py">Python</a></td>
+<td>Step budget, repeated-call detection, unknown tools, traceability</td>
+</tr>
+</tbody>
+</table>
+<h2 id="extended-practice">Extended practice</h2>
+<ul>
+<li><a href="../../src/MLC/pytorch-ml-coding.html">PyTorch ML Coding Problems</a> is the extended framework-specific drill bank. It is supplementary; the four tables above are the canonical question index.</li>
+<li><a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/notebooks">Legacy notebooks</a> remain available for visual and exploratory practice. The canonical tables link only the notebooks used as current answers or supplements.</li>
+<li><a href="https://github.com/alirezadir/Agentic-AI-Systems/tree/main/06_interview_prep">Agentic AI Systems interview prep</a> covers the system-design layer that complements the agentic coding exercises here.</li>
+</ul>
+<h2 id="difficulty-and-company-tag-policy">Difficulty and company-tag policy</h2>
+<ul>
+<li><strong>Easy:</strong> one focused operation, usually about 15 minutes.</li>
+<li><strong>Medium:</strong> multiple steps or meaningful edge cases, usually 20–35 minutes.</li>
+<li><strong>Hard:</strong> interacting components, advanced debugging, or systems trade-offs, usually 40–60+ minutes.</li>
+</ul>
+<p>Difficulty is an editorial judgment about the complete prompt. Exact matches were calibrated against <a href="https://github.com/Exorust/TorchLeet">TorchLeet</a> and <a href="https://www.deep-ml.com/problems">Deep-ML</a>; unmatched prompts use the same scope-based rubric. Company tags appear only when a reference associates the company with the same implementation problem. They are historical preparation signals, not claims about a current interview loop. This repository uses metadata only and does not copy third-party prompts or answers.</p>
+<h2 id="what-to-explain-during-the-interview">What to explain during the interview</h2>
+<ol>
+<li>State shapes, dtypes, assumptions, and expected outputs before coding.</li>
+<li>Start with a correct baseline, then optimize the bottleneck.</li>
+<li>Discuss time and space complexity, including large intermediate matrices and model state.</li>
+<li>Handle numerical stability, empty inputs, invalid labels, ties, and permission boundaries.</li>
+<li>Write a normal-case test and at least one failure or boundary test.</li>
+<li>Explain how the answer changes for large datasets, GPUs, distributed execution, or production services.</li>
+</ol></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/ml-coding.md">src/MLC/ml-coding.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

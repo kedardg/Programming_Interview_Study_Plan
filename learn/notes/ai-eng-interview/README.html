@@ -1,0 +1,1016 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Engineering Interview Questions and Answers</title><link rel="stylesheet" href="../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../index.html">Learn</a><div class="links"><a href="../../notes.html" class="here">Notes library</a><a href="../../index.html">All chapters</a><a href="../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../notes.html">Notes library</a> › <a href="../../notes.html#ai-eng-interview">AI Engineering Interview Questions and Answers</a> › README.md</div>
+<article class="note"><p align="center">
+    <img alt="AI Engineering Interview Questions and Answers" src="https://github.com/amitshekhariitbhu/ai-engineering-interview-questions/blob/main/assets/banner.png">
+</p>
+
+<h1 id="ai-engineering-interview-questions-and-answers">AI Engineering Interview Questions and Answers</h1>
+<blockquote>
+<p>AI Engineering Interview Questions and Answers - Your Cheat Sheet For AI Engineering Interviews</p>
+<p>These interview questions and answers are helpful for roles such as:</p>
+<ul>
+<li>AI Engineer</li>
+<li>Gen AI Engineer</li>
+<li>LLM Engineer</li>
+<li>Agentic AI Engineer</li>
+<li>AI Agent Engineer</li>
+<li>Forward Deployed Engineer</li>
+<li>AI Solutions Architect</li>
+<li>AI Platform Engineer</li>
+<li>Applied AI Engineer</li>
+<li>MLOps Engineer</li>
+<li>LLMOps Engineer</li>
+</ul>
+</blockquote>
+<h2 id="table-of-contents">Table of Contents</h2>
+<ul>
+<li><a href="#must-know">Must Know</a></li>
+<li><a href="#llm-fundamentals">LLM Fundamentals</a></li>
+<li><a href="#prompt-engineering">Prompt Engineering</a></li>
+<li><a href="#retrieval-augmented-generation-rag">Retrieval-Augmented Generation (RAG)</a></li>
+<li><a href="#ai-agents-and-agentic-systems">AI Agents and Agentic Systems</a></li>
+<li><a href="#fine-tuning-and-model-adaptation">Fine-Tuning and Model Adaptation</a></li>
+<li><a href="#vector-databases-and-embeddings">Vector Databases and Embeddings</a></li>
+<li><a href="#ai-system-design">AI System Design</a></li>
+<li><a href="#llmops-and-production-ai">LLMOps and Production AI</a></li>
+<li><a href="#evaluation-and-testing">Evaluation and Testing</a></li>
+<li><a href="#ai-safety-ethics-and-responsible-ai">AI Safety, Ethics, and Responsible AI</a></li>
+<li><a href="#multimodal-ai">Multimodal AI</a></li>
+<li><a href="#ai-infrastructure-and-scalability">AI Infrastructure and Scalability</a></li>
+<li><a href="#coding-and-practical-implementation">Coding and Practical Implementation</a></li>
+<li><a href="#behavioral-and-scenario-based-questions">Behavioral and Scenario-Based Questions</a></li>
+</ul>
+<h3 id="prepared-and-maintained-by-the-founder-of-outcome-school-amit-shekhar">Prepared and maintained by the <strong>Founder</strong> of <a href="https://outcomeschool.com">Outcome School</a>: Amit Shekhar</h3>
+<h3 id="follow-amit-shekhar">Follow Amit Shekhar</h3>
+<ul>
+<li><a href="https://twitter.com/amitiitbhu">X/Twitter</a></li>
+<li><a href="https://www.linkedin.com/in/amit-shekhar-iitbhu">LinkedIn</a></li>
+<li><a href="https://github.com/amitshekhariitbhu">GitHub</a></li>
+</ul>
+<h3 id="follow-outcome-school">Follow Outcome School</h3>
+<ul>
+<li><a href="https://youtube.com/@OutcomeSchool">YouTube</a></li>
+<li><a href="https://x.com/outcome_school">X/Twitter</a></li>
+<li><a href="https://www.linkedin.com/company/outcomeschool">LinkedIn</a></li>
+<li><a href="https://github.com/OutcomeSchool">GitHub</a></li>
+</ul>
+<h2 id="i-teach-at-outcome-school">I teach at Outcome School</h2>
+<ul>
+<li><a href="https://outcomeschool.com/program/ai-and-machine-learning">AI and Machine Learning</a></li>
+</ul>
+<hr>
+<blockquote>
+<p><strong>Note: We will keep updating this with new questions and answers.</strong></p>
+</blockquote>
+<hr>
+<h3 id="must-know">Must Know</h3>
+<ul>
+<li>LLM</li>
+<li>RAG</li>
+<li>MCP</li>
+<li>Agent</li>
+<li>Fine-tuning</li>
+<li>Quantization</li>
+</ul>
+<p>Learn about the LLM, RAG, MCP, Agent, Fine-tuning &amp; Quantization: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></p>
+<h3 id="llm-fundamentals">LLM Fundamentals</h3>
+<ul>
+<li>What are foundation models, and how have they changed AI engineering?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>What is a Large Language Model (LLM), and how does it work?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a> and <a href="https://outcomeschool.com/blog/large-language-model-llm">How does an LLM work?</a></li>
+<li>Inside ChatGPT: What Happens After You Hit Enter?</li>
+<li>Answer: <a href="https://outcomeschool.substack.com/p/inside-chatgpt-what-happens-after">Inside ChatGPT: What Happens After You Hit Enter</a></li>
+<li>What is the Transformer architecture and how does it work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-transformer-architecture">Decoding Transformer Architecture</a></li>
+<li>What are the key components of the Transformer architecture?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-transformer-architecture">Decoding Transformer Architecture</a></li>
+<li>Walk me through what happens, step by step, in one forward pass of a decoder-only Transformer.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-transformer-architecture">Decoding Transformer Architecture</a></li>
+<li>What is tokenization in LLMs?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/tokenization-in-llms">Tokenization in LLMs</a> and <a href="https://www.youtube.com/watch?v=sK2s9I84EVI">Tokenization in Large Language Models (LLMs)</a></li>
+<li>Explain BPE (Byte Pair Encoding).</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/bpe-in-llms">Byte Pair Encoding</a></li>
+<li>Explain WordPiece and SentencePiece.</li>
+<li>What is positional encoding, and why is it needed in Transformers?</li>
+<li>Answer: <a href="https://outcomeschool.substack.com/p/positional-embeddings-in-llms">Positional Embeddings in LLMs</a></li>
+<li>What are embeddings?</li>
+<li>Answer: <a href="https://www.youtube.com/watch?v=LedXW6xl21s">Embeddings in Machine Learning</a></li>
+<li>Explain the Query(Q), Key(K), and Value(V) in attention.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/math-behind-attention-qkv">Math behind Attention - Q, K, and V</a></li>
+<li>What is self-attention, and how does it work in Transformers?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/self-attention-in-transformers">Self Attention in Transformers</a></li>
+<li>What is Cross Attention in Transformers?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/cross-attention-in-transformers">Cross Attention in Transformers</a></li>
+<li>Why do we scale the dot product attention by √dₖ in the Transformer architecture?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/scaling-dot-product-attention">Math behind √dₖ Scaling Factor in Attention</a></li>
+<li>What is causal masking?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/causal-masking-in-attention">Causal Masking in Attention</a></li>
+<li>What are multi-head attention mechanisms? Why use multiple attention heads?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multi-head-attention-in-transformers">Multi-Head Attention in Transformers</a></li>
+<li>What are Feed-Forward Networks in LLMs?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/feed-forward-networks-in-llms">Feed-Forward Networks in LLMs</a></li>
+<li>What is Generative AI?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-is-generative-ai">What is Generative AI?</a></li>
+<li>What is the context window in LLMs, and why does it matter?</li>
+<li>Answer: <a href="https://www.linkedin.com/posts/amit-shekhar-iitbhu_the-context-window-is-the-llms-working-memory-activity-7437754426175672320-MH9c">Context Window in LLMs</a></li>
+<li>Why is the context window limited in LLMs?</li>
+<li>Answer: <a href="https://www.youtube.com/watch?v=CGIhxIaOg3M&amp;lc">Why is the context window limited in LLMs?</a></li>
+<li>What is temperature in the context of LLMs, and how does it affect output?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-temperature-control-llm-output">How does Temperature control LLM output?</a></li>
+<li>Why is the first token slower than the rest in an LLM?</li>
+<li>Answer: <a href="https://www.youtube.com/watch?v=XD8DD4cEHu0">The First-Token Latency Problem in LLMs</a></li>
+<li>Explain Top-p (nucleus) sampling and Top-k sampling. How do they differ?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-top-k-and-top-p-sampling-work">How do Top-k and Top-p Sampling work?</a> </li>
+<li>Compare greedy decoding, beam search, top-k, top-p, and temperature sampling. When does each fail?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-top-k-and-top-p-sampling-work">How do Top-k and Top-p Sampling work?</a> </li>
+<li>What are logits, and how are they used in text generation?</li>
+<li>Answer: <a href="https://x.com/amitiitbhu/status/1927927814923207146">Understanding Logits in Machine Learning</a> and <a href="https://outcomeschool.com/blog/logits-in-machine-learning">What are Logits in Machine Learning?</a></li>
+<li>What are stop tokens in LLMs, and how does an LLM know when to stop generating?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/stop-tokens-in-llms">Stop Tokens in LLMs</a></li>
+<li>What is the difference between a stop token and a stop sequence?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/stop-tokens-in-llms">Stop Tokens in LLMs</a></li>
+<li>What are skip connections (residual connections) in Transformers?</li>
+<li>Answer: <a href="https://www.linkedin.com/posts/amit-shekhar-iitbhu_machinelearning-llm-deeplearning-share-7414239846707392512-pQdQ">Skip connections (residual connections) in Transformers</a></li>
+<li>What is the difference between open-source and closed-source LLMs? When would you choose one over the other?</li>
+<li>What is the difference between encoder-only, decoder-only, and encoder-decoder Transformer architectures?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/encoder-vs-decoder-in-transformers">Encoder vs Decoder in Transformers</a></li>
+<li>What is KV cache, and how does it speed up inference?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/kv-cache-in-llms">What is KV Cache in LLMs?</a></li>
+<li>Estimate the KV cache memory needed to serve a large model. How does it constrain batch size and context length?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/kv-cache-compression">KV Cache Compression</a></li>
+<li>KV Cache Compression</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/kv-cache-compression">KV Cache Compression</a></li>
+<li>What is model distillation, and how is it used with LLMs?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-knowledge-distillation-work">How does Knowledge Distillation work?</a></li>
+<li>What is Mixture of Experts (MoE), and how does it work in models like Mixtral?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/mixture-of-experts">Mixture of Experts Explained</a></li>
+<li>What is the difference between dense and sparse models?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/mixture-of-experts">Mixture of Experts Explained</a></li>
+<li>How does DeepSeek-V4 work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-deepseek-v4">DeepSeek-V4 Architecture Explained</a></li>
+<li>What is Flash Attention?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-flash-attention">Decoding Flash Attention in LLMs</a></li>
+<li>What is Cross-Entropy Loss?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/math-behind-cross-entropy-loss">Math Behind Cross-Entropy Loss</a></li>
+<li>What is Grouped-Query Attention (GQA), and how does it differ from Multi-Head Attention (MHA)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/grouped-query-attention">Grouped Query Attention</a></li>
+<li>How does Sliding Window Attention work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-sliding-window-attention-work">How does Sliding Window Attention work?</a></li>
+<li>How do Attention Sinks work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-attention-sinks-work">How do Attention Sinks work?</a></li>
+<li>How does Rotary Position Embedding (RoPE) work, and why is it preferred over learned positional embeddings?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/math-behind-rope-rotary-position-embedding">Math Behind RoPE (Rotary Position Embedding)</a></li>
+<li>Explain Layer Normalization</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/batch-normalization-vs-layer-normalization">Batch Normalization vs Layer Normalization</a></li>
+<li>Explain RMSNorm (Root Mean Square Layer Normalization)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/rmsnorm-root-mean-square-layer-normalization">RMSNorm (Root Mean Square Layer Normalization)</a></li>
+<li>Why do modern Transformers use Pre-LayerNorm (Pre-Norm) instead of Post-LayerNorm?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/rmsnorm-root-mean-square-layer-normalization">RMSNorm (Root Mean Square Layer Normalization)</a></li>
+<li>What are scaling laws (Chinchilla), and how do they guide model size vs training data decisions?</li>
+<li>Your LLM keeps ignoring your instructions. How do you make it follow structured output formats?</li>
+<li>Your LLM-powered tool hits the context window limit on long documents. How do you handle it?</li>
+<li>Your LLM does not admit when it does not know the answer. How do you make it say "I don't know"?</li>
+<li>Your LLM generates responses that are too verbose. How do you control response length?</li>
+<li>Your LLM memorized proprietary training data and leaks it in responses. How do you prevent this?</li>
+<li>Your LLM coding assistant generates outdated code using deprecated libraries. How do you fix it?</li>
+<li>Your tokenizer splits important domain terms into meaningless subword pieces. How do you fix it?</li>
+<li>Your Transformer's KV cache grows too large during long sequence generation. How do you manage memory?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/paged-attention-in-llms">Paged Attention in LLMs</a></li>
+<li>Your Transformer runs out of memory on long documents due to quadratic self-attention. How do you scale it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-sliding-window-attention-work">How does Sliding Window Attention work?</a> and <a href="https://outcomeschool.com/blog/decoding-flash-attention">Decoding Flash Attention in LLMs</a></li>
+<li>Your distilled student model fails on the complex reasoning that the teacher model handled. How do you close the gap?</li>
+<li>After RLHF alignment, your LLM became safer but lost capability on hard tasks. How do you manage the alignment tax?</li>
+<li>Your RLHF-trained LLM is gaming the reward model instead of being genuinely helpful. How do you fix reward hacking?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/reinforcement-learning-from-human-feedback-rlhf">Reinforcement Learning from Human Feedback (RLHF)</a></li>
+<li>Your chatbot loses context after 10 turns in a conversation. How do you maintain a long conversation context?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-memory">AI Agent Memory</a></li>
+<li>Your chatbot fails when users switch topics mid-conversation. How do you handle topic switches?</li>
+<li>Your QA system always generates an answer even when no answer exists in the context. How do you detect unanswerable questions?</li>
+<li>Your summarization system hallucinated facts not in the original article. How do you fix it?</li>
+<li>Your text generation repeats phrases in long outputs. How do you fix repetition?</li>
+<li>Transformers work on text, so can they also understand images?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-vision-transformer-vit">Decoding Vision Transformer (ViT)</a></li>
+<li>Small Language Models (SLMs)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/small-language-models-slms">Small Language Models (SLMs)</a></li>
+<li>Large Reasoning Models (LRMs)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/large-reasoning-models">Large Reasoning Models (LRMs)</a></li>
+<li>Jev and System One Models</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/jev-and-system-one-models-explained">Jev and System One Models Explained</a></li>
+<li>What are Autoregressive Models?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/autoregressive-models">Autoregressive Models</a></li>
+<li>Explain the difference between autoregressive and masked language modeling.</li>
+<li>Proximal Policy Optimization (PPO)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/proximal-policy-optimization-ppo">Proximal Policy Optimization (PPO)</a></li>
+<li>Direct Preference Optimization (DPO)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/direct-preference-optimization-dpo">Direct Preference Optimization (DPO)</a></li>
+<li>Group Relative Policy Optimization (GRPO)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/group-relative-policy-optimization-grpo">Group Relative Policy Optimization (GRPO)</a></li>
+<li>Recursive Language Models (RLMs)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/recursive-language-models">Recursive Language Models (RLMs)</a></li>
+<li>Continual Learning in LLMs</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/continual-learning-in-llms">Continual Learning in LLMs</a></li>
+<li>What is Recursive Self-Improvement (RSI)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-is-recursive-self-improvement-rsi">What is Recursive Self-Improvement (RSI)?</a></li>
+<li>How do Diffusion Language Models (DLMs) work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-diffusion-language-models-dlms-work">How do Diffusion Language Models (DLMs) work?</a></li>
+<li>How Does LLM Watermarking Work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-llm-watermarking-work">How Does LLM Watermarking Work?</a></li>
+<li>How do RNNs and Transformers differ?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-rnns-and-transformers-differ">How do RNNs and Transformers differ?</a></li>
+</ul>
+<h3 id="prompt-engineering">Prompt Engineering</h3>
+<ul>
+<li>What is prompt engineering, and why is it critical for AI applications?</li>
+<li>Explain zero-shot, one-shot, and few-shot prompting with examples.</li>
+<li>Answer: <a href="https://www.linkedin.com/posts/pallavi-shekhar_llm-prompting-ai-activity-7441801012472078336-JsHr">Explain zero-shot, one-shot, and few-shot prompting with examples</a></li>
+<li>What is chain-of-thought (CoT) prompting, and when should you use it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-chain-of-thought-prompting-work">How does Chain-of-Thought (CoT) Prompting work?</a></li>
+<li>Explain self-consistency prompting and how it improves reasoning.</li>
+<li>What is tree-of-thought prompting?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-tree-of-thoughts-work">How does Tree of Thoughts work?</a></li>
+<li>What is ReAct (Reasoning + Acting) prompting, and how does it work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/react-agent">ReAct Agent</a></li>
+<li>What is a system prompt, and how does it influence model behavior?</li>
+<li>How do you structure prompts for consistent structured output (JSON, XML)?</li>
+<li>What is prompt injection, and how do you defend against it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prompt-injection-in-llms">Prompt Injection in LLMs</a></li>
+<li>What is jailbreaking in LLMs, and what are common jailbreak techniques?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prompt-injection-in-llms">Prompt Injection in LLMs</a></li>
+<li>How do you optimize prompts for cost and latency?</li>
+<li>What is the difference between prompt engineering and prompt tuning?</li>
+<li>What is a prompt template, and how do you design one for production use?</li>
+<li>How do you handle multi-turn conversations with LLMs?</li>
+<li>What is role prompting, and when is it effective?</li>
+<li>What is prompt chaining, and how do you design a chain of prompts for complex tasks?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-prompt-chaining-work">How does Prompt Chaining work?</a></li>
+<li>How do you evaluate and iterate on prompt quality?</li>
+<li>What are meta-prompts, and how can they be used to generate prompts?</li>
+<li>What are the common failure modes in prompting, and how do you debug them?</li>
+<li>How do you handle edge cases and adversarial inputs in prompt design?</li>
+<li>What is the "lost in the middle" problem in long-context prompting?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/lost-in-the-middle-problem-in-llms">The Lost in the Middle Problem in LLMs</a></li>
+<li>What are output parsers, and why are they needed for production applications?</li>
+<li>How do you handle multi-language prompting effectively?</li>
+<li>Your few-shot prompting gives inconsistent results across similar inputs. How do you stabilize it?</li>
+<li>Your LLM classification system is too sensitive to prompt wording changes. How do you reduce prompt sensitivity?</li>
+<li>Your chatbot's system prompt containing proprietary business logic is being leaked by users. How do you prevent it?</li>
+<li>Your LLM agent is vulnerable to prompt injection that reveals the system prompt. How do you defend it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prompt-injection-in-llms">Prompt Injection in LLMs</a></li>
+<li>Your chain-of-thought prompting is not improving LLM accuracy on reasoning tasks. What do you fix?</li>
+<li>Your AI system works in English but fails for other languages. How do you add multilingual support?</li>
+<li>Your zero-shot cross-lingual transfer from English fails on other languages. How do you fix it?</li>
+</ul>
+<h3 id="retrieval-augmented-generation-rag">Retrieval-Augmented Generation (RAG)</h3>
+<ul>
+<li>What is Retrieval-Augmented Generation (RAG), and why is it important?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>Explain the architecture of a basic RAG system.</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>What are the key components of a RAG pipeline?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>What are chunking strategies, and how do you choose the right chunk size?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/chunking-strategies-for-rag">Chunking Strategies for RAG</a></li>
+<li>Compare fixed-size chunking, semantic chunking, and recursive chunking.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/chunking-strategies-for-rag">Chunking Strategies for RAG</a></li>
+<li>What is Contextual Retrieval, and how does it improve RAG?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-contextual-retrieval-work">How does Contextual Retrieval work?</a></li>
+<li>What are embedding models, and how do they convert text to vectors?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-are-embeddings">What are Embeddings?</a></li>
+<li>How do you choose an embedding model for your RAG system?</li>
+<li>Explain Agentic RAG.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/agentic-rag">Agentic RAG</a></li>
+<li>What is hybrid search, and why is it better than pure vector search?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-hybrid-search-work">How does Hybrid Search work?</a></li>
+<li>What is re-ranking, and how does it improve RAG retrieval quality?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-reranker-work">How does a Reranker work?</a></li>
+<li>What is ColBERT, and how does late interaction retrieval work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-colbert">ColBERT - Late Interaction Retrieval Explained</a></li>
+<li>Compare reranker architectures: cross-encoder, ColBERT, and LLM-based rerankers.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-reranker-work">How does a Reranker work?</a> and <a href="https://outcomeschool.com/blog/decoding-colbert">ColBERT - Late Interaction Retrieval Explained</a></li>
+<li>How do you handle multi-document and multi-hop questions in RAG?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/agentic-rag">Agentic RAG</a> and <a href="https://outcomeschool.com/blog/graphrag">GraphRAG</a></li>
+<li>What is the "lost in the middle" problem in RAG systems?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/lost-in-the-middle-problem-in-llms">The Lost in the Middle Problem in LLMs</a></li>
+<li>How do you evaluate a RAG system? Explain faithfulness, relevance, and context precision/recall.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>Explain Self-RAG. How does the model decide when to retrieve?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/agentic-rag">Agentic RAG</a></li>
+<li>What is GraphRAG, and when would you use it over traditional RAG?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/graphrag">GraphRAG</a></li>
+<li>Vectorless RAG</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/vectorless-rag">Vectorless RAG</a></li>
+<li>How do you handle structured data (tables, SQL databases) in a RAG pipeline?</li>
+<li>What are the common failure modes of RAG systems, and how do you debug them?</li>
+<li>How do you handle document updates and maintain freshness in a RAG system?</li>
+<li>How do you optimize RAG for latency in production?</li>
+<li>What is the role of metadata filtering in RAG systems?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-vector-database-work">How does a Vector Database work?</a></li>
+<li>Compare RAG vs fine-tuning. When would you use each?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>Long context windows keep getting cheaper. When should you use retrieval (RAG) vs putting everything in the context window?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/lost-in-the-middle-problem-in-llms">The Lost in the Middle Problem in LLMs</a></li>
+<li>What is query transformation in RAG (HyDE, query decomposition, step-back prompting)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-hyde-work">How does HyDE work in RAG?</a> and <a href="https://outcomeschool.com/blog/how-do-query-rewriting-and-multi-query-retrieval-work">How do Query Rewriting and Multi-Query Retrieval work?</a></li>
+<li>How do you implement citation and source attribution in RAG?</li>
+<li>How do you scale a RAG system to millions of documents?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-approximate-nearest-neighbor-ann-search-work">How does Approximate Nearest Neighbor (ANN) search work?</a></li>
+<li>What is parent-child chunking, and how does it improve retrieval?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/chunking-strategies-for-rag">Chunking Strategies for RAG</a></li>
+<li>Your RAG system is hallucinating despite having the right context. How do you fix it?</li>
+<li>Your RAG chunk overlap causes redundant results. How do you reduce redundancy?</li>
+<li>Your RAG retrieval is too slow with a large knowledge base. How do you speed it up?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-approximate-nearest-neighbor-ann-search-work">How does Approximate Nearest Neighbor (ANN) search work?</a></li>
+<li>Your RAG system returns duplicate results. How do you deduplicate?</li>
+<li>Your RAG system needs per-user access control on internal documents. How do you implement it?</li>
+<li>Your RAG system fails on domain-specific jargon. How do you fix it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-hybrid-search-work">How does Hybrid Search work?</a></li>
+<li>Your text-only RAG system now needs to handle images and tables. How do you extend it?</li>
+<li>Your RAG knowledge base gets updated frequently and needs versioning. How do you manage it?</li>
+<li>Your RAG system fails on multi-hop questions that require combining multiple facts. How do you fix it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/agentic-rag">Agentic RAG</a> and <a href="https://outcomeschool.com/blog/graphrag">GraphRAG</a></li>
+<li>Your enterprise RAG system returns contradictory answers from different source documents. How do you resolve conflicts?</li>
+<li>Your RAG system returns outdated answers from an evolving knowledge base. How do you keep it current?</li>
+<li>Your RAG system struggles with PDF documents containing tables and layouts. How do you fix PDF parsing?</li>
+</ul>
+<h3 id="ai-agents-and-agentic-systems">AI Agents and Agentic Systems</h3>
+<ul>
+<li>What is an AI agent, and how does it differ from a simple LLM call?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a> and <a href="https://outcomeschool.com/blog/ai-agent">AI Agent Explained</a></li>
+<li>AI Agent Memory</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-memory">AI Agent Memory</a></li>
+<li>Harness Engineering in AI</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/harness-engineering-in-ai">Harness Engineering in AI</a></li>
+<li>What matters more for an agentic coding tool like Claude Code: the model or the harness?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/harness-engineering-in-ai">Harness Engineering in AI</a> and <a href="https://outcomeschool.com/blog/how-does-claude-code-work">How does Claude Code work?</a></li>
+<li>Explain the ReAct (Reasoning + Acting) agent architecture.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/react-agent">ReAct Agent</a></li>
+<li>What is the Plan-and-Execute agent pattern?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/plan-and-execute-agent">Plan-and-Execute Agent</a></li>
+<li>What is tool use (function calling) in LLMs, and how does it enable agents?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a> and <a href="https://outcomeschool.com/blog/how-does-function-calling-work-in-llms">How does Function Calling work in LLMs?</a></li>
+<li>What is the difference between structured output and function calling?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-function-calling-work-in-llms">How does Function Calling work in LLMs?</a></li>
+<li>How do you design and define tools for an AI agent?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>How does an agent decide when to call a tool versus answering from its own knowledge?</li>
+<li>What is the difference between single-agent and multi-agent systems?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multi-agent-systems">Multi-Agent Systems</a></li>
+<li>When do multi-agent systems break down, and when is a single agent the better choice?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multi-agent-systems">Multi-Agent Systems</a></li>
+<li>What is Model Context Protocol (MCP), and how does it standardize tool integration?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a> and <a href="https://outcomeschool.com/blog/what-is-mcp-model-context-protocol">What is MCP (Model Context Protocol)?</a></li>
+<li>How does MCP differ from traditional function calling?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-is-mcp-model-context-protocol">What is MCP (Model Context Protocol)?</a> and <a href="https://outcomeschool.com/blog/how-does-function-calling-work-in-llms">How does Function Calling work in LLMs?</a></li>
+<li>What are AI SubAgents?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-subagents">AI SubAgents</a></li>
+<li>What are the different types of agent memory (short-term, long-term, episodic)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-memory">AI Agent Memory</a></li>
+<li>How do you handle agent failures and implement error recovery?</li>
+<li>What is an agent loop, and how does it decide when to stop?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-loop">AI Agent Loop</a></li>
+<li>Context Engineering</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/context-engineering">Context Engineering</a></li>
+<li>How does context compaction work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-context-compaction-work">How does context compaction work?</a></li>
+<li>Loop Engineering</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-is-loop-engineering">Loop Engineering</a></li>
+<li>Graph Engineering</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-is-graph-engineering">Graph Engineering</a></li>
+<li>How AI Agents Communicate?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-ai-agents-communicate">How AI Agents Communicate</a></li>
+<li>What are Agent Skills?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-are-agent-skills">What are Agent Skills?</a></li>
+<li>How do you evaluate and test AI agents?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-evaluation">AI Agent Evaluation</a></li>
+<li>What are the security risks of agentic systems, and how do you mitigate them?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prompt-injection-in-llms">Prompt Injection in LLMs</a></li>
+<li>Your agent reads untrusted content (emails, web pages, documents) and can call tools. How do you prevent indirect prompt injection and data exfiltration?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prompt-injection-in-llms">Prompt Injection in LLMs</a></li>
+<li>What is the difference between reactive and proactive agents?</li>
+<li>How do you manage token consumption and cost in long-running agent workflows?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-context-compaction-work">How does context compaction work?</a> and <a href="https://www.linkedin.com/posts/pallavi-shekhar_ai-aiagents-machinelearning-activity-7439550125015994368-LTmE">How would you reduce the token consumption?</a></li>
+<li>What is the human-in-the-loop pattern for agents, and when is it needed?</li>
+<li>How do you implement guardrails for AI agents to prevent harmful actions?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-llm-guardrails-work">How do LLM guardrails work?</a></li>
+<li>What is agent reflection, and how does it improve agent performance?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/reflection-agent">Reflection Agent</a></li>
+<li>What is the difference between code-generating agents and tool-calling agents?</li>
+<li>How do you handle multi-modal inputs and outputs in agentic systems?</li>
+<li>How do you implement state management in complex agent workflows?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-langgraph-work">How does LangGraph work?</a></li>
+<li>How do you build a customer support agent with escalation logic?</li>
+<li>What is agent orchestration, and how do you implement it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-orchestration">AI Orchestration</a></li>
+<li>What is Sakana Fugu, and how does it orchestrate a team of AI models?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-sakana-fugu">Sakana Fugu - The Technical Report Explained</a></li>
+<li>How do you build a code execution agent safely using sandboxed environments?</li>
+<li>Your AI agent is stuck in an infinite loop. How do you detect and break the cycle?</li>
+<li>Answer: <a href="https://www.linkedin.com/posts/pallavi-shekhar_ai-aiagents-machinelearning-share-7440257380707364864-5Ycc">Fix an infinite loop in an AI agent</a></li>
+<li>Your AI agent gets conflicting answers from different tools. How does it reconcile them?</li>
+<li>Your AI agent burns too many tokens per task. How do you reduce token consumption?</li>
+<li>Answer: <a href="https://www.linkedin.com/posts/pallavi-shekhar_ai-aiagents-machinelearning-activity-7439550125015994368-LTmE">How would you reduce the token consumption?</a></li>
+<li>Your AI agent keeps exceeding its budget per task. How do you enforce budget limits?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-loop">AI Agent Loop</a></li>
+<li>Your AI agent hallucinates tool capabilities and passes wrong inputs. How do you fix it?</li>
+<li>Your AI agent deleted a production database. How do you prevent irreversible actions?</li>
+<li>Your AI agent has many tools, but keeps picking the wrong one. How do you improve tool selection?</li>
+<li>Your AI agent takes too long to complete a task. How do you speed it up?</li>
+<li>Your long-running agent drifts after hours and confidently works on the wrong thing. How do you diagnose and fix it?</li>
+<li>Your LLM selects the right tool but extracts the wrong parameters. How do you fix parameter extraction?</li>
+<li>How do Computer-Use Agents work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-computer-use-agents-work">How do Computer-Use Agents work?</a></li>
+<li>How do Browser Agents work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-browser-agents-work">How do Browser Agents work?</a></li>
+<li>How does LangChain work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-langchain-work">How does LangChain work?</a></li>
+<li>How does LangGraph work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-langgraph-work">How does LangGraph work?</a></li>
+<li>What is OKF (Open Knowledge Format)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-is-okf-open-knowledge-format">What is OKF (Open Knowledge Format)?</a></li>
+</ul>
+<h3 id="fine-tuning-and-model-adaptation">Fine-Tuning and Model Adaptation</h3>
+<ul>
+<li>What is fine-tuning, and when should you fine-tune an LLM?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>Explain the difference between full fine-tuning and parameter-efficient fine-tuning (PEFT).</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>What is LoRA (Low-Rank Adaptation), and how does it work?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>What is QLoRA, and how does it enable fine-tuning on consumer hardware?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>How does fine-tuning work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-fine-tuning-work">How does fine-tuning work?</a></li>
+<li>Explain Prefix Tuning and Prompt Tuning. How are they different from LoRA?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-prefix-tuning-work">How does Prefix Tuning work?</a></li>
+<li>What is adapter-based fine-tuning?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>Explain the difference between pre-training, supervised fine-tuning (SFT), and preference optimization (RLHF/DPO).</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-instructgpt">Decoding InstructGPT</a></li>
+<li>What is RLHF (Reinforcement Learning from Human Feedback), and how is it used to align LLMs?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/reinforcement-learning-from-human-feedback-rlhf">Reinforcement Learning from Human Feedback (RLHF)</a></li>
+<li>What is Deep RL from Human Preferences, the paper that started RLHF?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-deep-rl-from-human-preferences">Deep RL from Human Preferences</a></li>
+<li>Why did DPO displace PPO-based RLHF at many labs? When is online RL still better?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/direct-preference-optimization-dpo">Direct Preference Optimization (DPO)</a> and <a href="https://outcomeschool.com/blog/proximal-policy-optimization-ppo">Proximal Policy Optimization (PPO)</a></li>
+<li>What is instruction tuning, and why is it important for chat models?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-instructgpt">Decoding InstructGPT</a></li>
+<li>How do you prepare a dataset for fine-tuning an LLM?</li>
+<li>What is catastrophic forgetting, and how do you prevent it during fine-tuning?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/continual-learning-in-llms">Continual Learning in LLMs</a></li>
+<li>When should you choose fine-tuning over RAG over prompt engineering?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a></li>
+<li>How do you evaluate a fine-tuned model's performance?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>What is synthetic data generation, and how do you use it for fine-tuning?</li>
+<li>What are the key hyperparameters for fine-tuning (learning rate, epochs, batch size, LoRA rank)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/lora-low-rank-adaptation-of-llms">LoRA - Low-Rank Adaptation of LLMs</a></li>
+<li>Do the GPU memory math for full fine-tuning a 7B model in bf16 with Adam. Now with LoRA and QLoRA.</li>
+<li>How do you fine-tune a model for a specific domain (legal, medical, finance)?</li>
+<li>What is continual pre-training, and when would you use it?</li>
+<li>How do you merge multiple LoRA adapters?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/lora-low-rank-adaptation-of-llms">LoRA - Low-Rank Adaptation of LLMs</a></li>
+<li>What is the difference between SFT (Supervised Fine-Tuning) and alignment training?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-instructgpt">Decoding InstructGPT</a></li>
+<li>What is RLAIF (RL from AI Feedback), and how does it differ from RLHF?</li>
+<li>What is Constitutional AI, and how does it differ from RLHF?</li>
+<li>What is RLVR (Reinforcement Learning with Verifiable Rewards), and when does it beat a learned reward model?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/group-relative-policy-optimization-grpo">Group Relative Policy Optimization (GRPO)</a></li>
+<li>What is knowledge distillation for fine-tuning, and what are the legal considerations?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-knowledge-distillation-work">How does Knowledge Distillation work?</a></li>
+<li>Your fine-tuned LLM produces factually wrong outputs due to training data quality issues. How do you fix it?</li>
+<li>You must choose between LoRA and full fine-tuning for a domain-specific assistant. How do you decide?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/lora-low-rank-adaptation-of-llms">LoRA - Low-Rank Adaptation of LLMs</a></li>
+<li>Your fine-tuned model memorized training data verbatim instead of learning patterns. How do you fix overfitting?</li>
+<li>Your fine-tuned LLM forgot its general capabilities after domain-specific fine-tuning. How do you fix catastrophic forgetting?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/continual-learning-in-llms">Continual Learning in LLMs</a></li>
+<li>Your RLHF preference data has low annotator agreement. How do you ensure data quality?</li>
+</ul>
+<h3 id="vector-databases-and-embeddings">Vector Databases and Embeddings</h3>
+<ul>
+<li>What are embeddings in the context of AI engineering?</li>
+<li>Answer: <a href="https://www.youtube.com/watch?v=LedXW6xl21s">Embeddings in Machine Learning</a></li>
+<li>How do embedding models convert text to vectors?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-are-embeddings">What are Embeddings?</a></li>
+<li>What is Contrastive Learning, and how is it used to train embedding models?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/contrastive-learning">What is Contrastive Learning?</a></li>
+<li>What is the difference between sparse and dense embeddings?</li>
+<li>Explain cosine similarity, dot product, and Euclidean distance for vector search.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-vector-database-work">How does a Vector Database work?</a> and <a href="https://outcomeschool.com/blog/cosine-similarity">How does Cosine Similarity work?</a></li>
+<li>What is a vector database, and how does it differ from a traditional database?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-vector-database-work">How does a Vector Database work?</a></li>
+<li>How does Approximate Nearest Neighbor (ANN) search work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-approximate-nearest-neighbor-ann-search-work">How does Approximate Nearest Neighbor (ANN) search work?</a></li>
+<li>Compare HNSW, IVF, and flat indexes. How do you pick one, and what does recall@k cost in latency?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-approximate-nearest-neighbor-ann-search-work">How does Approximate Nearest Neighbor (ANN) search work?</a></li>
+<li>How does an Embedding Cache work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-an-embedding-cache-work">How does an Embedding Cache work?</a></li>
+<li>How do you choose the right embedding model for your use case?</li>
+<li>What is embedding dimensionality, and how does it affect performance and cost?</li>
+<li>How do you handle embedding drift when the embedding model is updated?</li>
+<li>What are multi-modal embeddings, and how are they generated?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multimodal-ai">Multimodal AI</a></li>
+<li>How do you index and query multi-tenant data in a vector database?</li>
+<li>What is quantization of embeddings, and how does it reduce storage costs?</li>
+<li>How do you benchmark and evaluate embedding model quality?</li>
+<li>What is the role of metadata in vector databases?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-vector-database-work">How does a Vector Database work?</a></li>
+<li>How do you handle large-scale vector search with billions of vectors?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-approximate-nearest-neighbor-ann-search-work">How does Approximate Nearest Neighbor (ANN) search work?</a></li>
+<li>What is hybrid search (combining keyword search with vector search)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-hybrid-search-work">How does Hybrid Search work?</a></li>
+<li>How do you fine-tune an embedding model for a specific domain?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/contrastive-learning">What is Contrastive Learning?</a></li>
+<li>Your vector database for RAG is consuming too much memory. How do you reduce it?</li>
+<li>Your vector database cannot scale to millions of embeddings. How do you fix the bottleneck?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-approximate-nearest-neighbor-ann-search-work">How does Approximate Nearest Neighbor (ANN) search work?</a></li>
+<li>Your new embedding model has different dimensions from the existing vectors in production. How do you handle the mismatch?</li>
+<li>Your vector search returns irrelevant results despite high similarity scores. How do you fix it?</li>
+<li>You deployed a new embedding model, and search quality crashed overnight. How do you handle embedding drift?</li>
+<li>Your semantic search fails for short queries. How do you improve it?</li>
+</ul>
+<h3 id="ai-system-design">AI System Design</h3>
+<ul>
+<li>Design a Real-Time Voice AI Agent</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/design-a-real-time-voice-ai-agent">Design a Real-Time Voice AI Agent</a></li>
+<li>Design ChatGPT: Training to Serving (End to End)</li>
+<li>Design a RAG System (Chat with Your Documents)</li>
+<li>Design an enterprise RAG assistant over 10M documents with per-user permissions.</li>
+<li>Design Memory for a Personal AI Assistant</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-memory">AI Agent Memory</a> and <a href="https://outcomeschool.com/blog/how-does-chatgpt-remember-you">How does ChatGPT remember you?</a></li>
+<li>Design a Deep Research Agent</li>
+<li>Design a Multi-Agent Customer Support System</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multi-agent-systems">Multi-Agent Systems</a></li>
+<li>Design an On-Device AI Assistant</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/cloud-vs-on-device-model-deployment">Cloud vs On-Device Model Deployment</a> and <a href="https://outcomeschool.com/blog/how-does-llama-cpp-run-llms-on-everyday-hardware">How does llama.cpp run LLMs on everyday hardware?</a></li>
+<li>Design a Multimodal Search System (Text, Image, Video)</li>
+<li>Design an LLM Inference Platform (vLLM-as-a-Service)</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-vllm-work">How does vLLM work?</a> and <a href="https://outcomeschool.com/blog/llm-inference-optimization">LLM Inference Optimization</a></li>
+<li>Design an LLM Evaluation Platform</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>Design a Text-to-Image Generation Service (Midjourney-like)</li>
+<li>Design a Music Generation Service (Suno-like)</li>
+<li>Design a Video Generation Service (Sora-like)</li>
+<li>Design an AI Coding Agent.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-claude-code-work">How does Claude Code work?</a> and <a href="https://outcomeschool.com/blog/how-does-cursor-work">How does Cursor work?</a></li>
+<li>Design a code generation and review system.</li>
+<li>Design a content moderation system using AI.</li>
+<li>Design a real-time AI recommendation system.</li>
+<li>Design an AI-powered email assistant.</li>
+<li>Design a medical diagnosis assistant using AI.</li>
+<li>Design a fraud detection system powered by LLMs.</li>
+<li>Design an AI-powered data extraction pipeline from unstructured documents.</li>
+<li>Design a Text-to-SQL system over a data warehouse with thousands of tables.</li>
+<li>Design a personalized learning assistant.</li>
+<li>Design an AI system for automated code migration.</li>
+<li>Design an AI-powered legal document review system.</li>
+<li>Design a conversational AI system with memory across sessions.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-memory">AI Agent Memory</a> and <a href="https://outcomeschool.com/blog/how-does-chatgpt-remember-you">How does ChatGPT remember you?</a></li>
+<li>How do you design for latency vs quality trade-offs in AI systems?</li>
+<li>How do you implement caching strategies for LLM applications?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-prompt-caching-work">How does Prompt Caching work?</a> and <a href="https://outcomeschool.com/blog/how-does-semantic-caching-work">How does Semantic Caching work?</a></li>
+<li>How do you design rate limiting and cost management for AI APIs?</li>
+<li>How do you handle failover and fallback strategies for AI systems?</li>
+<li>How do you design an AI system for high availability and fault tolerance?</li>
+<li>How do you design an AI system that gracefully degrades when the model is unavailable?</li>
+<li>What are the key considerations for multi-region deployment of AI systems?</li>
+<li>Design an AI-powered search engine for an e-commerce platform.</li>
+<li>Design an AI gateway/proxy for managing LLM access across an organization.</li>
+<li>How do you design a RAG system that handles conflicting information across sources?</li>
+<li>How do you approach capacity planning for an AI system?</li>
+<li>Design a multi-tenant AI chatbot platform where each business gets a custom chatbot.</li>
+<li>Design an AI meeting summarizer system for thousands of meetings daily.</li>
+<li>Design an AI notification system that prioritizes instead of broadcasting.</li>
+<li>Design an AI-powered anomaly detection system for cloud infrastructure.</li>
+<li>Design an AI-powered document processing pipeline for financial institutions.</li>
+<li>Design an AI dynamic pricing engine.</li>
+<li>Design an AI resume screening system that handles 100K applications per week.</li>
+<li>Design an AI voice assistant architecture.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/design-a-real-time-voice-ai-agent">Design a Real-Time Voice AI Agent</a></li>
+<li>Design a multi-agent workflow system where agents collaborate on complex tasks.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multi-agent-systems">Multi-Agent Systems</a></li>
+<li>Design a real-time AI transcription system for concurrent audio streams.</li>
+<li>Design an AI-powered live streaming content moderation system.</li>
+</ul>
+<h3 id="llmops-and-production-ai">LLMOps and Production AI</h3>
+<ul>
+<li>How does Prompt Caching work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-prompt-caching-work">How does Prompt Caching work?</a></li>
+<li>Prefill vs Decode</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prefill-vs-decode-llm-inference-optimization">Prefill vs Decode: LLM Inference Optimization</a></li>
+<li>Why is prefill compute-bound and decode memory-bandwidth-bound?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prefill-vs-decode-llm-inference-optimization">Prefill vs Decode: LLM Inference Optimization</a></li>
+<li>What is chunked prefill, and why does it improve tail latency under mixed traffic?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prefill-vs-decode-llm-inference-optimization">Prefill vs Decode: LLM Inference Optimization</a></li>
+<li>What is Prefill-Decode Disaggregation, and when does it pay off?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prefill-decode-disaggregation">Prefill-Decode Disaggregation in LLM Inference</a></li>
+<li>Explain the AI product lifecycle from ideation to production.</li>
+<li>What is LLMOps, and how does it differ from traditional MLOps?</li>
+<li>How do you serve LLMs in production?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-vllm-work">How does vLLM work?</a>, <a href="https://outcomeschool.com/blog/llm-inference-optimization">LLM Inference Optimization</a> and <a href="https://outcomeschool.com/blog/model-serving">How does Model Serving work?</a></li>
+<li>What is model quantization?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a> and <a href="https://outcomeschool.com/blog/how-does-model-quantization-work">How does Model Quantization work?</a></li>
+<li>Explain post-training quantization (PTQ) vs quantization-aware training (QAT). What breaks when you push weights to 2-4 bits?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-model-quantization-work">How does Model Quantization work?</a></li>
+<li>How do you monitor LLM applications in production?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-observability">AI Agent Observability</a></li>
+<li>What is LLM observability?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-observability">AI Agent Observability</a></li>
+<li>What are guardrails for LLMs, and how do you implement them?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-llm-guardrails-work">How do LLM guardrails work?</a></li>
+<li>How do you implement content filtering for AI outputs?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-llm-guardrails-work">How do LLM guardrails work?</a></li>
+<li>How do you estimate the cost of running an AI-powered feature in production?</li>
+<li>How do you optimize LLM inference costs in production?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-inference-optimization">LLM Inference Optimization</a></li>
+<li>How do you implement A/B testing for LLM systems?</li>
+<li>What is CI/CD for AI applications, and how does it differ from traditional CI/CD?</li>
+<li>How do you version and manage prompts in production?</li>
+<li>What is model versioning, and how do you handle model rollbacks?</li>
+<li>How do you implement rate limiting and throttling for LLM APIs?</li>
+<li>How do you handle model updates and migrations without downtime?</li>
+<li>What is the role of feature flags in AI deployments?</li>
+<li>How do you implement logging and tracing for LLM applications?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-observability">AI Agent Observability</a></li>
+<li>How do you handle PII and sensitive data in LLM inputs and outputs?</li>
+<li>What is a gateway pattern for LLM API management?</li>
+<li>How does Token Streaming work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-token-streaming-work">How does Token Streaming work?</a></li>
+<li>How do you implement streaming responses for real-time AI applications?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-token-streaming-work">How does Token Streaming work?</a></li>
+<li>How does vLLM work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-vllm-work">How does vLLM work?</a></li>
+<li>How does SGLang work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-sglang-work">How does SGLang work?</a></li>
+<li>How does TensorRT-LLM work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-tensorrt-llm-work">How does TensorRT-LLM work?</a></li>
+<li>How does llama.cpp run LLMs on everyday hardware?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-llama-cpp-run-llms-on-everyday-hardware">How does llama.cpp run LLMs on everyday hardware?</a></li>
+<li>How does Ollama work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-ollama-work">How does Ollama work?</a></li>
+<li>When would you choose vLLM vs SGLang vs TensorRT-LLM?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-vllm-work">How does vLLM work?</a>, <a href="https://outcomeschool.com/blog/how-does-sglang-work">How does SGLang work?</a> and <a href="https://outcomeschool.com/blog/how-does-tensorrt-llm-work">How does TensorRT-LLM work?</a></li>
+<li>What are the key SLAs and metrics for production AI systems (latency, throughput, availability)?</li>
+<li>Cloud vs on-device Model Deployment for AI applications.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/cloud-vs-on-device-model-deployment">Cloud vs On-Device Model Deployment</a></li>
+<li>How do you implement fallback strategies when the primary model is unavailable or rate-limited?</li>
+<li>How do you implement structured output from LLMs reliably in production?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-function-calling-work-in-llms">How does Function Calling work in LLMs?</a></li>
+<li>How do you handle long contexts efficiently in production (context compression, prefix caching)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-prompt-caching-work">How does Prompt Caching work?</a> and <a href="https://outcomeschool.com/blog/how-does-context-compaction-work">How does context compaction work?</a></li>
+<li>What is semantic routing, and how do you implement it in a multi-model system?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-routing">LLM Routing</a></li>
+<li>How do you manage secrets and API keys securely in LLM applications?</li>
+<li>Your LLM API has latency spikes during peak hours. How do you stabilize it?</li>
+<li>Your LLM endpoint's p99 latency doubled after a deploy with no model change. How do you diagnose it?</li>
+<li>Your LLM costs are too high in production. How do you reduce costs without degrading quality?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-routing">LLM Routing</a> and <a href="https://outcomeschool.com/blog/how-does-semantic-caching-work">How does Semantic Caching work?</a></li>
+<li>Your application is hitting LLM provider rate limits during peak hours. How do you handle it?</li>
+<li>Your application depends on one LLM provider. How do you switch providers without downtime?</li>
+<li>Your AI system handles 100 requests/sec but crashes at 5000. How do you scale for concurrent requests?</li>
+<li>A traffic spike brings down your AI system. How do you handle peak traffic?</li>
+<li>One LLM provider outage took down your entire system. How do you eliminate single points of failure?</li>
+<li>Your multi-LLM pipeline fails when one model in the chain breaks. How do you handle orchestration failure?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-orchestration">AI Orchestration</a></li>
+<li>Your AI pipeline has zero visibility into which step is failing. How do you add observability?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-observability">AI Agent Observability</a></li>
+<li>You quantized your LLM, but accuracy dropped significantly. How do you minimize quantization loss?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-model-quantization-work">How does Model Quantization work?</a></li>
+<li>One failing AI component can take down your entire platform. How do you design graceful degradation?</li>
+</ul>
+<h3 id="evaluation-and-testing">Evaluation and Testing</h3>
+<ul>
+<li>AI Agent Evaluation</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-evaluation">AI Agent Evaluation</a></li>
+<li>LLM Evaluation</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>AI Agent Observability</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-observability">AI Agent Observability</a></li>
+<li>What is evaluation-driven development for AI applications?</li>
+<li>Why is AI only as good as our definition of done?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-is-only-as-good-as-our-definition-of-done">AI Is Only as Good as Our Definition of Done</a></li>
+<li>How do you evaluate LLM outputs? What metrics do you use?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>Explain BLEU, ROUGE, and BERTScore. When would you use each?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>What is G-Eval, and how does it use LLMs for evaluation?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-as-a-judge">LLM as a Judge</a></li>
+<li>What is LLM-as-a-judge evaluation, and what are its limitations?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-as-a-judge">LLM as a Judge</a></li>
+<li>How do you conduct human evaluation for AI systems?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>What is red teaming, and how do you red team an LLM application?</li>
+<li>How do you detect and measure hallucinations in LLM outputs?</li>
+<li>What is adversarial testing for AI systems?</li>
+<li>How do you build a regression test suite for AI applications?</li>
+<li>What are benchmark suites (MMLU, HumanEval, GSM8K), and how do you interpret them?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>What is benchmark contamination, and how do you guard against it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>Your new model version scores higher on every benchmark, but users say it got worse. Why does this happen, and how do you find the problem?</li>
+<li>How do you evaluate a RAG system end-to-end?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>How do you evaluate the quality of AI agents?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-evaluation">AI Agent Evaluation</a></li>
+<li>How would you evaluate an autonomous coding agent? Why can SWE-bench pass rates be misleading?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-evaluation">AI Agent Evaluation</a></li>
+<li>What is the difference between offline and online evaluation for AI systems?</li>
+<li>How do you measure factual consistency in LLM outputs?</li>
+<li>How do you evaluate multi-turn conversation quality?</li>
+<li>What is the role of golden datasets in AI evaluation?</li>
+<li>How do you build an eval set when there is no labelled ground truth and domain experts are expensive?</li>
+<li>How do you implement continuous evaluation for production AI systems?</li>
+<li>How do you evaluate bias in AI model outputs?</li>
+<li>How do you compare two models or prompts in a statistically rigorous way?</li>
+<li>How do you evaluate the robustness of an LLM application across input variations?</li>
+<li>What are the key differences between evaluating traditional ML vs LLM applications?</li>
+<li>How do you set up an evaluation framework from scratch for a new LLM application?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-evaluation">LLM Evaluation</a></li>
+<li>Your model passes one fairness metric but fails another. How do you handle conflicting audit results?</li>
+<li>Your model was fair at deployment, but became biased 6 months later. How do you monitor continuously?</li>
+<li>An external auditor cannot reproduce your model's results. How do you ensure audit reproducibility?</li>
+<li>How do you structure red teaming for an LLM chatbot before launch?</li>
+<li>How do you red team a multimodal model where text-only safety tests miss cross-modal attacks?</li>
+</ul>
+<h3 id="ai-safety-ethics-and-responsible-ai">AI Safety, Ethics, and Responsible AI</h3>
+<ul>
+<li>What are hallucinations in LLMs, and how do you mitigate them?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/why-do-llms-hallucinate-the-token-level-explanation">Why Do LLMs Hallucinate? The Token-Level Explanation</a></li>
+<li>What is prompt injection, and what are the different types (direct, indirect)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prompt-injection-in-llms">Prompt Injection in LLMs</a></li>
+<li>How do you implement input and output guardrails for AI systems?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-llm-guardrails-work">How do LLM guardrails work?</a></li>
+<li>What is AI alignment, and why is it important?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-instructgpt">Decoding InstructGPT</a> and <a href="https://outcomeschool.com/blog/reinforcement-learning-from-human-feedback-rlhf">Reinforcement Learning from Human Feedback (RLHF)</a></li>
+<li>How do you detect and mitigate bias in AI systems?</li>
+<li>What are the key data privacy considerations (GDPR, CCPA) when building AI applications?</li>
+<li>How do you handle PII in LLM inputs and outputs?</li>
+<li>What is explainability in AI, and why does it matter?</li>
+<li>What is the difference between interpretability and explainability?</li>
+<li>What is mechanistic interpretability, and why do AI labs invest in it?</li>
+<li>How do you build trust with users in AI-powered applications?</li>
+<li>What are adversarial attacks on AI systems, and how do you defend against them?</li>
+<li>What is data poisoning, and how can it affect AI models?</li>
+<li>How do you implement content safety filters for AI-generated content?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-llm-guardrails-work">How do LLM guardrails work?</a></li>
+<li>What is responsible AI, and what frameworks exist for implementing it?</li>
+<li>How do you handle copyright and intellectual property concerns with AI-generated content?</li>
+<li>What is the EU AI Act, and how does it affect AI engineering?</li>
+<li>How do you implement audit trails and logging for AI decisions?</li>
+<li>What is model card documentation, and why is it important?</li>
+<li>How do you handle misuse and abuse of AI systems in production?</li>
+<li>What is differential privacy, and how can it be applied during model training?</li>
+<li>How would you design an AI incident response plan?</li>
+<li>What is the NIST AI Risk Management Framework (AI RMF)?</li>
+<li>Your healthcare chatbot gives medical diagnoses it should not make. How do you add safety guardrails?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-llm-guardrails-work">How do LLM guardrails work?</a></li>
+<li>Your AI system is reproducing copyrighted material verbatim. How do you prevent this?</li>
+<li>Your resume screening AI rejects more female candidates for engineering roles. How do you fix gender bias?</li>
+<li>Your AI model passes bias checks by gender and race separately, but fails for intersectional groups. How do you handle it?</li>
+<li>Your AI denied a loan, and the customer demands a GDPR explanation. How do you provide one?</li>
+<li>A user invokes the right to be forgotten, but their data is in your model weights. How do you comply?</li>
+<li>The EU AI Act may classify your AI system as high-risk. How do you comply?</li>
+<li>Your differentially private model lost significant accuracy. How do you balance privacy and utility?</li>
+<li>One malicious participant is poisoning your federated learning model. How do you defend against it?</li>
+<li>Your AI hiring model uses proxy features for protected attributes. How do you eliminate proxy discrimination?</li>
+<li>Your predictive model creates a feedback loop of biased outcomes. How do you break it?</li>
+<li>Your AI generates fake news images. How do you implement watermarking for AI-generated content?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-llm-watermarking-work">How Does LLM Watermarking Work?</a></li>
+<li>Your AI denies a service, and the user has no way to challenge it. How do you design an appeals process?</li>
+<li>An auditor asks why your AI rejected a request 6 months ago, and you have no logs. How do you build audit trails?</li>
+<li>You removed PII, but users were re-identified from anonymized data. How do you prevent re-identification?</li>
+<li>A pre-trained model from an open-source repo may contain a hidden backdoor. How do you detect it?</li>
+<li>Your LLM's training data was deliberately poisoned by an adversary. How do you respond?</li>
+<li>Your AI mental health chatbot gave harmful advice to a user in crisis. How do you mitigate harm?</li>
+<li>Your AI system caused incorrect critical decisions. How do you run a blameless post-mortem?</li>
+<li>Radiologists agree with AI 98% of the time, even when it is wrong. How do you prevent human over-reliance on AI?</li>
+<li>Your content moderation flags normal cultural expressions as offensive in other markets. How do you adapt cross-culturally?</li>
+<li>Your AI training produces massive carbon emissions. How do you reduce environmental impact?</li>
+</ul>
+<h3 id="multimodal-ai">Multimodal AI</h3>
+<ul>
+<li>What are Multimodal AI models, and how do they process different types of data?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multimodal-ai">Multimodal AI</a></li>
+<li>How do vision-language models process images?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multimodal-ai">Multimodal AI</a> and <a href="https://outcomeschool.com/blog/vision-language-model-vlm">How does a Vision-Language Model (VLM) work?</a></li>
+<li>How do Image Embeddings work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-image-embeddings-work">How do Image Embeddings work?</a></li>
+<li>How does CLIP work, and why is it important for multi-modal AI?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/contrastive-learning">What is Contrastive Learning?</a> and <a href="https://outcomeschool.com/blog/how-do-image-embeddings-work">How do Image Embeddings work?</a></li>
+<li>What are the key architectures for multi-modal models?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multimodal-ai">Multimodal AI</a></li>
+<li>How does image generation work with diffusion models (Stable Diffusion, DALL-E, Flux)?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/diffusion-models">Diffusion Models</a></li>
+<li>What is text-to-speech (TTS), and what models are used for it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/streaming-tts">How does a TTS model start speaking before the full sentence arrives?</a></li>
+<li>How does speech-to-text (Whisper) work?</li>
+<li>Budget the end-to-end latency for a real-time voice agent (VAD, ASR, LLM, TTS, network). Where does the time go?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/design-a-real-time-voice-ai-agent">Design a Real-Time Voice AI Agent</a>, <a href="https://outcomeschool.com/blog/voice-agent-latency-budget">How do you build a latency budget for a voice AI agent?</a>, <a href="https://outcomeschool.com/blog/voice-to-voice-latency">How does the voice-to-voice latency of a voice agent get measured?</a> and <a href="https://outcomeschool.com/blog/time-to-first-audio">Why does the time-to-first-audio matter more than total response time?</a></li>
+<li>What is turn-taking in a voice AI agent, and how does it detect when the user has finished speaking?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/what-is-turn-taking-in-a-voice-ai-agent">What is turn-taking in a voice AI agent?</a>, <a href="https://outcomeschool.com/blog/endpointing-in-voice-agents">How does endpointing decide when the user has finished speaking?</a>, <a href="https://outcomeschool.com/blog/silence-vs-model-based-turn-detection">How do silence-based and model-based turn detection differ?</a>, <a href="https://outcomeschool.com/blog/dynamic-endpointing">How does dynamic endpointing adapt to how fast a user talks?</a>, <a href="https://outcomeschool.com/blog/long-pauses-in-voice-agents">How does a voice agent handle long pauses when the user is thinking?</a> and <a href="https://outcomeschool.com/blog/voice-agents-cutting-users-off">Why does a voice agent cut people off mid-sentence?</a></li>
+<li>How does sentence chunking reduce the latency of a voice agent?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/sentence-chunking-for-tts">How does sentence chunking feed LLM output into TTS faster?</a></li>
+<li>What is speculative (preemptive) LLM generation in a voice agent, and how does it reduce latency?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/speculative-generation-in-voice-agents">How does speculative LLM generation start replying before the user finishes?</a></li>
+<li>What are filler phrases in a voice agent, and how do they hide the latency of a tool call?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/filler-phrases-in-voice-agents">How do filler phrases hide latency in a voice agent?</a></li>
+<li>How do you handle a slow or long-running tool call in a voice agent?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/slow-tool-calls-in-voice-agents">How does a voice agent hide the delay of a slow tool call?</a></li>
+<li>How do you handle barge-in (user interruptions) in a voice agent?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/design-a-real-time-voice-ai-agent">Design a Real-Time Voice AI Agent</a>, <a href="https://outcomeschool.com/blog/what-is-turn-taking-in-a-voice-ai-agent">What is turn-taking in a voice AI agent?</a>, <a href="https://outcomeschool.com/blog/what-is-barge-in-in-a-voice-ai-agent">What is barge-in in a voice AI agent?</a> and <a href="https://outcomeschool.com/blog/interruption-vs-background-noise">How does a voice agent tell a real interruption from a cough or background noise?</a></li>
+<li>Cascaded ASR + LLM + TTS vs native speech-to-speech models: what are the trade-offs?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/design-a-real-time-voice-ai-agent">Design a Real-Time Voice AI Agent</a> and <a href="https://outcomeschool.com/blog/cascaded-vs-speech-to-speech">Cascaded vs Speech-to-Speech: How to choose the right voice agent architecture?</a></li>
+<li>What is the difference between half-duplex and full-duplex voice agents?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/half-duplex-vs-full-duplex-voice-agents">How do half-duplex and full-duplex voice agents differ?</a></li>
+<li>What is multi-modal RAG, and how does it differ from text-only RAG?</li>
+<li>How do you build a system that processes both images and text?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multimodal-ai">Multimodal AI</a></li>
+<li>What are multi-modal embeddings, and how are they used for cross-modal search?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multimodal-ai">Multimodal AI</a></li>
+<li>How do you evaluate multi-modal AI systems?</li>
+<li>What are the challenges of real-time multi-modal AI processing?</li>
+<li>How do you handle video understanding with AI?</li>
+<li>What is visual question answering (VQA)?</li>
+<li>What is document understanding, and how do models parse documents with layouts?</li>
+<li>How do you fine-tune a vision-language model?</li>
+<li>What are the latency and cost considerations for multi-modal AI in production?</li>
+<li>How do you handle multi-modal content moderation?</li>
+<li>What is text-to-video generation, and what are the current state-of-the-art approaches?</li>
+<li>Explain Multimodal Fusion Techniques: Early Fusion vs Late Fusion.</li>
+<li>Your vision-language model generates factually incorrect image descriptions. How do you fix it?</li>
+<li>Your VLM answers single-image questions but fails on multi-page documents. How do you fix it?</li>
+<li>Your multimodal LLM ignores the image and generates descriptions from text alone. How do you fix it?</li>
+<li>Your diffusion model ignores precise control requirements in text prompts. How do you improve controllability?</li>
+<li>Your diffusion model generates sharp but repetitive images. How do you balance quality vs diversity?</li>
+<li>Your diffusion model takes too long per image. How do you speed up sampling?</li>
+</ul>
+<h3 id="ai-infrastructure-and-scalability">AI Infrastructure and Scalability</h3>
+<ul>
+<li>How do you improve inference speed in production LLM deployments?</li>
+<li>Answer: <a href="https://www.youtube.com/watch?v=jV2sCj4lHYk">LLM Inference Optimization</a></li>
+<li>LLM optimization techniques</li>
+<li>Answer: <a href="https://www.linkedin.com/posts/pallavi-shekhar_5-llm-optimization-techniques-lets-understand-activity-7442067281532325888-4aOS">LLM optimization techniques</a></li>
+<li>How do you select GPUs for LLM inference?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-gpu-work-for-deep-learning">How does a GPU work for Deep Learning?</a></li>
+<li>How does a GPU work for Deep Learning?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-gpu-work-for-deep-learning">How does a GPU work for Deep Learning?</a></li>
+<li>How do CUDA Kernels work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-cuda-kernels-work">How do CUDA Kernels work?</a></li>
+<li>How does a Google TPU work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-google-tpu-work">How does a Google TPU work?</a></li>
+<li>How does an LPU work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-an-lpu-work">How does an LPU work?</a></li>
+<li>Estimate the GPU memory needed to serve a 70B model (weights, KV cache, activations). Does it fit on a single 80 GB GPU?</li>
+<li>Do the roofline math: how many tokens/sec can one H100 produce for a 70B model at batch size 1?</li>
+<li>What is model parallelism vs data parallelism in distributed training?</li>
+<li>What is tensor parallelism, and how does it help serve large models?</li>
+<li>What is pipeline parallelism?</li>
+<li>How does continuous batching improve LLM inference throughput?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/continuous-batching-in-llms">Continuous Batching in LLMs</a></li>
+<li>What is speculative decoding, and how does it speed up inference?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/speculative-decoding">Speculative Decoding</a></li>
+<li>How does Medusa (multi-head speculative decoding) work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-medusa">Medusa - Multi-Head Speculative Decoding</a></li>
+<li>How does EAGLE (feature-level speculative decoding) work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/decoding-eagle">EAGLE - Feature-Level Speculative Decoding</a></li>
+<li>What is N-gram Speculation in LLMs, and how does it speed up generation?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/n-gram-speculation-in-llms">N-gram Speculation in LLMs</a></li>
+<li>What is KV cache, and how do you manage memory for it?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/kv-cache-in-llms">What is KV Cache in LLMs?</a></li>
+<li>What is Paged Attention?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/paged-attention-in-llms">Paged Attention in LLMs</a></li>
+<li>How does GGUF work?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-gguf-work">How does GGUF work?</a></li>
+<li>How do you optimize inference for edge and mobile deployment?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-llama-cpp-run-llms-on-everyday-hardware">How does llama.cpp run LLMs on everyday hardware?</a> and <a href="https://outcomeschool.com/blog/how-does-model-quantization-work">How does Model Quantization work?</a></li>
+<li>What is model quantization (INT8, INT4, FP16, BF16), and how does it affect quality?</li>
+<li>Answer: Explained in this video: <a href="https://www.youtube.com/watch?v=lnfWvX66FUk">AI Engineering Explained: LLM, RAG, MCP, Agent, Fine-Tuning, Quantization</a> and <a href="https://outcomeschool.com/blog/how-does-model-quantization-work">How does Model Quantization work?</a></li>
+<li>How do you implement auto-scaling for AI workloads?</li>
+<li>What is the role of load balancing in AI serving infrastructure?</li>
+<li>How do you manage GPU memory for serving multiple models?</li>
+<li>What is model sharding, and when would you use it?</li>
+<li>How do you implement request queuing and priority scheduling for AI services?</li>
+<li>What are the cost trade-offs between self-hosted and API-based AI inference?</li>
+<li>How do you handle cold start latency for serverless AI deployments?</li>
+<li>How do you implement model caching to reduce redundant computations?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-prompt-caching-work">How does Prompt Caching work?</a></li>
+<li>What is the difference between synchronous and asynchronous inference, and when do you use each?</li>
+<li>What is FSDP (Fully Sharded Data Parallel), and how does it differ from DeepSpeed ZeRO?</li>
+<li>What are TTFT, TPOT, and throughput, and how do they trade against each other?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prefill-vs-decode-llm-inference-optimization">Prefill vs Decode: LLM Inference Optimization</a></li>
+<li>How do you monitor and profile LLM inference in production (TTFT, inter-token latency, GPU utilization)?</li>
+<li>What is model routing at the infrastructure level, and how do you route requests based on complexity and cost?</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-routing">LLM Routing</a></li>
+</ul>
+<h3 id="coding-and-practical-implementation">Coding and Practical Implementation</h3>
+<ul>
+<li>Implement a basic RAG pipeline using an embedding model and a vector database.</li>
+<li>Build a simple AI agent with tool use (e.g., calculator, web search).</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/react-agent">ReAct Agent</a></li>
+<li>Implement semantic search using embeddings and cosine similarity.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-semantic-search-work">How does Semantic Search work?</a> and <a href="https://outcomeschool.com/blog/how-does-a-vector-database-work">How does a Vector Database work?</a></li>
+<li>Write code for different text chunking strategies (fixed-size, recursive, semantic).</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/chunking-strategies-for-rag">Chunking Strategies for RAG</a></li>
+<li>Implement a prompt template system with variable substitution.</li>
+<li>Build an evaluation pipeline for LLM outputs using LLM-as-a-judge.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/llm-as-a-judge">LLM as a Judge</a></li>
+<li>Implement streaming responses for an LLM API.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-token-streaming-work">How does Token Streaming work?</a></li>
+<li>Build a simple vector similarity search from scratch.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-vector-database-work">How does a Vector Database work?</a></li>
+<li>Implement a conversation memory system for a chatbot (sliding window, summary, buffer).</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-memory">AI Agent Memory</a></li>
+<li>Write code to detect and handle hallucinations in LLM outputs.</li>
+<li>Implement a retry mechanism with exponential backoff for LLM API calls.</li>
+<li>Write a function calling (tool use) handler for an LLM API.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-function-calling-work-in-llms">How does Function Calling work in LLMs?</a></li>
+<li>Implement a simple re-ranker for search results.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-reranker-work">How does a Reranker work?</a></li>
+<li>Build a basic document parser that extracts text from PDFs and splits it into chunks.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/chunking-strategies-for-rag">Chunking Strategies for RAG</a></li>
+<li>Implement cosine similarity, dot product, and Euclidean distance functions from scratch.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-a-vector-database-work">How does a Vector Database work?</a></li>
+<li>Write code to implement token counting and context window management.</li>
+<li>Build a simple prompt versioning system.</li>
+<li>Implement a caching layer for LLM responses.</li>
+<li>Implement semantic caching for LLM queries (cache responses for semantically similar queries).</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-semantic-caching-work">How does Semantic Caching work?</a></li>
+<li>Write code to detect prompt injection attempts in user inputs.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/prompt-injection-in-llms">Prompt Injection in LLMs</a></li>
+<li>Implement an LLM output guardrails system that checks for off-topic responses and PII leakage.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-do-llm-guardrails-work">How do LLM guardrails work?</a></li>
+<li>Build a multi-agent system where agents have different roles and collaborate on a task.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multi-agent-systems">Multi-Agent Systems</a></li>
+<li>Implement scaled dot-product attention with a causal mask from scratch (NumPy or PyTorch).</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/math-behind-attention-qkv">Math behind Attention - Q, K, and V</a> and <a href="https://outcomeschool.com/blog/causal-masking-in-attention">Causal Masking in Attention</a></li>
+<li>Implement multi-head attention, then convert it to grouped-query attention.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/multi-head-attention-in-transformers">Multi-Head Attention in Transformers</a> and <a href="https://outcomeschool.com/blog/grouped-query-attention">Grouped Query Attention</a></li>
+<li>Implement a KV cache and single-step decode for causal multi-head attention.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/kv-cache-in-llms">What is KV Cache in LLMs?</a></li>
+<li>Implement BPE (Byte Pair Encoding) training and encoding from scratch.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/bpe-in-llms">Byte Pair Encoding</a></li>
+<li>Implement top-k, top-p, and temperature sampling over a logits vector.</li>
+<li>Implement an LRU cache with O(1) get/put, then add per-entry TTL.</li>
+<li>Implement a token-bucket rate limiter for an LLM API where cost scales with tokens, then make it distributed.</li>
+<li>Write an async batch processor that runs an LLM call over 50,000 documents with a concurrency limit, retries with jitter, and error isolation.</li>
+<li>Write a streaming SSE parser for LLM token streams that handles arbitrary chunk boundaries.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/how-does-token-streaming-work">How does Token Streaming work?</a></li>
+<li>Implement a minimal agent loop with tool dispatch, error handling, and a step budget.</li>
+<li>Answer: <a href="https://outcomeschool.com/blog/ai-agent-loop">AI Agent Loop</a></li>
+</ul>
+<h3 id="behavioral-and-scenario-based-questions">Behavioral and Scenario-Based Questions</h3>
+<ul>
+<li>What is AI Engineering, and how does it differ from Machine Learning Engineering?</li>
+<li>How do you decide whether a problem needs AI or a traditional software solution?</li>
+<li>How do you measure the ROI of an AI feature?</li>
+<li>How do you handle hallucinations when they occur in a production AI system?</li>
+<li>How do you decide between using an LLM API vs self-hosting an open-source model?</li>
+<li>How do you manage stakeholder expectations for AI projects?</li>
+<li>Describe your approach to debugging a poor-performing RAG system.</li>
+<li>How do you stay current with the rapidly evolving AI landscape?</li>
+<li>How do you balance innovation with reliability in AI systems?</li>
+<li>Tell me about a challenging AI project you worked on. What was the problem? What approach did you take? What trade-offs did you make? What was the outcome?</li>
+<li>How would you handle a situation where an AI model produces biased or harmful outputs in production?</li>
+<li>How do you approach cost optimization for an AI system that's exceeding budget?</li>
+<li>Describe a time when you had to choose between model accuracy and latency. How did you make the decision?</li>
+<li>How would you handle a situation where your AI system's quality degrades over time?</li>
+<li>How do you communicate AI limitations to non-technical stakeholders?</li>
+<li>How would you approach building an AI feature with limited labeled data?</li>
+<li>Describe your experience working with cross-functional teams on AI projects.</li>
+<li>Where do you see AI engineering heading in the next 3-5 years?</li>
+<li>Why are you interested in this AI engineering role?</li>
+<li>Your PM wants to ship an AI feature with a 15% hallucination rate on edge cases. How do you communicate the risk?</li>
+<li>A non-technical executive asks why your AI feature cannot be 100% accurate. How do you explain LLM limitations?</li>
+<li>You need to choose between a complex agentic system that scores 15% better on benchmarks, or a simpler RAG pipeline that is easier to maintain. How do you decide?</li>
+</ul>
+<h3 id="license">License</h3>
+<pre><code>   Copyright (C) 2026 Outcome School
+
+   Licensed under the Apache License, Version 2.0 (the &quot;License&quot;);
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an &quot;AS IS&quot; BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/amitshekhariitbhu/ai-engineering-interview-questions/blob/main/README.md">README.md</a> from <strong>AI Engineering Interview Questions and Answers</strong> by Amit Shekhar (Outcome School), reproduced under Apache-2.0 (see <code>learn/vendor/notes/ai-eng-interview/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

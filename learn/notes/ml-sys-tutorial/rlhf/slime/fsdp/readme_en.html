@@ -1,0 +1,401 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Support FSDP2 as A Training Backend for Miles</title><link rel="stylesheet" href="../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../index.html">Learn</a><div class="links"><a href="../../../../../notes.html" class="here">Notes library</a><a href="../../../../../index.html">All chapters</a><a href="../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../notes.html">Notes library</a> › <a href="../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/slime/fsdp/readme_en.md</div>
+<article class="note"><h1 id="support-fsdp2-as-a-training-backend-for-miles">Support FSDP2 as A Training Backend for Miles</h1>
+<blockquote>
+<p><strong>TL;DR:</strong></p>
+<p><strong>We have added FSDP to Miles as a more flexible training framework and have aligned it with Megatron. FSDP supports architecture-innovative models such as Qwen3-Next more flexibly and helps us further support VLM RL.</strong></p>
+</blockquote>
+<h2 id="background">Background</h2>
+<h3 id="what-is-fsdp">What is FSDP?</h3>
+<p><strong>FSDP (Fully Sharded Data Parallel)</strong> inherits the design philosophy of <a href="https://www.deepspeed.ai/2021/03/07/zero3-offload.html">DeepSpeed ZeRO Stage 3</a> and can be seen as a powerful optimization of traditional <a href="https://docs.pytorch.org/tutorials/beginner/ddp_series_theory.html">DDP (Distributed Data Parallel)</a>.</p>
+<p><strong>From Replicate to Shard</strong>
+Note: Some models in Megatron now also do not require manual weight conversion, as it is automatically converted internally <a href="https://github.com/THUDM/slime/pull/889/files">PR link</a>
+In traditional DDP, each GPU maintains a complete copy of model weights, gradients, and optimizer states (Replication), synchronizing gradients via <code>all-reduce</code>. In FSDP, we shift to a <strong>Sharding</strong> mode: all the aforementioned data is sharded and distributed across different GPU ranks.</p>
+<ul>
+<li><strong>Forward Propagation</strong>: When a layer needs to be calculated, full parameters are temporarily collected via <code>all-gather</code> and released immediately after calculation.</li>
+<li><strong>Backward Propagation</strong>: After gradient calculation is complete, <code>reduce-scatter</code> is performed immediately to synchronize and shard, then the full gradients are released.</li>
+</ul>
+<p><strong>FSDP1 vs FSDP2</strong></p>
+<p>Compared to FSDP1 which flattens all parameters into a giant <code>FlatParameter</code>, FSDP2 introduces <strong>DTensor (Distributed Tensor)</strong>. It allows for better sharding on specified parallel dimensions while preserving the original Tensor structure (such as shape, stride). This not only solves the pain points of volatile metadata and complex padding in FSDP1, but also provides out-of-the-box support for MixedPrecision Training and LoRA; FSDP mentioned in this article refers to <strong>FSDP2</strong> natively supported by PyTorch.</p>
+<blockquote>
+<p>✅ For more content about FSDP, you can check the previous blogs of the SGLang RL team: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/sys-design/readme-2-en.md"><strong>RL System Deep Dive: FSDP Training Backend</strong></a></p>
+</blockquote>
+<h3 id="why-does-miles-need-fsdp">Why does Miles need FSDP?</h3>
+<p>Friends familiar with Miles know that we already have a mature training engine based on Megatron-LM. Considering the significant maintenance cost brought by introducing a new backend, why are we still determined to support FSDP?</p>
+<ol>
+<li><strong>VLM Architecture Adaptation</strong>: The modal interaction architecture of VLM is complex, and FSDP's flexibility makes it much easier to adapt than Megatron. Therefore, we choose FSDP as the preferred path for VLM RL training (of course, Megatron version adaptation is also planned).</li>
+<li><strong>Agility for Architecture Innovation</strong>: For new architectures under rapid iteration like Qwen3-Next, FSDP allows us to support RL processes with maximum speed.</li>
+<li><strong>Low Barrier and High Usability</strong>: As a PyTorch native training backend, FSDP does not have complex environment dependencies and installation processes. Both the learning curve and debug cost are significantly lower than Megatron.</li>
+<li><strong>Seamless Ecosystem Compatibility</strong>: FSDP is directly compatible with HuggingFace Model format. This means we don't need to perform tedious weight conversion via <code>mbridge</code> like when using Megatron, and community models work out of the box.</li>
+</ol>
+<blockquote>
+<p>⚠️ Some models in Megatron now also do not require manual weight conversion, as it is automatically converted internally.</p>
+</blockquote>
+<h2 id="fsdp-in-miles-architecture-design">FSDP in Miles: Architecture Design</h2>
+<p>To support two distinct distributed backends, Megatron and FSDP, in Miles simultaneously, how should we avoid underlying conflicts and keep the code clean? We adopted a top-level design of "Interface Standardization + Physical Isolation", meaning we only expose core FSDP functions outwardly: <code>init</code>, <code>save</code>, <code>sleep</code>, <code>wake_up</code>, <code>train</code>. Other functions try to follow the underscore convention, like <code>_train_core</code>. Specifically:</p>
+<p>We utilize the Ray Actor mechanism to encapsulate different backends in independent process spaces, exposing unified training primitives (such as <code>train</code>) to the upper-level scheduler, so that the upper-level algorithm logic does not need to care about the underlying gradient synchronization details. This design largely eliminates global variable conflicts and reduces conditional branch complexity, allowing us to deeply optimize for FSDP2's Sharding mechanism and DTensor structure. The core implementation is located in <code>miles/backends/fsdp_utils/actor.py</code>. While keeping external business logic (such as Data Packing, Context Parallel) highly consistent with Megatron, we refactored the data flow path in the kernel implementation, ensuring that while enjoying FSDP's flexibility, we maximize training efficiency and maintain numerical precision.</p>
+<p>The robust FSDP design leaves the top-level architecture unaffected, and the overall process remains the standard RLHF loop: Rollout → Data Sharding → Packing → Forward/LogProb → Loss → Backward → Update. On this basis, we have made multiple optimizations for FSDP, including Data Packing, True On-Policy mode, CUDA Graph Aware Weight Wake Up, and numerous mitigation mechanisms for Training-Inference Mismatch. Next, we discuss the top-level <code>init</code> and <code>train</code> function entry points.</p>
+<h3 id="initialization">Initialization</h3>
+<p>In the <code>init</code> stage, the following work is mainly completed:</p>
+<p align="center">
+  <img src="./pic/1_fsdp_init.png" alt="FSDP actor init flow" width="50%" />
+</p>
+
+<p>FSDP actor init flow</p>
+<ul>
+<li><strong>Model and Optimizer</strong>: Initialize Actor Model and Reference Model, and support resuming from Checkpoint; set <code>true_on_policy_mode</code> and Optimizer.</li>
+<li><strong>Weight Updater</strong>: Supports two modes: Colocate (training tasks and inference tasks on the same group of GPUs) and Disaggregated (training tasks and inference tasks on different GPUs), used to synchronize trained weights back to the Inference Engine.</li>
+<li><strong>Device Mesh</strong>: Build DP + CP communication topology based on <code>DeviceMesh</code>, and call <code>fully_shard</code> to shard parameters.</li>
+<li><strong>Operator Optimization</strong>:<ul>
+<li>Force the training end to use operators consistent with SGLang via <code>enable_batch_invariant_mode</code>, eliminating the impact of batch size on calculation results.</li>
+<li>Use <code>torch.compile</code> to solidify RoPE implementation, eliminating operator behavior differences at the bottom layer to ensure True On-Policy alignment.</li>
+</ul>
+</li>
+</ul>
+<h3 id="training-flow">Training Flow</h3>
+<p>The <code>train</code> function serves as the main training entry point:</p>
+<p align="center">
+  <img src="./pic/2_fsdp_train.png" alt="FSDP actor train flow" width="50%" />
+</p>
+
+<p>FSDP actor train flow</p>
+<ol>
+<li><strong>wake up</strong>: Load the previously Offloaded Actor Model back to GPU.</li>
+<li><strong>data preparation</strong>:<ul>
+<li>Get data required for the current DP rank via <code>process_rollout_data</code>.</li>
+<li>Call <code>_pack_rollout_data</code> to pack data into <code>packed_batches</code> (see Appendix Data Packing for details), eliminating performance loss caused by Padding.</li>
+</ul>
+</li>
+<li><strong>forward &amp; log prob</strong>:<ul>
+<li>Calculate log_prob and entropy for Actor and Ref.</li>
+</ul>
+</li>
+<li><strong>loss calculation</strong>:<ul>
+<li>Calculate PPO/GRPO loss (importance ratio, clip, KL penalty, entropy bonus).</li>
+<li><strong>mismatch feature</strong>: Real-time calculation of <code>train_rollout_logprob_abs_diff</code> to monitor numerical deviation between training and inference. Enable <strong>TIS (Truncated Importance Sampling)<a href="https://fengyao.notion.site/off-policy-rl#245721e3f6c48025aaeadec35aa6da9f">Source</a></strong> to re-weight policy gradient loss, preventing model collapse due to off-policyness caused by training-inference differences.</li>
+</ul>
+</li>
+<li><strong>update &amp; offload</strong>:<ul>
+<li>Perform gradient accumulation and parameter update.</li>
+<li><strong>offload strategy</strong>: Call <code>sleep</code> after training to offload model and optimizer to CPU (colocated mode); Ref model is loaded only when calculating log prob and offloaded immediately after use.</li>
+</ul>
+</li>
+</ol>
+<h1 id="fsdp-in-miles-features-optimization">FSDP in Miles Features &amp; Optimization</h1>
+<p>Based on the architecture design, we further analyze the optimizations made so far.</p>
+<h3 id="data-prepare-and-packing">Data Prepare And Packing</h3>
+<p>At the beginning of each training round, the FSDP actor (i.e., this actor class) first gets a batch of <strong>balanced</strong> rollout sequences from rollout, then does simple sample splitting by DP rank. This step is no different from conventional implementation. For extreme efficiency, we implemented <strong>Data Packing</strong>. Simply put, <code>pack_sequences</code> is processed in <code>miles/backends/fsdp_utils/data_packing.py</code>. For a batch of input sequences, we estimate how many packs are needed, i.e., the number of <code>micro-batch</code>es, based on the length of each sequence and <code>max_tokens_per_gpu</code>. Next, sequences of varying lengths are distributed into different packs so that the total tokens in each pack are as close as possible. Within each pack, multiple sequences are flattened into a long tokens vector, and <code>cu_seqlens</code> is constructed to record the start and end positions of each sequence. This strategy ensures that the total Token amount of each Pack is highly consistent, eliminating the computational waste caused by traditional Padding. Specific details can be found in the Appendix.</p>
+<h3 id="strict-training-inference-consistency">Strict Training-Inference Consistency</h3>
+<p>After completing Data Packing, the actor calculates log-prob and entropy of ref/actor for the packed micro-batch. We implemented True On Policy on FSDP. That is, for the recently very popular training inference mismatch problem, we gave the strictest answer, achieving absolute consistency of logprob for the same policy model in training backend and inference backend, solving training-infer mismatch from the system level.</p>
+<blockquote>
+<p>✅ Briefly speaking, the implementation and idea of training-infer kl = 0 are as follows:
+- Both Training and Inference use FlashAttn3 as backend to achieve bitwise equal.
+- Use DeepGEMM for matrix multiplication, Batch-invariant Kernels to achieve batch invariance.
+Specific details are documented in more detail in Miles's Docs.</p>
+</blockquote>
+<p align="center">
+  <img src="./pic/3_kl_0.png" alt="training-rollout logprob diff = 0" width="50%" />
+</p>
+
+<p>We further optimize performance under true on policy conditions. <code>get_logprob_and_entropy_with_cp</code> directly reuses the temperature passed in by Rollout, and turns off <code>allow_compile</code> which may introduce deviation. Disabling compile will forbid compiling <code>selective_log_softmax_raw</code>, preventing estimation deviation caused by different calculation paths due to compilation and batch invariant. This ensures that the <code>log-prob</code> re-calculated at the training end can <strong>accurately restore</strong> the numerical performance during Rollout.</p>
+<blockquote>
+<p>⚠️ Here we discovered and solved an imperceptible Bug that caused on policy kl ≠ 0 when using kl-loss, see Appendix PPO KL Precision Error for details.</p>
+</blockquote>
+<h3 id="algorithms-mitigation-for-mismatch"><strong>Algorithms Mitigation For Mismatch</strong></h3>
+<p>Mainstream algorithm implementations do not enable true on policy features (which would lose about 30% of training efficiency), so there will still be training-inference mismatch. for accuracy, we call the rollout policy log probs recorded during the rollout phase <code>rollout_log_probs</code>; after entering the training loop, the log probs of the policy model recalculated in the training backend are recorded as <code>old_log_probs</code>.</p>
+<p>Without considering training-infer mismatch, the actor constructs loss in <code>_train_step</code> in the conventional GRPO/GSPO/PPO way. Specifically, each training step calculates the log probs of the current training data batch based on the current policy model, directly noted as <code>log_probs</code>. Use <code>old_log_probs</code> and <code>log_probs</code> to construct importance ratio, superimpose clip, KL norm and entropy bonus to get loss, then do gradient accumulation and optimizer backward.</p>
+<p>Considering mismatch, <code>rollout_log_probs, old_log_probs, log_probs</code> will all participate in loss construction:</p>
+<ul>
+<li>In <code>_train_step</code> of <code>actor.py</code>, calculate the absolute difference <code>train_rollout_logprob_abs_diff</code> between <code>old_log_probs</code> and <code>rollout_log_probs</code> to quantify numerical deviation between training and inference in real-time.</li>
+<li>Enable <strong>TIS (<a href="https://fengyao.notion.site/off-policy-rl#245721e3f6c48025aaeadec35aa6da9f">Truncated Importance Sampling</a>)</strong>. Calculate importance weight, i.e., <code>tis = torch.exp(old_log_probs - rollout_log_probs)</code>, and truncate (Clip) it, using this weight to re-weight Policy Gradient Loss (<code>pg_loss</code>). This method ensures that the model can still <strong>mitigate model training collapse</strong> even in a not-so-perfect on-policy environment (Thanks to the author teams of <a href="https://www.notion.so/271211a558b7808d8b12d403fd15edda?pvs=21">MIS</a> and <a href="https://fengyao.notion.site/off-policy-rl#245721e3f6c48025aaeadec35aa6da9f">TIS</a>).</li>
+</ul>
+<p>Taking GRPO as an example, the final loss function is:</p>
+<p>$$
+\begin{aligned}
+\mathcal{L}(\theta) &amp;= \frac{1}{L} \sum_{t=1}^L \left[ \bar{w}_t \cdot \mathcal{L}^{\text{clip}}<em _text_rollout="\text{rollout">t(\theta) - \beta \text{KL}<em _text_old="\text{old">t + \lambda H_t \right] \
+\text{where } \mathcal{L}^{\text{clip}}<em _theta="\theta">t &amp;= \min \left( r_t(\theta) A_t, \ \text{clip}(r_t(\theta), 1\pm\epsilon) A_t \right) \
+r_t(\theta) &amp;= \frac{\pi</em>{\pi}</em>}}}, \quad \bar{w<em _text_old="\text{old">t = \text{min}\left( \frac{\pi</em>{\pi}}</em>, C \right)
+\end{aligned}
+$$}}</p>
+<h3 id="weight-update-optimization-weight-update-and-colocated-mode">Weight Update Optimization: Weight Update and Colocated Mode</h3>
+<p>After training ends, the latest weights are synchronized back to the Inference Engine (this is the best definition of the term refit). In <code>update_weight_utis.py</code>, we fully support all modes: <code>colocated</code> and <code>distributed</code>. The former alternates train / rollout occupying the same batch of GPUs, while the latter distributes train / rollout on different GPUs. For both methods, we adopted a bucketed asynchronous update strategy <a href="https://hebiao064.github.io/rl-weight-sync">Reference</a>, synchronizing chunked weights to the inference engine one by one, minimizing peak memory usage as much as possible.</p>
+<p align="center">
+  <img src="./pic/4_fsdp_refit.png" alt="Update weights from training to inference with async tensor handle and bucket" width="50%" />
+</p>
+
+<blockquote>
+<p>✅ For specific mechanisms of weight update, welcome to check the previous blogs of SGLang RL group: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/sys-design/readme-1-EN.md"><strong>RL System Deep Thinking: Weight Update Mechanisms</strong></a></p>
+</blockquote>
+<h3 id="vram-optimization-offload-strategy">VRAM Optimization: Offload Strategy</h3>
+<p>In the FSDP training process, we save memory by offloading weights in the following scenarios:</p>
+<ul>
+<li><strong>Train offload</strong>: In colocated scenarios, call <code>sleep</code> after training completes to offload model weights and optimizer to CPU, avoiding memory occupation during the rollout phase.</li>
+<li><strong>Ref model</strong>: When using KL penalty, the reference model is only loaded to GPU during <code>compute_log_prob</code>, and offloaded back to CPU immediately after calculation completes, avoiding GPU occupation.</li>
+<li><strong>Optimizer offload</strong>: During the training phase, model parameters are offloaded to CPU when not participating in calculation, and gradients are also offloaded to CPU; this significantly saves VRAM consumption during training, but optimizer steps will be performed on CPU, and training time will increase significantly.</li>
+</ul>
+<h1 id="fsdpmegatron-training-precision-alignment">FSDP/Megatron Training Precision Alignment</h1>
+<p>Experimental Environment: Single node H100, Miles 0.5.5post1</p>
+<p><a href="https://github.com/radixark/miles/blob/main/scripts/run-qwen3-4B-fsdp.sh">Script</a></p>
+<p>Megatron, FSDP colocated w ref model, FSDP colocated w/o ref model</p>
+<p align="center">
+  <img src="./pic/5_fsdp_mcore_match.png" alt="Raw reward match" width="50%" />
+</p>
+
+<h2 id="context-parallelism">Context Parallelism</h2>
+<p>For CP, we want to ensure that Megatron and FSDP can support similar response lengths under the same Context Parallelism degree:</p>
+<blockquote>
+<p>✅ Theoretically <code>max_reponse_length_with_cp = max_reponse_length_without_cp * cp_size</code> <a href="https://arxiv.org/pdf/2310.01889">ref link</a></p>
+</blockquote>
+<p>For experimental configuration: 4 B200s, global_batch_size = 64:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>response_length = 8k</th>
+<th>response_length = 16k</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FSDP, cp = 1</td>
+<td>work</td>
+<td><strong>OOM</strong></td>
+</tr>
+<tr>
+<td>FSDP, cp = 2</td>
+<td>work</td>
+<td>work</td>
+</tr>
+<tr>
+<td>Megatron(TP = 1), cp = 1</td>
+<td>work</td>
+<td><strong>OOM</strong></td>
+</tr>
+<tr>
+<td>Megatron(TP = 1), cp = 2</td>
+<td>work</td>
+<td>work</td>
+</tr>
+</tbody>
+</table>
+<p>Experimental results meet expectations, and convergence effects are similar.</p>
+<h1 id="quick-start-fsdp-backend">Quick Start FSDP Backend</h1>
+<h2 id="fsdp-one-click-start">FSDP One-Click Start</h2>
+<pre><code class="language-bash"># If you need to use WANDB, you need to set the environment variable WANDB_API_KEY in advance
+# Download model weights (Qwen3-4B)
+hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
+
+# Download training dataset (dapo-math-17k)
+hf download --repo-type dataset zhuzilin/dapo-math-17k \
+  --local-dir /root/dapo-math-17k
+
+# Download evaluation dataset (aime-2024)
+hf download --repo-type dataset zhuzilin/aime-2024 \
+  --local-dir /root/aime-2024
+
+# Clone code and install dependencies
+git clone https://github.com/radixark/miles.git
+cd miles
+pip install -e .
+
+
+# FSDP does not require weight conversion, natively supports huggingface format
+# Enable reference model, train Qwen3-4B in colocate mode
+bash /root/miles/scripts/run-qwen3-4B-fsdp.sh
+</code></pre>
+<h2 id="from-megatron-to-fsdp">From Megatron to FSDP</h2>
+<p>FSDP automatically reads all architecture information via <code>AutoModelForCausalLM.from_pretrained()</code>, without manual specification. Megatron requires manual configuration of parameters to read model architecture information, or automatic inference via <code>--use-hf-config-for-megatron</code>. FSDP can read entirely from <code>config.json</code>, directly avoiding the weight format conversion step.</p>
+<h3 id="fsdp-training-key-startup-parameters">FSDP Training Key Startup Parameters</h3>
+<ul>
+<li>This part writes which parameters need to be modified in a Megatron script in miles to run with FSDP (TODO)</li>
+</ul>
+<h3 id="megatron-vs-fsdp-parameter-comparison-table">Megatron vs FSDP Parameter Comparison Table</h3>
+<table>
+<thead>
+<tr>
+<th>Configuration Category</th>
+<th>Megatron Parameter</th>
+<th>FSDP Parameter</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Model Loading</strong></td>
+<td><code>--load</code> (Megatron checkpoint) + architecture args (<code>--num-layers</code>, <code>--hidden-size</code> etc.) or <code>--use-hf-config-for-megatron</code></td>
+<td><code>--hf-checkpoint</code> (Required)</td>
+<td><strong>FSDP</strong>: Directly uses HuggingFace format, no weight conversion needed, architecture inferred via <code>AutoConfig</code></td>
+</tr>
+<tr>
+<td><strong>Tensor Parallel</strong></td>
+<td><code>--tensor-model-parallel-size</code></td>
+<td>Coming Soon</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Pipeline Parallel</strong></td>
+<td><code>--pipeline-model-parallel-size</code></td>
+<td>Coming Soon</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Expert Parallel</strong></td>
+<td><code>--expert-model-parallel-size</code></td>
+<td>Coming Soon</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Context Parallel</strong></td>
+<td><code>--context-parallel-size</code></td>
+<td><code>--context-parallel-size</code></td>
+<td>Both support CP</td>
+</tr>
+<tr>
+<td><strong>Initial Learning Rate</strong></td>
+<td><code>--lr</code></td>
+<td><code>--lr</code></td>
+<td>Same parameter</td>
+</tr>
+<tr>
+<td><strong>Learning Rate Decay</strong></td>
+<td><code>--lr-decay-style</code> (linear/cosine)</td>
+<td><code>--lr-decay-style</code> (only constant)</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Warmup</strong></td>
+<td><code>--lr-warmup-iters</code> (steps)</td>
+<td>Coming Soon</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Min Learning Rate</strong></td>
+<td><code>--min-lr</code></td>
+<td>Coming Soon</td>
+<td></td>
+</tr>
+<tr>
+<td><strong>Optimizer Type</strong></td>
+<td><code>--optimizer</code> (adam/sgd etc.)</td>
+<td><code>--optimizer</code> (default adam)</td>
+<td>Basically same</td>
+</tr>
+<tr>
+<td><strong>Distributed Optimizer</strong></td>
+<td><code>--use-distributed-optimizer</code></td>
+<td>Built-in to FSDP</td>
+<td>FSDP uses distributed optimizer by default</td>
+</tr>
+<tr>
+<td><strong>Gradient Checkpoint</strong></td>
+<td><code>--recompute-granularity</code>, <code>--recompute-method</code></td>
+<td><code>--gradient-checkpointing</code></td>
+<td><strong>FSDP</strong>: Simplified to boolean switch</td>
+</tr>
+<tr>
+<td><strong>CPU Offload</strong></td>
+<td>Implemented via distributed optimizer</td>
+<td><code>--fsdp-cpu-offload</code></td>
+<td><strong>FSDP</strong>: Offload parameters/gradients/optimizer states to CPU</td>
+</tr>
+<tr>
+<td><strong>Attention Backend</strong></td>
+<td>Decided by Megatron Core</td>
+<td><code>--attn-implementation</code> (flash_attention_2/sdpa/eager)</td>
+<td><strong>FSDP</strong>: Directly passed to HuggingFace</td>
+</tr>
+<tr>
+<td><strong>Mixed Precision</strong></td>
+<td><code>--fp16</code> or <code>--bf16</code></td>
+<td><code>--fp16</code> (bf16 inferred automatically)</td>
+<td>Basically same</td>
+</tr>
+<tr>
+<td><strong>Offload on Save</strong></td>
+<td>-</td>
+<td><code>--fsdp-state-dict-cpu-offload</code> (Default True)</td>
+<td><strong>FSDP</strong>: Offload to CPU when saving checkpoint</td>
+</tr>
+<tr>
+<td><strong>Training Backend</strong></td>
+<td>Default or <code>--train-backend megatron</code></td>
+<td><code>--train-backend fsdp</code> (Required)</td>
+<td>Used to switch backend</td>
+</tr>
+</tbody>
+</table>
+<h2 id="features-currently-not-supportedimperfect-in-fsdp"><strong>Features Currently Not Supported/Imperfect in FSDP</strong></h2>
+<p>FSDP currently only supports <strong>DP + CP</strong>, and does not support <strong>TP, EP, PP</strong>. The implementation of CP is different from Megatron.</p>
+<p>Megatron Core has native implementation (deeply integrated with TP/PP), while FSDP implements it via external Ring Flash Attention library.</p>
+<p>In addition, Megatron's <code>--recompute-granularity</code> (full/selective), <code>--recompute-method</code> (uniform/block), <code>--recompute-num-layers</code> are not supported. FSDP only has a simple <code>--gradient-checkpointing</code> switch.</p>
+<p>Finally, FSDP optimizer's learning rate currently only supports being set to constant, and there is no warmup strategy.</p>
+<h1 id="future-plans">Future Plans</h1>
+<p>As a lightweight backend, our future plans for FSDP include the following directions:</p>
+<ul>
+<li>Implement TP and EP while maintaining clean and tidy code.</li>
+<li>Add a set of FSDP VLM training capabilities and corresponding scripts: Prioritize Qwen2.5-VL / Qwen3-VL (HF default weights) models, using Geo3K / Deepeyes datasets to implement and test single-turn and multi-turn VLM RL Training respectively, and finally support vision + language joint training or partial freezing on FSDP2.</li>
+<li>Support Qwen3-next and other hybrid models for training and optimization.</li>
+</ul>
+<h1 id="acknowledgements">Acknowledgements</h1>
+<p>Thanks to all friends who contributed code, testing, and optimization to miles X FSDP:</p>
+<p>Zhipu: Zilin Zhu, Chengxing Xie, Haoran Wang, Lei Li</p>
+<p>SGlang RL team: Yusheng Su, Zhuohao Li, Ji Li, Chengxi Li, Jiahui Wang, Jin Pan, Huapeng Zhou, William Ren, Tom, Qisheng Liu, Yuzhen Zhou, Jiajun Li, Chenyang Zhao, Yuqi Xiang, Mao Cheng</p>
+<p>Linkedin: Lancert</p>
+<h1 id="engineering-implementation-details">Engineering Implementation Details</h1>
+<h3 id="context-parallel">Context Parallel</h3>
+<p>FSDP's CP is directly implemented via <a href="https://github.com/zhuzilin/ring-flash-attention">ring flash attention</a> library. Compared to Megatron's complex chunk mechanism, FSDP only needs to implement simple continuous chunks, and the load balancing part is handed over to ring flash attn. We only need to focus on input data slicing and result aggregation.</p>
+<p><strong>Specific implementation flow is as follows:</strong></p>
+<ol>
+<li><strong>Device Mesh Setup:</strong> Establish (DP, CP) 2D communication group in <code>setup_device_mesh</code>, and use <code>substitute_hf_flash_attn</code> to replace HuggingFace model's original Flash Attention operator with Ring Flash Attention implementation supporting CP.</li>
+<li><strong>Input Slicing:</strong> In the <code>_get_model_inputs_args</code> stage before forward, we directly use <code>torch.chunk</code> to slice Data Packed <code>input_ids</code> and <code>position_ids</code> into <code>cp_size</code> parts on the sequence dimension. The current rank only loads its own part of data. Meanwhile, call <code>update_ring_flash_attn_params</code> to pass global <code>cu_seqlens</code> info to the underlying Attention operator.</li>
+<li><strong>Result Gathering</strong>: When calculating Log Probs (<code>get_logprob_and_entropy_with_cp</code>), each rank calculates local shard's log_probs and entropy in parallel. Finally, splice the results distributed on different ranks back into a complete sequence via <code>all_gather</code>, and remove Padding filled to meet CP alignment requirements.</li>
+</ol>
+<h3 id="data-packing">Data Packing</h3>
+<p>To avoid waste caused by large amounts of padding on each CP rank due to direct padding, we splice long sequences into continuous vectors and use <code>cu_seqlens</code> to record boundaries. We first reused megatron's <code>process_rollout_data()</code> to split rollout by DP rank, then <code>packed_data</code> estimates how many <code>micro_batch</code>es are needed to complete a <code>global_batch</code> based on rollout token count and DP size. The relationship between <code>global_batch</code> and <code>micro_batch</code> in miles is seen in Batch &amp; Sample.</p>
+<ul>
+<li>When <code>use_dynamic_batch_size</code> is enabled, the number of micro-batches needs to be dynamically calculated based on actual sequence length: Use First-Fit algorithm via <code>get_minimum_num_micro_batch_size()</code> to estimate the minimum number of micro-batches needed to accommodate all data based on each sequence's length and <code>max_tokens_per_gpu</code> limit. This number will be synchronized across all DP ranks via <code>all_reduce(MAX)</code> to ensure consistent gradient accumulation steps for each rank.</li>
+<li>If dynamic batch size is not enabled, directly use static formula global_batch_size // (micro_batch_size * dp_size) to calculate fixed micro-batch count.</li>
+</ul>
+<p>Next, execute actual packing operation in <code>pack_sequences()</code>:</p>
+<ul>
+<li>Calculate partition count <code>k_partitions = ceil(total_tokens / max_tokens_per_gpu)</code></li>
+<li>Call <code>get_seqlen_balanced_partitions()</code> to perform load balanced allocation using <a href="https://en.wikipedia.org/wiki/Largest_differencing_method">Karmarkar-Karp</a> algorithm (Largest Differencing Method). This algorithm maintains partition states via priority queue, merging the two partitions with the largest token total difference each time, making the final token count of each pack highly balanced.</li>
+<li>For each pack, splice assigned sequences into continuous <code>flat_tokens</code> vector, and construct <code>cu_seqlens</code> array to record each sequence's boundaries, e.g., <code>[0, 128, 384, 512]</code> means 3 sequences with lengths 128, 256, 128 respectively.</li>
+</ul>
+<p>In Context Parallel mode (<code>cp_size &gt; 1</code>), <code>pad_packed_sequence_with_cp()</code> will perform minimum alignment padding (at most cp_size-1 tokens) on the spliced sequence, ensuring total length can be divisible by cp_size for cross-rank slicing. Although this is still naive direct padding, since padding ≤ cp_size -1, it will not cause visible overhead.</p>
+<p>During training, <code>cu_seqlens</code> is directly passed to Flash Attention to handle variable length sequences; when calculating loss, <code>unpack_sequences()</code> accurately restores indicators like log_probs, advantages for each sequence based on boundary information. This method basically avoids overhead caused by naive padding.</p>
+<h3 id="ppo-kl-precision-error">PPO KL Precision Error</h3>
+<p>The PPO training process involves three batch-related parameters: Batch, Micro batch size &amp; Sample.</p>
+<p>Ideally, when <code>sample</code> count × <code>micro_batch_size</code> = <code>global_batch_size</code>, it means all samples generated in one rollout (sample count × prompts processed per batch) exactly equal one complete training batch. At this time, rollout phase and training phase use <strong>the same unupdated actor weight version</strong>.</p>
+<ul>
+<li>Use weight <code>W_t</code> to generate responses during Rollout.</li>
+<li>Still use weight <code>W_t</code> to calculate log probabilities during training.</li>
+</ul>
+<p>Therefore, theoretically PPO KL divergence should be 0. However, in actual operation (only when reference model is enabled), KL divergence maintains a small positive value instead of 0 starting from the first micro batch, indicating a numerical drift problem.</p>
+<p>This problem is caused by precision errors in weight exchange logic. The original implementation referred to Megatron's way, manually exchanging ref and actor tensors between CPU and GPU. To be compatible with FSDP2's DTensor, we manually created DTensor for swap. However, manual weight exchange leads to slight numerical deviations during weight loading. Megatron uses this manual exchange because the offload process of distributed optimizer is very complex, so it simply exchanges weights directly.</p>
+<p>Finally, we switched to a cleaner solution: treat reference model as an independent FSDP model, use FSDP native CPU Offload for management, and load it to GPU only during forward. This method completely avoids manual weight exchange, fully utilizes FSDP native CPU/GPU transfer mechanism, eliminates numerical drift from the root cause, making PPO KL converge to theoretical value 0, while not introducing additional GPU memory overhead. </p>
+<h3 id="true-on-policy"><strong>True on policy</strong></h3>
+<p>After the CP PR was merged, the true on policy of the main branch actually failed. After investigation, it was found that precision was autocast to bf16 after indentation. After fixing, training-infer mismatch was successfully restored to 0.</p>
+<p>To avoid precision problems caused by improper application of auto cast, we finally chose <a href="https://docs.pytorch.org/tutorials/intermediate/FSDP_advanced_tutorial.html#mixed-precision">Mixed Precision</a> newly supported by FSDP2, implementing clearer and cleaner precision management.</p>
+<h3 id="batch-sample">Batch &amp; Sample</h3>
+<ul>
+<li><strong>Sample count (n-samples-per-prompt)</strong>: Number of candidate responses generated per prompt</li>
+<li><strong>Micro batch size</strong>: Number of samples processed per forward/backward pass during training (limited by GPU VRAM)</li>
+<li><strong>Global batch size</strong>: Total samples for a complete training iteration, usually completed by gradient accumulation of multiple micro batches</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/fsdp/readme_en.md">rlhf/slime/fsdp/readme_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

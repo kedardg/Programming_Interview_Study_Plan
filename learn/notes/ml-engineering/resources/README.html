@@ -1,0 +1,116 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Resources</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › resources/README.md</div>
+<article class="note"><h1 id="resources">Resources</h1>
+<h2 id="similar-online-guides">Similar online guides</h2>
+<ul>
+<li>
+<p>Boris Dayma wrote <a href="https://wandb.ai/craiyon/report/reports/Recipe-Training-Large-Models--VmlldzozNjc4MzQz">A Recipe for Training Large Models</a></p>
+</li>
+<li>
+<p>The HuggingFace team published <a href="https://huggingface.co/spaces/nanotron/ultrascale-playbook">The Ultra-Scale Playbook: Training LLMs on GPU Clusters</a>.</p>
+</li>
+<li>
+<p>Jacob Austin maintains <a href="https://jax-ml.github.io/scaling-book/">How to Scale Your Model: A Systems View of LLMs on TPUs</a></p>
+</li>
+<li>
+<p>The Harvard Edge group publishes <a href="https://github.com/harvard-edge/cs249r_book">Machine Learning Systems</a> (CS249r textbook; site: <a href="http://mlsysbook.ai/">mlsysbook.ai</a>).</p>
+</li>
+</ul>
+<h2 id="useful-compilations">Useful compilations</h2>
+<ul>
+<li>
+<p><a href="https://github.com/StellaAthena">@StellaAthena</a> created the <a href="https://docs.google.com/spreadsheets/d/14vbBbuRMEHoqeuMHkTfw3uiZVmyXNuoSp8s-aHvfvZk/edit#gid=0">Common LLM Settings spreadsheet</a> which can be a super-useful resource when you're about to embark on a new LLM training - as it tells you how many known LLM trainings were created.</p>
+</li>
+<li>
+<p>A few years back I started compiling information on <a href="https://discuss.huggingface.co/t/model-pre-training-precision-database-fp16-fp32-bf16/5671">which dtype the models were trained in</a> - it only contains a handful of models but if you're doing a research on dtypes it can still be useful. I was using this information to try and write <a href="https://github.com/stas00/ml-ways/blob/master/numbers/detect-model-pretrained-in-bf16-fp16-fp32.ipynb">a model pretraining dtype auto-detection</a> and here is a related <a href="https://github.com/stas00/ml-ways/blob/master/numbers/bfloat16-vs-float16-study.ipynb">float16 vs bfloat16 numerical properties comparison</a>.</p>
+</li>
+</ul>
+<h2 id="publicly-available-training-llmvlm-logbooks">Publicly available training LLM/VLM logbooks</h2>
+<p>Logbooks, chronicles, and technical reports of training LLMs/VLMs are among the best sources to learn from about dealing with training instabilities, infrastructure and scaling challenges, and choosing good hyper parameters. The earlier entries here are logbooks/chronicles kept during a training run; increasingly the same hard-won lessons appear as dedicated sections of technical reports - typically titled something like <em>Infrastructure, Scaling, and Efficiency</em> or <em>Engineering Challenges and Solutions</em>, and often covering reliability and operational challenges that rarely make it into a model card.</p>
+<p>If you know of a public LLM/VLM training logbook, or a technical report with such a section, that is not on this list please kindly let me know via <a href="https://github.com/stas00/ml-engineering/issues">an Issue</a> or add it via a PR. Thank you!</p>
+<p>The listing is in no particular order other than being grouped by the year.</p>
+<h3 id="2021">2021</h3>
+<ul>
+<li>BigScience pre-BLOOM 108B training experiments (2021):
+<a href="https://github.com/bigscience-workshop/bigscience/blob/master/train/tr8-104B-wide/chronicles.md">chronicles</a> |
+<a href="https://github.com/bigscience-workshop/bigscience/tree/master/train/tr8-104B-wide">the full spec and discussions</a>
+(backup:
+<a href="https://github.com/stas00/bigscience-backup/blob/master/train/tr8-104B-wide/chronicles.md">1</a> |
+<a href="https://github.com/stas00/bigscience-backup/tree/master/train/tr8-104B-wide">2</a>)</li>
+</ul>
+<h3 id="2022">2022</h3>
+<ul>
+<li>
+<p>BigScience BLOOM-176B (2022):
+<a href="https://github.com/bigscience-workshop/bigscience/blob/master/train/tr11-176B-ml/chronicles-prequel.md">chronicles-prequel</a> |
+<a href="https://github.com/bigscience-workshop/bigscience/blob/master/train/tr11-176B-ml/chronicles.md">chronicles</a> |
+<a href="https://github.com/bigscience-workshop/bigscience/tree/master/train/tr11-176B-ml">the full spec and discussions</a>
+(backup:
+<a href="https://github.com/stas00/bigscience-backup/blob/master/train/tr11-176B-ml/chronicles-prequel.md">1</a> |
+<a href="https://github.com/stas00/bigscience-backup/blob/master/train/tr11-176B-ml/chronicles.md">2</a> |
+<a href="https://github.com/stas00/bigscience-backup/tree/master/train/tr11-176B-ml">3</a>)</p>
+</li>
+<li>
+<p>Meta OPT-175B (2022):
+ <a href="https://github.com/facebookresearch/metaseq/tree/main/projects/OPT/chronicles">logbook</a> | <a href="https://www.youtube.com/watch?v=p9IxoSkvZ-M">Video</a> (backup: <a href="https://github.com/stas00/metaseq-backup/tree/main/projects/OPT/chronicles">1</a>)</p>
+</li>
+<li>
+<p>THUDM GLM-130B (2022): <a href="https://github.com/zai-org/GLM-130B/blob/main/logs/main-log-en.md">en logbook</a> | <a href="https://github.com/zai-org/GLM-130B/blob/main/logs/main-log.md">Mandarin version</a> (backup:  <a href="https://github.com/stas00/GLM-130B-backup/blob/main/logs/main-log-en.md">1</a> | <a href="https://github.com/stas00/GLM-130B-backup/blob/main/logs/main-log.md">2</a>)</p>
+</li>
+</ul>
+<h3 id="2023">2023</h3>
+<ul>
+<li>
+<p>HuggingFace IDEFICS-80B multimodal (Flamingo repro) (2023): <a href="https://github.com/huggingface/m4-logs/blob/master/memos/README.md">Learning log</a> | <a href="https://github.com/huggingface/m4-logs/blob/master/tr-190-80b/chronicles.md">Training Chronicles</a> (backup: <a href="https://github.com/stas00/m4-logs-backup/blob/master/memos/README.md">1</a> | <a href="https://github.com/stas00/m4-logs-backup/blob/master/tr-190-80b/chronicles.md">2</a>)</p>
+</li>
+<li>
+<p>BloombergGPT 50B LLM - section C in <a href="https://arxiv.org/abs/2303.17564">BloombergGPT: A Large Language Model for Finance</a></p>
+</li>
+</ul>
+<h3 id="2024">2024</h3>
+<ul>
+<li>
+<p><a href="https://arxiv.org/abs/2402.15627">MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs</a> - the paper covers various training issues and their resolution - albeit on models that are proprietary yet just as instructional/useful.</p>
+</li>
+<li>
+<p>Imbue's <a href="https://imbue.com/blog/70b-infrastructure">From bare metal to a 70B model: infrastructure set-up and scripts</a> very detailed technical post covers many training-related issues that they had to overcome while training a proprietary 70B-param model.</p>
+</li>
+<li>
+<p>Meta's <a href="https://arxiv.org/abs/2407.21783">The Llama 3 Herd of Models</a> devotes <a href="https://arxiv.org/pdf/2407.21783#page=12">§3.3 Infrastructure, Scaling, and Efficiency</a> to the training stack, including §3.3.4 Reliability and Operational Challenges - notably how environmental factors (diurnal temperature swings, and the effect of tens of thousands of GPUs' fluctuating power draw on the datacenter grid) perturbed training throughput, a dimension I haven't seen documented in other reports.</p>
+</li>
+</ul>
+<h3 id="2025">2025</h3>
+<ul>
+<li>Project Apertus (ETH Zürich, EPFL, CSCS) - <a href="https://arxiv.org/abs/2509.14233">Apertus v1 Technical Report: Democratizing Open and Compliant LLMs for Global Language Environments</a> - a fully open 8B/70B suite trained on 15T tokens across 1800+ languages using up to 4096 GPUs on CSCS's Alps. Its <em>Infrastructure, Scaling, and Efficiency</em> and <em>Engineering Challenges and Solutions</em> sections (~5 pages) read like a logbook of the run.</li>
+</ul>
+<h3 id="2026">2026</h3>
+<ul>
+<li><a href="https://allenai.org/papers/olmocore3">Supercharging Olmo-core for Efficient and Scalable MoE Training</a> - practical recommendations for training large scale MoE models in 2026!</li>
+<li><a href="https://mtracker.oa.dev/hero-run-535b">Marin 535B-A23B MoE live</a> - each short entry goes to a details GitHub Issue where you can read the details. Finished trainings retrospectives: <a href="https://marin.readthedocs.io/en/latest/reports/marin-8b-retro/">8B</a>, <a href="https://marin.readthedocs.io/en/latest/reports/marin-32b-retro/">32B</a></li>
+<li>Project Apertus - <a href="https://arxiv.org/abs/2610.15542">Apertus v1.5 Technical Report: From Open Text Models to Open Multimodal Reasoners</a> - continued multimodal pretraining of the Apertus 8B/70B models; like v1 it includes <em>Infrastructure, Scaling, and Efficiency</em> and <em>Engineering Challenges and Solutions</em> sections (~5 pages).</li>
+</ul>
+<h2 id="hardware-setup-logbooks">Hardware setup logbooks</h2>
+<ul>
+<li>
+<p>Imbue published a detailed log of how they have set up a 512-node IB-fat-tree cluster and made it to work: <a href="https://imbue.com/blog/70b-infrastructure">From bare metal to a 70B model: infrastructure set-up and scripts</a>, they also open-sourced the <a href="https://github.com/imbue-ai/cluster-health">cluster tooling</a> they created in the process.</p>
+</li>
+<li>
+<p>SemiAnalysis published a great detailed writeup about <a href="https://newsletter.semianalysis.com/p/ai-neocloud-playbook-and-anatomy">what it takes to set up a Neocloud cluster</a>.</p>
+</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/resources/README.md">resources/README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

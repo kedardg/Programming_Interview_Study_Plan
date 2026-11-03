@@ -1,0 +1,272 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News Feed System</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-newsfeed.md</div>
+<article class="note"><h1 id="news-feed-system">News Feed System</h1>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<p>show feed (recent posts and activities from other users) on a social network platform 
+* Clarifying questions
+  * What is the primary business objective of the system? (increase user engagement)
+  * Do we show only posts or also activities from other users?
+  * What types of engagement are available? (like, click, share, comment, hide, etc)? Which ones are we optimizing for? 
+  * Do we display ads as well? 
+  * What types of data do the posts include? (text, image, video)?
+  * Are there specific user segments or contexts we should consider (e.g., user demographics)?
+  * Do we have negative feedback features (such as hide ad, block, etc)?
+  * What type of user-ad interaction data do we have access to can we use it for training our models? 
+  * Do we need continual training? 
+  * How do we collect negative samples? (not clicked, negative feedback). 
+  * How fast the system needs to be? 
+  * What is the scale of the system? 
+  * Is personalization needed? Yes </p>
+<ul>
+<li>Use case(s) and business goal</li>
+<li>use case: show friends most engaging (and unseen) posts and activities on a social network platform app (personalized to user)</li>
+<li>
+<p>business objective: Maximize user engagement (as a set of interactions)</p>
+</li>
+<li>
+<p>Requirements;</p>
+<ul>
+<li>Latency: 200 msec of newsfeed refreshed results after user opens/refreshes the app</li>
+<li>Scalability: 5 B total users, 2 B DAU, refresh app twice </li>
+</ul>
+</li>
+<li>
+<p>Constraints:</p>
+<ul>
+<li>Privacy and compliance with data protection regulations.</li>
+</ul>
+</li>
+<li>
+<p>Data: Sources and Availability:</p>
+<ul>
+<li>Data sources include user interaction logs, ad content data, user profiles, and contextual information.</li>
+<li>Historical click and impression data for model training and evaluation.</li>
+</ul>
+</li>
+<li>
+<p>Assumptions:</p>
+<ul>
+<li>Users' engagement behavior can be characterized by their explicit (e.g. like, click, share, comment, etc) or implicit interactions (e.g. dwell time) </li>
+</ul>
+</li>
+<li>
+<p>ML Formulation:</p>
+<ul>
+<li>Objective: </li>
+<li>maximize number of explicit, implicit, or both type of reactions (weighted)</li>
+<li>implicit: more data, explicit: stronger signal, but less data -&gt; weighted score of different interactions: share &gt; comment &gt; like &gt; click etc </li>
+<li>I/O: I: user_id, O: ranked list of unseen posts sorted by engagement score (wighted sum) </li>
+<li>Category: Ranking problem: can be solved as pointwise LTR with multi/label (multi-task) classification</li>
+</ul>
+</li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<ul>
+<li>Offline </li>
+<li>ROC AUC (trade-off b/w TPR and FPR)</li>
+<li>Online </li>
+<li>CTR, </li>
+<li>Reactions rate (like rate, comment rate, etc)</li>
+<li>Time spent </li>
+<li>User satisfaction (survey)</li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<ul>
+<li>High level architecture </li>
+<li>We can use point-wise learning to rank (LTR) formulation </li>
+<li>Options for multi-label/task classification: <ul>
+<li>Use N independent classifiers (expensive to train and maintain) </li>
+<li>Use a multi-task classifier</li>
+<li>learn multi tasks simultaneously </li>
+<li>single shared layers (learns similarities between tasks) -&gt; transformed features </li>
+<li>task specific layers: classification heads </li>
+<li>pros: single model, shared layers prevent redundancy, train data for each task can be used for others as well (limited data)</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<ul>
+<li>Data Sources</li>
+<li>Users, </li>
+<li>Posts, </li>
+<li>User-post interaction </li>
+<li>
+<p>User-user (friendship)</p>
+</li>
+<li>
+<p>Labelling</p>
+</li>
+</ul>
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<ul>
+<li>Feature selection </li>
+<li>Posts: <ul>
+<li>Text</li>
+<li>Image/videos</li>
+<li>No of reactions (likes, shares, replies, etc)</li>
+<li>Age </li>
+<li>Hashtags </li>
+</ul>
+</li>
+<li>User: <ul>
+<li>ID, username</li>
+<li>Demographics (Age, gender, location)</li>
+<li>Context (device, time of day, etc)</li>
+<li>Interaction history (e.g. user click rate, total clicks, likes, et )</li>
+</ul>
+</li>
+<li>User-Post interaction: <ul>
+<li>IDs(user, Ad), interaction type, time, location </li>
+</ul>
+</li>
+<li>
+<p>User-user(post author) affinities </p>
+<ul>
+<li>connection type </li>
+<li>reaction history (No liked/commented/etc posts from author)</li>
+</ul>
+</li>
+<li>
+<p>Feature representation / preparation</p>
+</li>
+<li>
+<p>Text: </p>
+<ul>
+<li>use a pre-trained LM to get embeddings</li>
+<li>use BERT here (posts are in phrases usually, context aware helps) </li>
+</ul>
+</li>
+<li>
+<p>Image / Video: </p>
+<ul>
+<li>preprocess </li>
+<li>use pre-trained models e.g. SimCLR / CLIP to convert -&gt; feature vector </li>
+</ul>
+</li>
+<li>
+<p>Dense numerical features: </p>
+<ul>
+<li>Engagement feats (No of clicks, etc)</li>
+<li>use directly + scale the range</li>
+</ul>
+</li>
+<li>Discrete numerical: <ul>
+<li>Age: bucketize into categorical then one hot </li>
+</ul>
+</li>
+<li>Hashtags: <ul>
+<li>tokenize, token to ID, simple vectorization (TF-IDF or word2vec) - no context </li>
+</ul>
+</li>
+</ul>
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<ul>
+<li>Model selection </li>
+<li>We choose NN <ul>
+<li>unstructured data (text, img, video)</li>
+<li>embedding layers for categorical features</li>
+<li>fine tune pre-trained models used for feat eng.</li>
+</ul>
+</li>
+<li>multi-labels <ul>
+<li>P(click), P(like), P(Share), P(comment)</li>
+</ul>
+</li>
+<li>Two options: <ul>
+<li>N NN classifiers  </li>
+<li>Multi task NN (choose this) </li>
+<li>Shared layers </li>
+<li>Classification heads (click, like, share, comment)</li>
+</ul>
+</li>
+<li>
+<p>Passive users problem: </p>
+<ul>
+<li>All their Ps will be small </li>
+<li>add two more heads </li>
+<li>Dwell time (seconds spent on post)</li>
+<li>P(skip) (skip = spend time &lt; t)</li>
+</ul>
+</li>
+<li>
+<p>Model Training </p>
+</li>
+<li>Loss function: <ul>
+<li>L = sum of L_is for each task </li>
+<li>for binary classif tasks: CE </li>
+<li>for regression task: MAE, MSE, or Huber loss</li>
+</ul>
+</li>
+<li>Dataset <ul>
+<li>use features, post features, interactions, labels</li>
+<li>labels: positive, negative for each task (like, didn't like etc)</li>
+<li>for dwell time: it's a regression </li>
+<li>Imbalanced dataset: downsample negative </li>
+</ul>
+</li>
+<li>Model eval and HP tuning </li>
+<li>Iterations </li>
+</ul>
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<ul>
+<li>Data Prep pipeline</li>
+<li>static features -&gt; batch feature compute (daily, weekly) -&gt; feature store</li>
+<li>
+<p>dynamic features: # of post clicks, etc _&gt; streaming  </p>
+</li>
+<li>
+<p>Prediction pipeline </p>
+</li>
+<li>two stage (funnel) architecture <ul>
+<li>candidate generation / retrieval service </li>
+<li>rule based </li>
+<li>filter and fetch unseen posts by users under certain criteria </li>
+<li>Ranking </li>
+<li>features -&gt; model -&gt; engagement prob. -&gt; sort </li>
+<li>re-ranking: business logic, additional logic and filters (e.g. user interest category)</li>
+</ul>
+</li>
+<li>Continual learning pipeline </li>
+<li>fine tune on new data, eval, and deploy if improves metrics  </li>
+</ul>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<ul>
+<li>A/B Test </li>
+<li>Deployment and release </li>
+</ul>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3>
+<ul>
+<li>Scaling (SW and ML systems)</li>
+<li>Monitoring </li>
+<li>Updates </li>
+</ul>
+<h3 id="10-other-topics">10. Other topics</h3>
+<ul>
+<li>Viral posts / Celebrities posts</li>
+<li>New users (cold start)</li>
+<li>Positional data bias </li>
+<li>Update frequency </li>
+<li>calibration: </li>
+<li>fine-tuning predicted probabilities to align them with actual click probabilities </li>
+<li>data leakage: </li>
+<li>info from the test or eval dataset influences the training process</li>
+<li>target leakage, data contamination (from test to train set)</li>
+<li>catastrophic forgetting </li>
+<li>model trained on new data loses its ability to perform well on previously learned tasks </li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-newsfeed.md">src/MLSD/mlsd-newsfeed.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

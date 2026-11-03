@@ -1,0 +1,64 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Re-Train HF Hub Models From Scratch Using Finetuning Examples</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › training/re-train-hub-models.md</div>
+<article class="note"><h1 id="re-train-hf-hub-models-from-scratch-using-finetuning-examples">Re-Train HF Hub Models From Scratch Using Finetuning Examples</h1>
+<p>HF Transformers has awesome finetuning examples  https://github.com/huggingface/transformers/tree/main/examples/pytorch, that cover pretty much any modality and these examples work out of box.</p>
+<p><strong>But what if you wanted to re-train from scratch rather than finetune.</strong></p>
+<p>Here is a simple hack to accomplish that.</p>
+<p>We will use <code>facebook/opt-1.3b</code> and we will plan to use bf16 training regime as an example here:</p>
+<pre><code class="language-bash">cat &lt;&lt; EOT &gt; prep-bf16.py
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+import torch
+
+mname = &quot;facebook/opt-1.3b&quot;
+
+config = AutoConfig.from_pretrained(mname)
+model = AutoModelForCausalLM.from_config(config, torch_dtype=torch.bfloat16)
+tokenizer = AutoTokenizer.from_pretrained(mname)
+
+path = &quot;opt-1.3b-bf16&quot;
+
+model.save_pretrained(path)
+tokenizer.save_pretrained(path)
+EOT
+</code></pre>
+<p>now run:</p>
+<pre><code class="language-bash">python prep-bf16.py
+</code></pre>
+<p>This will create a folder: <code>opt-1.3b-bf16</code> with everything you need to train the model from scratch. In other words you have a pretrained-like model, except it only had its initializations done and none of the training yet.</p>
+<p>Adjust the script above to use <code>torch.float16</code> or <code>torch.float32</code> if that's what you plan to use instead.</p>
+<p>Now you can proceed with finetuning this saved model as normal:</p>
+<pre><code class="language-bash">torchrun \
+--nproc_per_node=1 --nnode=1 --node_rank=0 \
+--master_addr=127.0.0.1 --master_port=9901 \
+examples/pytorch/language-modeling/run_clm.py --bf16 \
+--seed 42 --model_name_or_path opt-1.3b-bf16 \
+--dataset_name wikitext --dataset_config_name wikitext-103-raw-v1 \
+--per_device_train_batch_size 12 --per_device_eval_batch_size 12 \
+--gradient_accumulation_steps 1 --do_train --do_eval --logging_steps 10 \
+--save_steps 1000 --eval_steps 100 --weight_decay 0.1 --num_train_epochs 1 \
+--adam_beta1 0.9 --adam_beta2 0.95 --learning_rate 0.0002 --lr_scheduler_type \
+linear --warmup_steps 500 --report_to tensorboard --output_dir save_dir
+</code></pre>
+<p>The key entry being:</p>
+<pre><code>--model_name_or_path opt-1.3b-bf16
+</code></pre>
+<p>where <code>opt-1.3b-bf16</code> is your local directory you have just generated in the previous step.</p>
+<p>Sometimes it's possible to find the same dataset that the original model was trained on, sometimes you have to use an alternative dataset.</p>
+<p>The rest of the hyper-parameters can often be found in the paper or documentation that came with the model.</p>
+<p>To summarize, this recipe allows you to use finetuning examples to re-train whatever model you can find on <a href="https://huggingface.co/models">the HF hub</a>.</p></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/training/re-train-hub-models.md">training/re-train-hub-models.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

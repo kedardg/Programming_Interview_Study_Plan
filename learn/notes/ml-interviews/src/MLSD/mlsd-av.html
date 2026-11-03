@@ -1,0 +1,423 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Self-driving cars</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-av.md</div>
+<article class="note"><h1 id="self-driving-cars">Self-driving cars</h1>
+<ul>
+<li>drives itself, with little or no human intervention </li>
+<li>different levels of authonomy </li>
+</ul>
+<h2 id="hardware-support">Hardware support</h2>
+<h3 id="sensors">Sensors</h3>
+<ul>
+<li>Camera</li>
+<li>used for classification, segmentation, and localization.</li>
+<li>problem w/ night time, and extreme conditions like fog, heavy rain.</li>
+<li>LiDAR (Light Detection And Ranging,)</li>
+<li>uses lasers or light to measure the distance of the nearby objects.</li>
+<li>adds depth (3D perception), point cloud</li>
+<li>works at night or in dark, still fail when there’s noise from rain or fog.</li>
+<li>RADAR (Radio detection and ranging)</li>
+<li>use radio waves (instead of lasers), so they work in any conditions</li>
+<li>sense the distance from reflection,</li>
+<li>very noisy (needs clean up (thresholding, FFT)), lower spatial resolution, interference w/ other radio systems </li>
+<li>point cloud</li>
+<li>Audio </li>
+</ul>
+<h2 id="stack">Stack</h2>
+<p><img alt="stack" src="https://miro.medium.com/v2/resize%3Afit%3A720/0%2AV3LATCuich2XSNKz"></p>
+<ul>
+<li>
+<p><strong>Perception</strong></p>
+</li>
+<li>
+<p>Perception 
+objects, 
+Raw sensor (lidar, camera, etc) data (image, point cloud)-&gt;  world understanding  </p>
+</li>
+<li>Object detection (traffic lights, pedestrians, road signs, walkways, parking spots, lanes, etc), traffic light state detection, etc </li>
+<li>Localization<ul>
+<li>calculate position and orientation of the vehicle as it navigates (Visual Odometry (VO)).</li>
+<li>Deep learning used to improve the performance of VO, and to classify objects.</li>
+<li>Examples: PoseNet and VLocNet++, use point data to estimate the 3D position and orientation.</li>
+</ul>
+</li>
+<li>....</li>
+<li><strong>Behavior prediction</strong></li>
+<li>predict future trajectory of agents</li>
+<li><strong>Planning</strong>: decision making and generate trajectory</li>
+<li>
+<p><strong>Controller</strong>: generate control commands: accelerate, break, steer left or right </p>
+</li>
+<li>
+<p>Note: latency: orders of millisecond for some tasks, and order of 10 msec's for others  </p>
+</li>
+</ul>
+<h2 id="perception">Perception</h2>
+<ul>
+<li>2D Object detection:  </li>
+<li>Two-stage detectors: using Region Proposal Network (RPN) to learn RoI for potential objects  + bounding box predictions (using RoI pooling): (R-CNN, Fast R-CNN, Faster R-CNN, Mask-RCNN (also does segmentation)<ul>
+<li>used to outperform until focal loss</li>
+</ul>
+</li>
+<li>One-stage: skip proposal generation; directly produce obj BB: YOLO, SSD, RetinaNet<ul>
+<li>computationally appealing (real time)</li>
+</ul>
+</li>
+<li>Transformer based: <ul>
+<li>Detection Transformer (<a href="https://github.com/facebookresearch/detr">DETR</a>): End-to-End Object Detection with Transformers</li>
+<li>uses a transformer encoder-decoder architecture, backbone  CNN  as the encoder and a transformer-based decoder.</li>
+<li>input image -&gt; CNN -&gt; feature map -&gt; decoder -&gt; final object queries, corresponding class labels and bounding boxes.</li>
+<li>handles varying no. of objects in an image, as it does not rely on a fixed set of object proposals.</li>
+<li><a href="https://towardsdatascience.com/detr-end-to-end-object-detection-with-transformers-and-implementation-of-python-8f195015c94d">More</a></li>
+<li>TrackFormer: Multi-Object Tracking with Transformers</li>
+<li>on top of DETR </li>
+</ul>
+</li>
+<li>
+<p>NMS:</p>
+</li>
+<li>
+<p>3D Object detection:  </p>
+</li>
+<li>from point cloud data, ideas transferred from 2D detection</li>
+<li>Examples:<ul>
+<li>3D convolutions on voxelized point cloud</li>
+<li>2D convolutions on BEV</li>
+</ul>
+</li>
+<li>
+<p>heavy computation</p>
+</li>
+<li>
+<p>Object tracking:</p>
+</li>
+<li>use probabilistic methods such as EKF </li>
+<li>
+<p>use ML based models </p>
+<ul>
+<li>use/fine-tune pre-trained CNNs for feature extraction -&gt;  do tracking with correlation or regression.</li>
+<li>use DL based tracking algorithm, such as SORT (Simple Online and Realtime Tracking) or DeepSORT</li>
+</ul>
+</li>
+<li>
+<p>Semantic segmentation </p>
+</li>
+<li>pixel-wise classification of image (each pixel assigned a class)</li>
+<li>Instance segmentation </li>
+<li>combine obj detection + semantic segmatation -&gt; classify pixels of each instance of an object  </li>
+</ul>
+<h2 id="behavior-prediction">Behavior prediction</h2>
+<ul>
+<li>Main task: Motion forecasting/ trajectory prediction (future): </li>
+<li>predict where each object will be in the future given multiple past frames</li>
+<li>
+<p>Examples:</p>
+<ul>
+<li>use RNN/LSTM for prediction</li>
+</ul>
+</li>
+<li>
+<p>Input from perception + HDMap</p>
+</li>
+<li>Options: </li>
+<li>top-view representation: input -&gt; CNN -&gt; ..</li>
+<li>vectorized: context map  </li>
+<li>
+<p>graph representation: GNN </p>
+</li>
+<li>
+<p>Render a bird eye view image on a single RGB image</p>
+</li>
+<li>one option for history: also render on single image</li>
+<li>another option: use feature extractor (CNN) for each frame then use LSTM to get temporal info</li>
+<li>Input: BEV image + (v, a, a_v)</li>
+<li>Out: (x, y, std)
+  <img alt="Alt text" src="https://miro.medium.com/v2/resize%3Afit%3A1400/format%3Awebp/1%2AWiAw3Rl5kP0cuX2A4Vg0uw.png"></li>
+<li>
+<p>also possible to use LSTM networks to generate waypoints in the trajectory sequentially.</p>
+</li>
+<li>
+<p>Challenge: Multimodality (distribution of different modes) - future uncertain</p>
+</li>
+</ul>
+<!-- - Generative [from noise ] - conditioned 
+  - Anchor based - add human knowledge (possible goal locations) -> chose 
+  - multi-head: models multi-modality 
+  - intention-based:  -->
+
+<h2 id="planning">Planning</h2>
+<ul>
+<li>Decision making and generate trajectory  </li>
+<li>
+<p>input: route (from A to B), context map, prediction for nearby agents</p>
+</li>
+<li>
+<p>proposal: what are possible options for the plan (mathematical methods vs imitation learning) - predict what is optimal </p>
+</li>
+<li>
+<p>Hierarchical RL can be used</p>
+</li>
+<li>high level planner: yield, stop, turn left/right, lane following, etc)</li>
+<li>
+<p>low level planner: execute commands</p>
+</li>
+<li>
+<p>motion validation: check e.g. collision, red light, etc -&gt; reject + ranking </p>
+</li>
+</ul>
+<h2 id="multi-task-approaches">Multi task approaches</h2>
+<ul>
+<li>
+<h3 id="perception-behavior-prediction">Perception + Behavior prediction</h3>
+</li>
+<li>Fast&amp; Furious (Uber):<ul>
+<li>Tasks: Detection, tracking, short term (e.g. 1 sec) motion forecasting</li>
+<li>create BEV from point cloud data:</li>
+<li>quantize 3D → 3D voxel grid (binary for occupation) → height&gt;channel(3rd dimension) in RGB + time as 4th dimension → Single stage detector similar to SSD</li>
+<li>deal with temporal dimension in two ways:</li>
+<li>early fusion (aggregate temporal info at the very first layer)</li>
+<li>late fusion (gradually merge the temporal info: allows the model to capture high-level motion features.)</li>
+<li>use multiple predefined boxes for each feature map location (similar to SSD)</li>
+<li>two branches after the feature map:</li>
+<li>binary classification (P (being a vehicle) for each pre-allocated box)</li>
+<li>predict (regress) the BB over the current frame as well as n − 1 frames into the future → size and heading
+  <img alt="" src="https://miro.medium.com/v2/resize:fit:720/0*0jeh53rYLHXJrzwO"></li>
+</ul>
+</li>
+<li>
+<p>IntentNet: learning to predict intent from raw sensor data (Uber)</p>
+<ul>
+<li>Fuse BEV generated from the point cloud + HDMap info  to do detection, intention prediction, and trajectory prediction.</li>
+<li>I: Voxelized LiDAR in BEV, Rasterized HDMap</li>
+<li>O: detected objects, trajectory, 8-class intention (keep lane, turn left, etc)
+  <img alt="" src="">
+  <img alt="stack" src="https://miro.medium.com/v2/resize:fit:720/0*u8FqnNniHgRr7bF2"></li>
+</ul>
+</li>
+<li>
+<h3 id="behavior-prediction-planning-mid-to-mid-model">Behavior Prediction + Planning (Mid-to-Mid Model)</h3>
+</li>
+<li>
+<p>ChauffeurNet (Waymo)</p>
+<ul>
+<li>prediction and planning using single NN using Imitation Learning (IL)</li>
+<li>More info <a href="https://medium.com/aiguys/behavior-prediction-and-decision-making-in-self-driving-cars-using-deep-learning-784761ed34af">here</a></li>
+</ul>
+</li>
+<li>
+<h3 id="end-to-end">End to end</h3>
+</li>
+<li>
+<p>Learning to drive in a day (wayve.ai)</p>
+<ul>
+<li>RL to train a driving policy to follow a lane from scratch in less than 20 minutes!</li>
+<li>Without any HDMap and hand-written rules!</li>
+</ul>
+</li>
+<li>Learning to Drive Like a Human<ul>
+<li>Imitation learning + RL</li>
+<li>used some auxiliary tasks like segmentation, depth estimation, and optical flow estimation to learn a better representation of the scene and use it to train the policy.  </li>
+</ul>
+</li>
+</ul>
+<hr>
+<h1 id="example">Example</h1>
+<p>Design an ML system to detect if a pedestrian is going to do jaywalking. </p>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<ul>
+<li>Jaywalking: a pedestrian crossing a street where there is no  crosswalk or intersection.</li>
+<li>
+<p>Goal: develop an ML system that can accurately predict if a pedestrian is going to do jaywalking over a short time horizon (e.g. 1 sec) in real-time. </p>
+</li>
+<li>
+<p>Pedestrian action prediction is harder than vehicle: future behavior depends on other factors such as body pose, activity, etc.  </p>
+</li>
+<li>
+<p>ML Objective </p>
+</li>
+<li>
+<p>binary classification (predict if a pedestrian is going to do jaywalking or not in the next T seconds.)</p>
+</li>
+<li>
+<p>Discuss data sources and availability. </p>
+</li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<h4 id="component-level-metrics">Component level metrics</h4>
+<ul>
+<li>Object detection </li>
+<li>Precision <ul>
+<li>calculated based on IOU threshold</li>
+</ul>
+</li>
+<li>AP: avg. across various IOU thresholds </li>
+<li>mAP: mean of AP over C classes </li>
+<li>jaywalking detection: </li>
+<li>Precision, Recall, F1  </li>
+</ul>
+<h4 id="end-to-end-metrics">End-to-end metrics</h4>
+<ul>
+<li>Manual intervention </li>
+<li>Simulation Errors </li>
+<li>historical log (scene recording) w/ expert driver </li>
+<li>input to our system and compare the decisions with the expert driver  </li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<ul>
+<li>Visual Understanding System </li>
+<li>Camera: Object detection (pedestrian, drivable region?) + tracking</li>
+<li>[Optional] Camera + object detection: Activity recognition </li>
+<li>Radar: 3D Object detection (skip)</li>
+<li>Behavior prediction system </li>
+<li>Trajectory estimation  <ul>
+<li>require motion history</li>
+</ul>
+</li>
+<li>Ml based approach (classification) <ul>
+<li>Input: <ul>
+<li>Vision: local context: seq. of ped's cropped image (last k frames) + global context (semantically segmented images over last k frames) </li>
+<li>Non-vision: Ped's trajectory (as BBs, last k frames) +  context map  + context(location, age group, etc)</li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<ul>
+<li>Data collection and annotation:</li>
+<li>Collect datasets of pedestrian behavior, including both jaywalking and non-jaywalking behavior. This data can be obtained through public video footage or by recording video footage ourselves.</li>
+<li>Collect a diverse dataset of video clips or image sequences from various locations, including urban and suburban areas, with different pedestrian behaviors, traffic conditions, and lighting conditions.</li>
+<li>Annotate the data by marking pedestrians, their positions, and whether they are jaywalking or not. This can be done by drawing bounding boxes around pedestrians and labeling them accordingly (initially human labelers eventually auto-labeler system)</li>
+<li>
+<p>Targeted data collection: </p>
+<ul>
+<li>in later iterations, we check cases where driver had to intervene when pedestrian jaywalking, check performance on last 20 frames, and ask labelers to label those and add to the dataset (examples need to be seen)</li>
+</ul>
+</li>
+<li>
+<p>Labeling: </p>
+</li>
+<li>each video frame annotated with BB + pose info of the ped + activity tags (walking, standing, crossing, looking, etc) + attributes of pedestrian (age, gender, location, ets),  </li>
+<li>
+<p>each video is annotated weather conditions and time of day.</p>
+</li>
+<li>
+<p>Data preprocessing:  </p>
+</li>
+<li>Split the dataset into training, validation, and test sets.</li>
+<li>Normalize and resize the images to maintain consistency in input data.</li>
+<li>
+<p>Apply data augmentation techniques (e.g., rotation, flipping, brightness adjustments) to increase the  dataset's size and improve model generalization.</p>
+<ul>
+<li>enhance or augment the data with GANs </li>
+</ul>
+</li>
+<li>
+<p>Data augmentation </p>
+</li>
+</ul>
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<ul>
+<li>relevant features from the video footage, such as the pedestrian's position, speed, and direction of movement. </li>
+<li>
+<p>We can also use computer vision techniques to extract features like the presence of a crosswalk, traffic lights, or other relevant environmental cues.</p>
+</li>
+<li>
+<p>features from frames: fc6 features by Faster R-CNN object detector at each BB (4096T vector)</p>
+</li>
+<li>assume: we can query cropped images of last T (e.g. 5) frames of detected pedestrians from built-in object detector and tracking system </li>
+<li>features from cropped frames:  activity recognition </li>
+<li>context map : traffic signs, street width, etc</li>
+<li>ped's history (seq. of BB info) + current info (BB + pose info (openPose) + activity + local context) + global context (context map)  + context(location, age group, etc) -&gt; JW/NJW classifier </li>
+<li>other features that can be fused: ped's pose, BB, semantic segmentation maps (semantic masks for relevant objects), road geometry, surrounding people, interaction with other agents  </li>
+</ul>
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<p>Model selection and architecture: </p>
+<p>Assume built-in object detector and tracker. If not, 
+  * Object detection: Use a pre-trained object detection model like Faster R-CNN, YOLO, or SSD to identify and localize pedestrians in the video frames.
+  * Object tracking: 
+    * use EKF based method or ML based method (SORT or DeepSORT) 
+* Activity recognition: 
+  * 3D CNN, or CNN + RNN(GRU) (chose this to fit the rest of the architecture)</p>
+<p>(Output of object detection and tracking can be converted into rasterized image for each actor -&gt; Base CNN )</p>
+<ul>
+<li>Encoders: </li>
+<li>Visual Encoder: vision content (last k frames) -&gt; CNN base encoders + RNN for temporal info(GRU) [Another option is to use 3D CNNs]<ul>
+<li>CNN base encoder -&gt; another RNN for activity recognition </li>
+</ul>
+</li>
+<li>
+<p>Non-vision encoder: for temporal content use GRU  </p>
+</li>
+<li>
+<p>Fusion strategies: </p>
+</li>
+<li>early fusion </li>
+<li>late fusion </li>
+<li>
+<p>hierarchical fusion </p>
+</li>
+<li>
+<p>Jaywalking clf: Design a custom clf layer to classify detected pedestrians as jaywalking or not.  </p>
+</li>
+<li>
+<p>Example: RF, or a FC layer </p>
+</li>
+<li>
+<p>we can do ablation study for selection of the fusion architecture + visual and non-visual encoders 
+Another example: 
+<img alt="sd" src="https://github.com/OSU-Haolin/Pedestrian_Crossing_Intention_Prediction/blob/main/model_architecture.png?raw=true"></p>
+</li>
+</ul>
+<p>Model training and evaluation:
+a. Train model(s) using the annotated dataset, 
++  loss functions for object detection (MSE, BCE, IoU)
++  jaywalking classification tasks (BCE).</p>
+<p>b. Regularly evaluate the model on the validation set to monitor performance and avoid overfitting. Adjust hyperparameters, such as learning rate and batch size, if necessary.</p>
+<p>c. Once the model converges, evaluate its performance on the test set, using relevant metrics like precision, recall, F1 score, and Intersection over Union (IoU).</p>
+<p>Transfer learning for object detection (use powerful feature detectors from pre-trained models)
+* for fine tuning e.g. use 500 videos each 5-10 seconds, 30fps</p>
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<ul>
+<li>
+<p>SDV on the road: will receive real-time images -&gt; ... </p>
+</li>
+<li>
+<p>Model optimization: Optimize the model for real-time deployment by using techniques such as model pruning, quantization, and TensorRT optimization.</p>
+</li>
+</ul>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<p>Deployment: Deploy the trained model on edge devices or servers equipped with cameras to monitor real-time video feeds (e.g. traffic camera system) and detect jaywalking instances. Integrate the system with existing traffic infrastructure, such as traffic signals and surveillance systems.</p>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3>
+<p>Continuous improvement: Regularly update the model with new data and retrain it to improve its performance and adapt to changing pedestrian behaviors and environmental conditions.</p>
+<ul>
+<li>Other points: </li>
+<li>Occlusion detection <ul>
+<li>hallucinated agent</li>
+</ul>
+</li>
+<li>when visual signal is imprecise <ul>
+<li>poor lighting  conditions </li>
+</ul>
+</li>
+</ul>
+<!-- Pedestrian action prediction: Pedestrian: harder than vehicle - future behavior depends on body pose 
+logs -> scenes that we have pedestrian for within 100 m -> perception: object detection: take cropped images, for the last 5 seconds -> need to do manual labeling -> later auto labeler -> sequence of objects in time -> body pose + activity recognition + history + context -> NN -> output jaywalk or not    
+
+object detection [A ] -> activity + context map + history  [B] -> classification 
+other features: age, location, etc  --></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-av.md">src/MLSD/mlsd-av.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

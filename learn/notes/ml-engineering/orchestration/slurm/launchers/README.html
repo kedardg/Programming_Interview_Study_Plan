@@ -1,0 +1,30 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Single and Multi-Node Launchers with SLURM</title><link rel="stylesheet" href="../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../index.html">Learn</a><div class="links"><a href="../../../../../notes.html" class="here">Notes library</a><a href="../../../../../index.html">All chapters</a><a href="../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../notes.html">Notes library</a> › <a href="../../../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › orchestration/slurm/launchers/README.md</div>
+<article class="note"><h1 id="single-and-multi-node-launchers-with-slurm">Single and Multi-Node Launchers with SLURM</h1>
+<p>The following are complete SLURM scripts that demonstrate how to integrate various launchers with software that uses <code>torch.distributed</code> (but should be easily adaptable to other distributed environments).</p>
+<ul>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm/launchers/torchrun-launcher.slurm">torchrun</a> - to be used with <a href="https://github.com/pytorch/pytorch">PyTorch distributed</a>.</li>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm/launchers/accelerate-launcher.slurm">accelerate</a> - to be used with <a href="https://github.com/huggingface/accelerate">HF Accelerate</a>.</li>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm/launchers/lightning-launcher.slurm">lightning</a> - to be used with <a href="https://lightning.ai/">Lightning</a> (“PyTorch Lightning” and “Lightning Fabric”).</li>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm/launchers/srun-launcher.slurm">srun</a> - to be used with the native SLURM launcher - here we have to manually preset env vars that <code>torch.distributed</code> expects.</li>
+</ul>
+<p>All of these scripts use <a href="https://github.com/stas00/ml-engineering/blob/main/debug/torch-distributed-gpu-test.py">torch-distributed-gpu-test.py</a> as the demo script, which you can copy here with just:</p>
+<pre><code class="language-bash">cp ../../../debug/torch-distributed-gpu-test.py .
+</code></pre>
+<p>assuming you cloned this repo. But you can replace it with anything else you need.</p></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm/launchers/README.md">orchestration/slurm/launchers/README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

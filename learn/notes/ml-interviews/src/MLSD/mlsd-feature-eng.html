@@ -1,0 +1,90 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feature preprocessing</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-feature-eng.md</div>
+<article class="note"><h1 id="feature-preprocessing">Feature preprocessing</h1>
+<h2 id="text-preprocessing">Text preprocessing</h2>
+<p>normalization -&gt; tokenization -&gt; token to ids
+* normalization 
+* tokenization 
+  * Word tokenization 
+  * Subword tokenization 
+  * Character tokenization 
+* token to ids
+  * lookup table 
+  * Hashing </p>
+<h2 id="text-encoders">Text encoders:</h2>
+<p>Text -&gt; Vector (Embeddings) 
+Two approaches: 
+  - Statistical 
+    - BoW: converts documents into word frequency vectors, ignoring word order and grammar
+    - TF-IDF: evaluates the importance of a word (term) in a document relative to a collection of documents. It is calculated as the product of two components:</p>
+<pre><code>  - Term Frequency (TF): This component measures how frequently a term occurs in a specific document and is calculated as the ratio of the number of times a term appears in a document (denoted as "term_count") to the total number of terms in that document (denoted as "total_terms"). The formula for TF is:
+
+    TF(t, d) = \frac{\text{term_count}}{\text{total_terms}}
+
+  - Inverse Document Frequency (IDF): This component measures the rarity of a term across the entire collection of documents and is calculated as the logarithm of the ratio of the total number of documents in the collection (denoted as "total_documents") to the number of documents containing the term (denoted as "document_frequency"). The formula for IDF is:
+
+    IDF(t) = \log\left(\frac{\text{total_documents}}{\text{document_frequency}}\right)
+
+  The final TF-IDF score for a term "t" in a document "d" is obtained by multiplying the TF and IDF components:
+  TF-IDF(t,d)=TF(t,d)×IDF(t)
+</code></pre>
+<ul>
+<li>
+<p>ML encoders </p>
+<ul>
+<li>Embedding (look up) layer:  a trainable layer that converts categorical inputs, such as words or IDs, into continuous-valued vectors, allowing the network to learn meaningful representations of these inputs during training.</li>
+<li>
+<p>Word2Vec: based on shallow neural networks and consists of two main approaches: Continuous Bag of Words (CBOW) and Skip-gram.</p>
+</li>
+<li>
+<p>CBOW (Continuous Bag of Words):</p>
+<p>In CBOW, the model predicts a target word based on the context words (words that surround it) within a fixed window.
+It learns to generate the target word by taking the average of the embeddings of the context words.
+CBOW is computationally efficient and works well for smaller datasets.
+      - Skip-gram:</p>
+<p>In Skip-gram, the model predicts the context words (surrounding words) given a target word.
+It learns to capture the relationships between the target word and its context words.
+Skip-gram is particularly effective for capturing fine-grained semantic relationships and works well with large datasets.</p>
+</li>
+</ul>
+<p>Both CBOW and Skip-gram use shallow neural networks to learn word embeddings. The resulting word vectors are dense and continuous, making them suitable for various NLP tasks, such as sentiment analysis, language modeling, and text classification. </p>
+<ul>
+<li>transformer based e.g. BERT: consider context, different embeddings for same words in different context  </li>
+</ul>
+</li>
+</ul>
+<h2 id="video-preprocessing">Video preprocessing</h2>
+<p>Frame-level: 
+Decode frames -&gt; sample frames -&gt; resize -&gt; scale, normalize, color correction </p>
+<h3 id="video-encoders">Video encoders:</h3>
+<ul>
+<li>Video-level<ul>
+<li>process whole video to create an embedding </li>
+<li>3D convolutions or Transformers used </li>
+<li>more expensive, but captures temporal understanding</li>
+<li>Example: ViViT (Video Vision Transformer)</li>
+</ul>
+</li>
+<li>Frame-level (from sampled frames and aggregate frame embeddings)<ul>
+<li>less expensive (training and serving speed, compute power) </li>
+<li>Example: ViT (Vision Transformer)</li>
+<li>by dividing images into non-overlapping patches and processing them through a self-attention mechanism, enabling it to analyze image content; it differs from the original Transformer, which was initially designed for sequential data, like text, and relied on 1D positional encodings.</li>
+</ul>
+</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-feature-eng.md">src/MLSD/mlsd-feature-eng.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,109 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SGLang × NeMo RL: A Unified High-Performance RL Inference Backend (EN)</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/nemo-rl/readme-en.md</div>
+<article class="note"><h1 id="sglang-nemo-rl-a-unified-high-performance-rl-inference-backend-en">SGLang × NeMo RL: A Unified High-Performance RL Inference Backend (EN)</h1>
+<blockquote>
+<p>中文版本: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/nemo-rl/readme-cn.md">readme-cn.md</a></p>
+<p><strong>TL;DR</strong></p>
+<p>We added a <strong>SGLang generation backend</strong> to <strong>NeMo RL</strong>. The end-to-end pipeline is now fully integrated and working (startup, generation, hot weight updates, shutdown).</p>
+</blockquote>
+<hr>
+<h2 id="technical-background">Technical Background</h2>
+<p>To improve compatibility between <strong>NeMo-RL</strong> and the fast-growing <strong>SGLang</strong> reinforcement learning community, we integrated SGLang as an officially supported, high-performance rollout inference backend for NeMo-RL.</p>
+<p>With its large and continuously expanding RL user base and proven industrial adoption, SGLang brings unique value to the NeMo ecosystem. By bringing SGLang into NeMo-RL and co-designing the RL systems across both stacks, we can significantly strengthen the NeMo ecosystem in the following ways:</p>
+<ol>
+<li>Attract a large community of SGLang developers and researchers, expanding NeMo-RL's user base and technical influence.</li>
+<li>Leverage SGLang's high-throughput data collection for more efficient training, and—through collaboration with key SGLang partners—help keep NeMo-RL at the frontier of the field.</li>
+</ol>
+<hr>
+<h2 id="architecture-design">Architecture Design</h2>
+<p>We treat SGLang as a standalone inference service. The flow is straightforward:</p>
+<ul>
+<li><strong>Ray</strong> handles resource allocation and server sharding; each server is pinned to a fixed set of GPUs.</li>
+<li>Generation requests are split by the number of servers and dispatched accordingly.</li>
+<li>Weight updates go through an HTTP endpoint: we send the IPC handler to the corresponding server to perform hot updates.</li>
+</ul>
+<p>Architecture overview:</p>
+<p align="center">
+  <img src="nemo_architecture.png" alt="SGLang NeMo RL Architecture Overview" />
+</p>
+
+<p>The reward curve produced with the SGLang backend matches the original backend:</p>
+<p align="center">
+  <img src="reward_curve.png" alt="Reward Curve Comparison between SGLang Backend and Original Backend" />
+</p>
+
+<hr>
+<h2 id="key-implementation">Key Implementation</h2>
+<h3 id="sglanggeneration">SGLangGeneration</h3>
+<ul>
+<li>Compute <code>gpus_per_server</code> and <code>num_servers</code>, then construct a DP×TP <strong>NamedSharding</strong>.</li>
+<li>Split the batch along the DP dimension and run generate via the worker group.</li>
+<li>Supports retrieving <strong>server URLs</strong> and <strong>GPU UUIDs</strong>, used for routing hot weight updates.</li>
+</ul>
+<h3 id="sglanggenerationworker">SGLangGenerationWorker</h3>
+<ul>
+<li>Only the <strong>model owner</strong> launches the server; the remaining workers act as <strong>resource placeholders</strong>.</li>
+<li>Startup method: <strong>separate process</strong> + health check endpoint <code>/health_generate</code>.</li>
+<li>Generation uses <strong>asynchronous concurrent requests</strong> via <code>AsyncLoopThread</code> + <code>aiohttp</code>.</li>
+<li>Supports cache flush and shutdown.</li>
+</ul>
+<h3 id="hot-weight-update-refit">Hot Weight Update (refit)</h3>
+<ul>
+<li>On the training side, tensors are collected via an IPC handler and mapped to the correct server by <strong>GPU UUID</strong>. (Related system design notes: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/sys-design/readme-1.md">Awesome-ML-SYS-Tutorial: RL System Design</a>)</li>
+<li>Uses SGLang's <code>/update_weights_from_tensor</code> API to update weights.</li>
+<li>To reduce dependencies, related serialization utilities are copied from SGLang into <code>sglang_copied_utils</code>.</li>
+</ul>
+<hr>
+<h2 id="how-to-use">How to Use</h2>
+<h3 id="install-dependencies">Install Dependencies</h3>
+<pre><code class="language-bash">git clone git@github.com:NVIDIA-NeMo/RL.git nemo-rl --recursive
+cd nemo-rl
+uv venv
+uv sync --extra sglang
+</code></pre>
+<h3 id="example-config">Example Config</h3>
+<p>You can use (or reference) <code>examples/configs/recipes/llm/grpo-qwen2.5-math-1.5b-instruct-1n8g-fsdp2tp1-sglang.yaml</code>.</p>
+<p>Run a GRPO recipe with SGLang:</p>
+<pre><code class="language-bash">uv run examples/run_grpo_math.py \
+  --config examples/configs/recipes/llm/grpo-qwen2.5-math-1.5b-instruct-1n8g-fsdp2tp1-sglang.yaml
+</code></pre>
+<h3 id="migration-path">Migration Path</h3>
+<p>Switching from other rollout backends only requires updating <code>backend</code> and <code>sglang_cfg</code>. The model path defaults to <code>policy.model_name</code>.</p>
+<p><strong>Minimum config snippet</strong></p>
+<pre><code class="language-yaml">policy:
+  generation:
+    backend: &quot;sglang&quot;
+    sglang_cfg:
+      model_path: ${policy.model_name}
+      gpus_per_server: 1
+      context_length: 512
+      mem_fraction_static: 0.5
+      skip_server_warmup: true
+</code></pre>
+<blockquote>
+<p><strong>Note:</strong> <code>gpus_per_server</code> controls how many GPUs a single SGLang server owns; the total number of servers is derived from the available GPUs.</p>
+</blockquote>
+<hr>
+<h2 id="future-roadmap">Future Roadmap</h2>
+<ul>
+<li><strong>Worker Sleep / Awake:</strong> Add a sleep/wakeup mechanism for the worker group to improve resource utilization across different training phases.</li>
+<li><strong>Disaggregated Mode:</strong> In addition to the current colocated setup, support disaggregated deployments—introducing cross-node weight synchronization and more flexible resource scheduling.</li>
+<li><strong>Distributed / Megatron Weight Update:</strong> Extend the current FSDP-tensor-based weight update approach to support Megatron and other distributed-state synchronization paths.</li>
+<li><strong>Generation Features:</strong> Enhance the generation interface to stably support logprob returns, complex sampling parameters, context truncation, and multi-sample batching.</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/nemo-rl/readme-en.md">rlhf/nemo-rl/readme-en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,1184 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Walkthrough of AReaL</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/areal/code-walk-through_EN.md</div>
+<article class="note"><h1 id="code-walkthrough-of-areal">Code Walkthrough of AReaL</h1>
+<p><a href="../../rlhf/areal/code-walk-through_EN.html">English</a> | <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/areal/code-walk-through_CN.md">中文</a></p>
+<p>As early as the beginning of 2025, a senior expert in the infrastructure circle praised AReaL's code as the most artistic in the entire community. Taking advantage of AReaL's several major version releases in 2025, as well as the release of related framework works such as <a href="https://github.com/inclusionAI/asystem-amem">asystem-amem</a>, our SGLang RL team would like to share these study notes on AReaL with everyone.</p>
+<p>It is worth noting that Professor Yi Wu is an experienced yet young leading scientist in the RL field (for Professor Wu, being young and experienced is not contradictory 😂). AReaL's design in asynchronous training can be considered top-tier in the industry, and this will also be the part we focus on learning.</p>
+<h1 id="start-from-example">Start from Example</h1>
+<p>Let's start learning AReaL's workflow with a simple example (<code>examples/math/gsm8k_grpo.py</code>):</p>
+<p><img alt="AReaL Architecture Overview" src="../../../../vendor/notes/ml-sys-tutorial/rlhf/areal/areal_overview.jpg"></p>
+<details>
+<summary>Code of main() in gsm8k_grpo.py</summary>
+
+
+<pre><code class="language-python">def main(args):
+    config, _ = load_expr_config(args, GRPOConfig)
+
+    rank = int(os.getenv(&quot;RANK&quot;))
+    tokenizer = load_hf_tokenizer(config.tokenizer_path)
+
+    seeding.set_random_seed(config.seed, key=f&quot;trainer{rank}&quot;)
+    allocation_mode = AllocationMode.from_str(config.allocation_mode)
+    parallel_strategy = allocation_mode.train
+    assert parallel_strategy is not None
+
+    # Initialize train engine
+    actor = FSDPPPOActor(config=config.actor)
+    actor.create_process_group(parallel_strategy=parallel_strategy)
+
+    # Create dataset and dataloaders
+    train_dataset = get_custom_dataset(
+        split=&quot;train&quot;, dataset_config=config.train_dataset, tokenizer=tokenizer
+    )
+    valid_dataset = get_custom_dataset(
+        split=&quot;test&quot;, dataset_config=config.valid_dataset, tokenizer=tokenizer
+    )
+
+    train_dataloader = create_dataloader(
+        train_dataset,
+        rank=actor.data_parallel_rank,
+        world_size=actor.data_parallel_world_size,
+        dataset_config=config.train_dataset,
+    )
+    valid_dataloader = create_dataloader(
+        valid_dataset,
+        rank=actor.data_parallel_rank,
+        world_size=actor.data_parallel_world_size,
+        dataset_config=config.valid_dataset,
+    )
+    ft_spec = FinetuneSpec(
+        total_train_epochs=config.total_train_epochs,
+        dataset_size=len(train_dataloader) * config.train_dataset.batch_size,
+        train_batch_size=config.train_dataset.batch_size,
+    )
+
+    # Initialize inference engine
+    rollout = RemoteSGLangEngine(config.rollout)
+    rollout.initialize(train_data_parallel_size=parallel_strategy.dp_size)
+    eval_rollout = RemoteSGLangEngine(deepcopy(config.rollout))
+    # NOTE: eval does not have any offpolicyness control
+    eval_rollout.config.max_head_offpolicyness = int(1e12)
+    eval_rollout.initialize()
+
+    weight_update_meta = WeightUpdateMeta.from_fsdp_xccl(allocation_mode)
+
+    actor.initialize(None, ft_spec)
+    actor.connect_engine(rollout, weight_update_meta)
+
+    ref = None
+    if config.actor.kl_ctl &gt; 0 and config.ref is not None:
+        ref = FSDPPPOActor(config=config.ref)
+        ref.create_process_group(parallel_strategy=parallel_strategy)
+        ref.initialize(None, ft_spec)
+
+    # Create rollout workflow
+    if tokenizer.pad_token_id not in config.gconfig.stop_token_ids:
+        config.gconfig.stop_token_ids.append(tokenizer.pad_token_id)
+    if tokenizer.eos_token_id not in config.gconfig.stop_token_ids:
+        config.gconfig.stop_token_ids.append(tokenizer.eos_token_id)
+    workflow = RLVRWorkflow(
+        reward_fn=gsm8k_reward_fn,
+        gconfig=config.gconfig,
+        tokenizer=tokenizer,
+        enable_thinking=False,
+        dump_dir=os.path.join(
+            StatsLogger.get_log_path(config.stats_logger), &quot;generated&quot;
+        ),
+    )
+    eval_workflow = RLVRWorkflow(
+        reward_fn=gsm8k_reward_fn,
+        gconfig=config.gconfig.new(temperature=0.6),
+        tokenizer=tokenizer,
+        enable_thinking=False,
+        rollout_stat_scope=&quot;eval-rollout&quot;,
+        dump_dir=os.path.join(
+            StatsLogger.get_log_path(config.stats_logger), &quot;generated-eval&quot;
+        ),
+    )
+
+    # Run training.
+    saver = Saver(config.saver, ft_spec)
+    stats_logger = StatsLogger(config, ft_spec)
+    evaluator = Evaluator(config.evaluator, ft_spec)
+
+    recover_handler = RecoverHandler(config.recover, ft_spec)
+    recover_info = recover_handler.load(
+        actor,
+        saver,
+        evaluator,
+        stats_logger,
+        train_dataloader,
+        inference_engine=rollout,
+        weight_update_meta=weight_update_meta,
+    )
+    start_step = (
+        recover_info.last_step_info.next().global_step
+        if recover_info is not None
+        else 0
+    )
+
+    total_epochs = config.total_train_epochs
+    steps_per_epoch = len(train_dataloader)
+    max_steps = total_epochs * steps_per_epoch
+
+    for global_step in range(start_step, max_steps):
+        epoch = global_step // steps_per_epoch
+        step = global_step % steps_per_epoch
+        step_info = StepInfo(
+            global_step=global_step,
+            epoch=epoch,
+            epoch_step=step,
+            steps_per_epoch=steps_per_epoch,
+        )
+
+        with stats_tracker.record_timing(&quot;rollout&quot;):
+            batch = actor.prepare_batch(
+                train_dataloader,
+                granularity=actor.config.group_size,
+                workflow=workflow,
+                should_accept_fn=lambda sample: True,
+            )
+
+        if config.actor.recompute_logprob or config.actor.use_decoupled_loss:
+            with stats_tracker.record_timing(&quot;recompute_logp&quot;):
+                logp = actor.compute_logp(batch)
+                batch[&quot;prox_logp&quot;] = logp
+                log_gpu_stats(&quot;recompute logp&quot;)
+
+        if ref is not None:
+            with stats_tracker.record_timing(&quot;ref_logp&quot;):
+                batch[&quot;ref_logp&quot;] = ref.compute_logp(batch)
+                log_gpu_stats(&quot;ref logp&quot;)
+
+        with stats_tracker.record_timing(&quot;compute_advantage&quot;):
+            actor.compute_advantages(batch)
+            log_gpu_stats(&quot;compute advantages&quot;)
+
+        with stats_tracker.record_timing(&quot;train_step&quot;):
+            actor.ppo_update(batch)
+            actor.step_lr_scheduler()
+            log_gpu_stats(&quot;ppo update&quot;)
+
+        # pause inference for updating weights, save, and evaluation
+        rollout.pause()
+
+        with stats_tracker.record_timing(&quot;update_weights&quot;):
+            actor.update_weights(weight_update_meta)
+
+            actor.set_version(global_step + 1)
+            rollout.set_version(global_step + 1)
+            eval_rollout.set_version(global_step + 1)
+
+        with stats_tracker.record_timing(&quot;save&quot;):
+            saver.save(actor, epoch, step, global_step, tokenizer=tokenizer)
+
+        with stats_tracker.record_timing(&quot;checkpoint_for_recover&quot;):
+            recover_handler.dump(
+                actor,
+                step_info,
+                saver,
+                evaluator,
+                stats_logger,
+                train_dataloader,
+                tokenizer=tokenizer,
+            )
+
+        current_platform.synchronize()
+        dist.barrier(group=actor.cpu_group)
+
+        with stats_tracker.record_timing(&quot;eval&quot;):
+
+            def evaluate_fn():
+                if actor.is_data_parallel_head():
+                    cnt = 0
+                    for data in valid_dataloader:
+                        for item in data:
+                            eval_rollout.submit(item, eval_workflow)
+                            cnt += 1
+                    eval_rollout.wait(cnt, timeout=None)
+                current_platform.synchronize()
+                dist.barrier(group=actor.cpu_group)
+
+            evaluator.evaluate(
+                evaluate_fn,
+                epoch,
+                step,
+                global_step,
+                )
+
+        current_platform.synchronize()
+        dist.barrier(group=actor.cpu_group)
+
+        # Upload statistics to the logger (e.g., wandb)
+        stats = stats_tracker.export_all(reduce_group=actor.data_parallel_group)
+        stats_logger.commit(epoch, step, global_step, stats)
+
+        current_platform.synchronize()
+        dist.barrier(group=actor.cpu_group)
+
+        # Resume rollout
+        rollout.resume()
+
+    stats_logger.close()
+    eval_rollout.destroy()
+    rollout.destroy()
+    if ref is not None:
+        ref.destroy()
+    actor.destroy()
+</code></pre>
+
+</details>
+
+<h2 id="init">Init</h2>
+<p>Initialize the Train Engine (e.g., <code>FSDPPPOActor</code>), Inference Engine (e.g., <code>RemoteSGLangEngine</code>), and optional Reference Engine, load the dataset (<code>DataLoader</code>), and establish the channel for the Actor to transmit weights to the Rollout Engine through <code>weight_update_meta</code>.</p>
+<p>Create Rollout Workflow. The diagram above uses the most basic <code>RLVRWorkflow</code>. AReaL also provides <code>MultiTurnWorkflow</code>, supporting complex multi-turn dialogue RL tasks. They are all implementations of the abstract class <code>RolloutWorkflow</code> (<code>AReaL/areal/api/workflow_api.py</code>). These implementations of <code>RolloutWorkflow</code> unify the generation interface. When calling the workflow for generation, there is no need to care about specific interaction details; just call <code>workflow.arun_episode()</code> to get a batch of Trajectories containing standard training fields.</p>
+<h2 id="rollout">Rollout</h2>
+<p>The Actor calls <code>prepare_batch</code> to request the trajectories generated by the rollout. The call path for this part is <code>FSDPPPOACTOR.prepare_batch</code> → <code>DistRolloutCoordinator.prepare_batch</code> → <code>RemoteInfEngine.prepare_batch</code> → <code>WorkflowExecutor.prepare_batch</code>. Here, <code>prepare_batch</code> of <code>WorkflowExecutor</code> triggers an asynchronous Producer-Consumer pipeline.</p>
+<blockquote>
+<p>[!TIP]
+<strong>Producer-Consumer</strong></p>
+<p>The Producer-Consumer Pattern is a classic concurrency design pattern used to solve the data transmission problem between two components with inconsistent processing rates.</p>
+<ul>
+<li><strong>Core Idea</strong>: The Producer and Consumer do not communicate directly but decouple through a Buffer/Queue.</li>
+<li><strong>Producer</strong>: Responsible for generating data and putting it into the buffer. If the buffer is full, the producer must wait or discard data.</li>
+<li><strong>Consumer</strong>: Responsible for taking data from the buffer for processing. If the buffer is empty, the consumer must wait.</li>
+<li><strong>Buffer</strong>: Smooths out fluctuations in production and consumption rates, allowing both to work in parallel without blocking each other.</li>
+</ul>
+</blockquote>
+<p>The figure below shows the interaction and data flow during the rollout process.</p>
+<pre><code class="language-mermaid">sequenceDiagram
+    autonumber
+    participant User as Main Thread (Train Loop)
+    participant Executor as WorkflowExecutor
+    participant Producer as Producer Thread (_commit_loop)
+    participant Runner as AsyncTaskRunner
+    participant Workflow as RolloutWorkflow (e.g. MathWorkflow)
+    participant Engine as RemoteSGLangEngine
+    participant SGLang as SGLang Server (HTTP)
+
+    User-&gt;&gt;Executor: prepare_batch(dataloader)
+    Executor-&gt;&gt;Executor: submit(data) -&gt; Enqueue to _pending_inputs
+
+    loop Producer Thread
+        Producer-&gt;&gt;Executor: Check Staleness &amp; Capacity
+        Producer-&gt;&gt;Runner: submit(task) if allowed
+    end
+
+    loop AsyncTaskRunner (Worker)
+        Runner-&gt;&gt;Workflow: arun_episode(engine, data)
+        activate Workflow
+
+        Workflow-&gt;&gt;Engine: agenerate(prompts)
+        activate Engine
+
+        Engine-&gt;&gt;SGLang: HTTP POST /generate
+        SGLang--&gt;&gt;Engine: Response (Text)
+        Engine--&gt;&gt;Workflow: Interaction Objects
+        deactivate Engine
+
+        Workflow-&gt;&gt;Workflow: Compute Rewards (Local or API)
+        Workflow-&gt;&gt;Workflow: Pack Trajectory (Tensors)
+
+        Workflow--&gt;&gt;Runner: Return Trajectory
+        deactivate Workflow
+    end
+    loop Consumer Thread
+        Runner-&gt;&gt;Executor: Fetch Result -&gt; _pending_results
+    end
+
+    Executor-&gt;&gt;User: wait() -&gt; Returns Batch of Trajectories
+</code></pre>
+<p>Let's further understand the key classes mentioned in the diagram above.</p>
+<h3 id="rolloutworkflow">RolloutWorkflow</h3>
+<p><code>RolloutWorkflow</code> is located in <code>areal/api/workflow_api.py</code>, which is the core abstraction defining Agent behavior in AReaL (defined in <code>areal/api/workflow_api.py</code>).</p>
+<details>
+<summary>Abstract Class RolloutWorkflow Code (AReaL/areal/api/workflow_api.py)</summary>
+
+
+<pre><code class="language-python">class RolloutWorkflow(ABC):
+    @abstractmethod
+    async def arun_episode(
+        self, engine: InferenceEngine, data: dict[str, Any]
+    ) -&gt; dict[str, Any] | None | dict[str, InteractionWithTokenLogpReward]:
+        raise NotImplementedError()
+
+</code></pre>
+
+</details>
+
+<p>From this code, we can see that all concrete implementations of <code>RolloutWorkflow</code> (such as <code>RLVRWorkflow</code>, <code>MultiTurnWorkflow</code>, located in <code>areal/workflow/</code>) must implement this core asynchronous function <code>arun_episode()</code>. Next, we take <code>RLVRWorkflow</code> as an example to analyze what the specific implementation of <code>RolloutWorkflow</code> looks like.</p>
+<p>In <code>init</code>, besides necessary rollout parameters, <code>reward_fn</code> is also input, and reward calculation is included in the workflow.</p>
+<details>
+<summary>RLVRWorkflow.init</summary>
+
+
+<pre><code class="language-python">class RLVRWorkflow(RolloutWorkflow):
+    &quot;&quot;&quot;Single-turn reward learning workflow supporting optional thinking tokens.&quot;&quot;&quot;
+
+    def __init__(
+        self,
+        reward_fn: Callable[..., Any],
+        gconfig: GenerationHyperparameters,
+        tokenizer: PreTrainedTokenizerFast,
+        enable_thinking: bool = False,
+        rollout_stat_scope: str = &quot;rollout&quot;,
+        dump_dir: str | None = None,
+        get_input_ids_fn: Callable[
+            [Any, PreTrainedTokenizerFast, bool], list[int]
+        ] = default_get_input_ids_fn,
+        data_extract_prompt_fn: Callable[
+            [dict[str, Any]], Any
+        ] = default_data_extract_prompt_fn,
+    ):
+        self.reward_fn = reward_fn
+        self.gconfig = gconfig
+        self.tokenizer = tokenizer
+        self.enable_thinking = enable_thinking
+        self.dump_dir = dump_dir
+        self.rollout_stat_scope = rollout_stat_scope
+        self.async_reward_fn = AsyncRewardWrapper(reward_fn)
+        self.get_input_ids_fn = get_input_ids_fn
+        self.data_extract_prompt_fn = data_extract_prompt_fn
+        if self.dump_dir is not None and not os.path.exists(self.dump_dir):
+            os.makedirs(self.dump_dir, exist_ok=True)
+</code></pre>
+
+</details>
+
+<p><code>arun_episode()</code> serves as a unified entry point for the outside world. It receives <code>InferenceEngine</code> and input data <code>data</code>, and is responsible for executing a complete rollout process, including:</p>
+<p>Prompt construction and preprocessing, concurrent sampling, reward calculation, and final Trajectory assembly and return.</p>
+<details>
+<summary>RLVRWorkflow.arun_episode()</summary>
+
+
+<pre><code class="language-python">async def arun_episode(
+        self, engine: InferenceEngine, data: dict[str, Any]
+    ) -&gt; dict[str, torch.Tensor]:
+            ...
+        version = engine.get_version()
+        prompt_str = self.tokenizer.decode(input_ids)
+        prompt_strs = [prompt_str] * n_samples
+
+        # Generate responses and collect rewards
+        sample_results = await asyncio.gather(
+            *[
+                self._collect_samples(engine, req, prompt_str, data)
+                for _ in range(n_samples)
+            ]
+        )
+        if sample_results:
+            resps, rewards, completions_strs = map(list, zip(*sample_results))
+        else:
+            resps, rewards, completions_strs = [], [], []
+
+        # Build result tensors
+        results = []
+        for resp, reward in zip(resps, rewards):
+            seq = resp.input_tokens + resp.output_tokens
+            logprobs = [0.0] * resp.input_len + resp.output_logprobs
+            loss_mask = [0] * resp.input_len + [1] * resp.output_len
+            versions = [-1] * resp.input_len + resp.output_versions
+
+            res = {
+                &quot;input_ids&quot;: torch.tensor(seq, dtype=torch.int32),
+                &quot;loss_mask&quot;: torch.tensor(loss_mask, dtype=torch.int32),
+                &quot;logprobs&quot;: torch.tensor(logprobs, dtype=torch.float32),
+                &quot;versions&quot;: torch.tensor(versions, dtype=torch.int32),
+                &quot;attention_mask&quot;: torch.ones(len(seq), dtype=torch.bool),
+                &quot;rewards&quot;: torch.tensor(reward, dtype=torch.float32),
+            }
+            res = {k: v.unsqueeze(0) for k, v in res.items()}
+            results.append(res)
+
+        ...
+
+        return concat_padded_tensors(results)
+</code></pre>
+
+</details>
+
+<p><code>arun_episode()</code> internally calls <code>_collect_samples()</code> for sampling and reward calculation, and <code>_collect_samples()</code> further calls <code>agenerate()</code> of the inference engine, which is the interface that actually triggers model inference.</p>
+<details>
+<summary>RLVRWorkflow._collect_samples()</summary>
+
+
+<pre><code class="language-python">    async def _collect_samples(
+        self,
+        engine: InferenceEngine,
+        req: ModelRequest,
+        prompt_str: str,
+        task_data: dict[str, Any],
+    ) -&gt; tuple[ModelResponse, float, str]:
+
+        async with atrace_session_phase(&quot;generate&quot;):
+            resp = await engine.agenerate(req)
+
+        reward, completions_str = await self._compute_rewards(
+            resp, prompt_str, task_data
+        )
+
+        stats_tracker.get(self.rollout_stat_scope).scalar(reward=reward)
+
+        return resp, reward, completions_str
+</code></pre>
+
+</details>
+
+<h3 id="workflowexecutor"><strong>WorkflowExecutor</strong></h3>
+<p><code>WorkflowExecutor</code> is located in <code>areal/core/workflow_executor.py</code>. It is the component in the AReaL framework responsible for coordinating asynchronous scheduling and concurrency control between the training process and remote inference services. It encapsulates the Producer-Consumer thread model, and its internal structure is as follows:</p>
+<p><code>prepare_batch()</code>: Encapsulates <code>submit()</code> and <code>wait()</code>, taking input data / prompts as input and outputting the results.</p>
+<details>
+<summary>prepare_batch() Code</summary>
+
+
+<pre><code class="language-python">def prepare_batch(
+        self,
+        dataloader: StatefulDataLoader,
+        workflow: RolloutWorkflow | type[RolloutWorkflow] | str,
+        workflow_kwargs: dict[str, Any] | None = None,
+        should_accept_fn: Callable[[dict[str, Any]], bool] | str | None = None,
+    ):
+
+        manager = self.staleness_manager
+        if not hasattr(self, &quot;data_generator&quot;):
+            self.data_generator = cycle_dataloader(dataloader)
+        assert dataloader.batch_size is not None
+        cnt = 0
+        results = []
+        while True:
+            # Submit at least two batches to allow maximum overlap
+            if (
+                len(self._pending_inputs) &lt; manager.get_pending_limit()
+                and self.runner.get_input_queue_size() + dataloader.batch_size
+                &lt; self.runner.max_queue_size
+            ):
+                data = next(self.data_generator)
+                perf_tracer.instant(
+                    &quot;workflow_executor.prepare_batch&quot;,
+                    category=&quot;scheduler&quot;,
+                    args={&quot;data&quot;: len(data)},
+                )
+                for item in data:
+                    self.submit(
+                        item,
+                        workflow=workflow,
+                        should_accept_fn=should_accept_fn,
+                        workflow_kwargs=workflow_kwargs,
+                    )
+            try:
+                res = self.wait(count=1, timeout=1)
+                if not res:
+                    continue
+                cnt += 1
+                results.append(res)
+                if cnt &gt;= dataloader.batch_size:
+                    break
+            except (TimeoutError, queue.Full):
+                pass
+        return concat_padded_tensors(results)
+</code></pre>
+
+</details>
+
+<p>Main thread: The main thread does not involve generation or control, but simply adds tasks to the queue and outputs results. <code>submit()</code> adds tasks to the <code>_pending_inputs</code> queue, and <code>wait()</code> polls the <code>_pending_results</code> queue:</p>
+<details>
+<summary>submit() and wait() Code</summary>
+
+
+<pre><code class="language-python">def submit(
+        self,
+        data: dict[str, Any],
+        workflow: RolloutWorkflow | type[RolloutWorkflow] | str,
+        workflow_kwargs: dict[str, Any] | None = None,
+        should_accept_fn: Callable[[dict[str, Any]], bool] | str | None = None,
+    ) -&gt; None:
+        ...
+
+        # Resolve workflow and should_accept to their concrete forms
+        resolved_workflow = self._resolve_workflow(workflow, workflow_kwargs)
+        resolved_should_accept_fn = self._resolve_should_accept_fn(should_accept_fn)
+
+        task_id = perf_tracer.register_task()
+        task_input = _RolloutTaskInput(
+            data=data,
+            workflow=resolved_workflow,
+            should_accept_fn=resolved_should_accept_fn,
+            task_id=task_id,
+        )
+
+        # Enqueue to thread-safe queue (may block if queue is full)
+        self._pending_inputs.append(task_input)
+
+        # Notify staleness manager of enqueued rollout tasks
+        self.staleness_manager.on_rollout_enqueued()
+
+        ...
+
+    def wait(
+        self, count: int, timeout: float | None = None, raise_timeout: bool = True
+    ) -&gt; dict[str, Any]:
+
+        ...
+
+        # Drain all available requests and sort them by time of creation
+        # This prioritizes data submitted earlier.
+        results: list[TimedResult[_RolloutResult]] = []
+        while True:
+            try:
+                results.append(self._pending_results.popleft())
+            except IndexError:
+                break
+        # Sort results be create time
+        results.sort(key=lambda x: x.create_time)
+        results, pending = results[:count], results[count:]
+        self._pending_results.extendleft(reversed(pending))
+
+        # Shuffle for randomness (helps with data diversity)
+        random.shuffle(results)
+
+        # Concatenate into batch tensor format
+        trajectories = [r.data.trajectory for r in results if r.data is not None]
+        return concat_padded_tensors(trajectories)
+</code></pre>
+
+</details>
+
+<p>Producer thread (<code>_commit_loop</code>): Determines the number of tasks that can be submitted in this round based on the available capacity returned by <code>StalenessManager.get_capacity()</code>, takes the corresponding number of tasks from <code>_pending_inputs</code>, and hands them over to <code>AsyncTaskRunner</code> to execute the generation process.</p>
+<details>
+<summary>_commit_loop() Code</summary>
+
+
+<pre><code class="language-python">def _commit_loop(self) -&gt; None:
+
+  while not self._shutdown_event.is_set():
+      try:
+            ...
+
+          # Get capacity from staleness manager
+          version = self.inference_engine.get_version()
+          capacity = self.staleness_manager.get_capacity(version)
+
+          if capacity &lt;= 0:
+              time.sleep(_POLL_INTERVAL_SECONDS)
+              continue
+
+          # Try to submit up to 'capacity' tasks
+          for _ in range(capacity):
+              try:
+                  task = self._pending_inputs.popleft()
+              except IndexError:
+                  break
+
+              # Submit to runner (may raise TaskQueueFullError)
+              workflow_fn = self._create_workflow_task(task)
+              try:
+                  self.runner.submit(workflow_fn)
+
+                  self.staleness_manager.on_rollout_submitted()
+                  if self.config.enable_rollout_tracing:
+                      self.logger.info(f&quot;Submit rollout. {self._rollout_stats()}&quot;)
+              except TaskQueueFullError:
+                  # Put back and retry later
+                  self._pending_inputs.appendleft(task)
+                  break
+
+          ...
+</code></pre>
+
+</details>
+
+<p>Consumer thread (<code>_fetch_loop</code>): Collects results from <code>AsyncTaskRunner</code> and stores them in <code>_pending_results</code>.</p>
+<details>
+<summary>_fetch_loop() Code</summary>
+
+
+<pre><code class="language-python">def _fetch_loop(self) -&gt; None:
+        &quot;&quot;&quot;Consumer thread main loop - continuously collects results from runner.
+
+        This method runs in a background thread and continuously:
+        1. Checks for errors from other threads (fail-fast)
+        2. Polls AsyncTaskRunner for available results (non-blocking)
+        3. Collects results in batches up to 100 with short timeout (0.05s)
+        4. Filters out None (rejected) results
+        5. Appends accepted TimedResult objects to _pending_results deque
+
+        The loop exits when _shutdown_event is set. Polling interval: 0.5s.
+        &quot;&quot;&quot;
+        while not self._shutdown_event.is_set():
+            try:
+                # Check for errors from other threads (fail-fast)
+                self._check_thread_exception()
+
+                # Poll runner for available results (non-blocking)
+                output_queue_size = self.runner.get_output_queue_size()
+
+                if output_queue_size == 0:
+                    time.sleep(_POLL_INTERVAL_SECONDS)
+                    continue
+
+                # Collect all available results at once (batch for efficiency)
+                # Limit batch size to avoid blocking too long
+                count = min(output_queue_size, _MAX_FETCH_BATCH_SIZE)
+
+                try:
+                    # Use short timeout for responsiveness (latency-optimized)
+                    results = self.runner.wait(
+                        count=count, timeout=0.05, with_timing=True
+                    )
+
+                    # Enqueue all results. Filtering will be delayed to
+                    # `rollout_batch` or `prepare_batch`.
+                    for result in results:
+                        self._pending_results.append(result)
+
+                except TimeoutError:
+                    # No results ready yet
+                    pass
+
+                # Small sleep to avoid busy-waiting (latency-optimized)
+                time.sleep(_POLL_INTERVAL_SECONDS)
+
+            except Exception as e:
+                self.logger.error(&quot;Consumer thread failed&quot;, exc_info=True)
+                self._set_thread_exception(e)
+                break
+</code></pre>
+
+</details>
+
+<p><code>AsyncTaskRunner</code>: A generic asynchronous executor inside <code>WorkflowExecutor</code>, responsible for managing the Event Loop in a background thread and concurrently executing high-density network I/O tasks (i.e., calling <code>agenerate</code> of the Inference Engine).</p>
+<details>
+<summary>AsyncTaskRunner Code</summary>
+
+
+<pre><code class="language-python">async def _run_async_loop(self):
+    &quot;&quot;&quot;Main async event loop that processes tasks.
+
+    This loop:
+    1. Pulls tasks from input_queue when not paused
+    2. Creates asyncio.Task instances for each
+    3. Waits for task completion
+    4. Places results in output_queue
+    5. Continues until exiting signal is set
+    &quot;&quot;&quot;
+    running_tasks: dict[str, _Task[T]] = {}
+    task_id = 0
+
+    try:
+        while not self.exiting.is_set():
+            # 1. Pull new tasks from input queue
+            while not self.paused.is_set() and self.input_queue.qsize() &gt; 0:
+                try:
+                    task_input = self.input_queue.get_nowait()
+
+                    # 2. Create asyncio task (This is where execution starts)
+                    async_task = asyncio.create_task(
+                        task_input.async_fn(*task_input.args, **task_input.kwargs),
+                        name=str(task_id),
+                    )
+
+                    # Store task with metadata
+                    running_tasks[str(task_id)] = _Task(
+                        create_time=time.monotonic_ns(),
+                        task=async_task,
+                        task_input=task_input,
+                        )
+                    task_id += 1
+                except queue.Empty:
+                    break
+
+            # 3. Wait for any task to complete
+            done = []
+            if running_tasks:
+                tasks = [t.task for t in running_tasks.values()]
+                done, _ = await asyncio.wait(
+                    tasks,
+                    timeout=self.poll_wait_time,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+            # 4. Process completed tasks and output results
+            for async_task in done:
+                tid = async_task.get_name()
+                task_obj = running_tasks.pop(tid)
+                try:
+                    result = await async_task
+                    # Place result in output queue
+                    self.output_queue.put_nowait(
+                        TimedResult(create_time=task_obj.create_time, data=result)
+                    )
+                except Exception as e:
+                    # Error handling...
+                    pass
+
+            # Sleep to avoid busy-waiting
+            await asyncio.sleep(self.poll_sleep_time)
+
+</code></pre>
+
+</details>
+
+<h3 id="stalenessmanager">StalenessManager</h3>
+<p><code>StalenessManager</code> is located in <code>areal/core/staleness_manager.py</code>. It uses two constraints (concurrency limit + staleness limit) to calculate how many new rollouts can be accepted. It is controlled by three parameters:</p>
+<ul>
+<li><code>max_concurrent_rollouts</code>: Limits the concurrency upper bound, i.e., the maximum number of running generation tasks.</li>
+<li><code>consumer_batch_size</code>: Consumer batch size, i.e., the batch size of trainer training.</li>
+<li><code>max_staleness</code>: The maximum allowed version difference between samples and the current model version.</li>
+</ul>
+<details>
+<summary>init Code</summary>
+
+
+<pre><code class="language-python">class StalenessManager:
+
+    def __init__(
+        self,
+        max_concurrent_rollouts: int,
+        consumer_batch_size: int,
+        max_staleness: int,
+    ):
+        self.max_concurrent_rollouts = max_concurrent_rollouts
+        self.consumer_batch_size = consumer_batch_size
+        self.max_staleness = max_staleness
+
+        # Thread-safe access to rollout statistics
+        self.lock = Lock()
+        self.rollout_stat = RolloutStat()
+</code></pre>
+
+</details>
+
+<p>The core algorithm is located in <code>get_capacity()</code>, and the formula is as follows:</p>
+<pre><code class="language-python">max_samples = (max_staleness + current_version + 1) * consumer_batch_size
+capacity = min(concurrency_limit, max_samples - current_samples)
+</code></pre>
+<p>Here is my understanding of this formula: When the current weight version is <code>current_version</code>, we not only need to serve the current trainer but also prepare data in advance for the trainer up to <code>max_staleness</code> versions in the future (i.e., versions from <code>current_version</code> to <code>current_version + max_staleness</code>). Since the trainer consumes <code>consumer_batch_size</code> samples per version, theoretically, the maximum total number of samples that can be safely consumed from version 0 up to <code>current_version + max_staleness</code> is:</p>
+<pre><code class="language-python">max_samples = (max_staleness + current_version + 1) * consumer_batch_size
+</code></pre>
+<p>The number of samples already accumulated in the current system is denoted as <code>current_samples</code> (including accepted and running rollouts). So, under the premise of not letting future samples "expire", the number of samples that can still be generated now is:</p>
+<pre><code class="language-python">staleness_capacity = max_samples - current_samples
+</code></pre>
+<p>In other words, <code>max_staleness</code> controls "that these samples remain unexpired when moving forward up to <code>max_staleness</code> versions from now", and the formula indirectly guarantees this by limiting the total number of samples.</p>
+<p>After understanding the staleness algorithm, the code becomes very clear. First, calculate the capacity margin under the concurrency limit, then calculate the capacity margin under the staleness limit, and take the minimum of the two as the true capacity margin.</p>
+<details>
+<summary>get_capacity() Code</summary>
+
+
+<pre><code class="language-python">def get_capacity(self, current_version: int) -&gt; int:
+
+    with self.lock:
+        # Calculate concurrency-based capacity
+        max_concurrent_rollouts = max(1, self.max_concurrent_rollouts)
+        concurrency_capacity = max_concurrent_rollouts - self.rollout_stat.running
+
+        # Calculate staleness-based capacity
+        ofp = self.max_staleness
+        sample_cnt = self.rollout_stat.accepted + self.rollout_stat.running
+        consumer_bs = max(1, self.consumer_batch_size)
+        staleness_capacity = (ofp + current_version + 1) * consumer_bs - sample_cnt
+
+        # Return the minimum of both constraints
+        capacity = min(concurrency_capacity, staleness_capacity)
+        return capacity
+
+</code></pre>
+
+</details>
+
+<h3 id="distrolloutcoordinator">DistRolloutCoordinator</h3>
+<p><code>DistRolloutCoordinator</code> implements a data coordinator in distributed training. Its core function is to ensure that the total number of tokens received by each Data Parallel Rank (GPU) is as consistent as possible in a distributed environment, solving the load imbalance problem caused by varying lengths of generated sequences. If data is distributed directly on average, some GPUs may be assigned many long texts (large computation), while others are assigned short texts, leading to waiting during training (Straggler problem).</p>
+<p>AReaL uses the FFD (First-Fit Decreasing) algorithm to redistribute data to achieve Token-level load balancing.</p>
+<aside>
+💡
+
+FFD (First-Fit Decreasing) Algorithm:
+
+FFD is a classic **greedy algorithm** often used to solve bin packing problems or multi-machine scheduling problems. Its core strategy is "sort in descending order, fill the holes first":
+
+1. **Decreasing**: First, sort all tasks (Sequences) in descending order of computational load (Token length).
+2. **First-Fit**: Take tasks in turn and assign them to the node with the current minimum load (or maximum remaining space).
+
+By this method of "handling big rocks first, then filling gaps with sand", FFD can ensure to the greatest extent that the total computational load of all GPUs tends to be consistent, eliminating the bucket effect.
+
+</aside>
+
+<p>The core function of this feature is <code>redistribute()</code>, located in <code>areal/core/dist_rollout.py</code>. This function first collects the data generated on all GPUs through <code>all_gather_tensor_container</code>, so that each rank has the global full data. Then, it slices the data in the large batch according to granularity (usually the number of data produced by the same prompt in GRPO) to determine the minimum unit. After slicing, it gets the token count of each sequence to prepare for the FFD algorithm.</p>
+<p>Next, remove the padding in the sequence, distribute the workload evenly within the process group via FFD, and finally return the result.</p>
+<pre><code class="language-python">return RedistributedData(
+    all_data=all_data,            # All small chunks after original slicing (for backup)
+    data=data,                    # The assembled data finally used by the current GPU
+    rank=dist.get_rank(group=group),
+    group_indices=group_indices,  # Global allocation plan
+    )
+</code></pre>
+<details>
+<summary>redistribute() Code</summary>
+
+
+<pre><code class="language-python">def redistribute(
+    data: dict[str, Any], granularity: int = 1, group=None
+) -&gt; RedistributedData:
+    &quot;&quot;&quot;Redistribute a batch across a process group.
+
+    This function only accepts padded data which must have an &quot;attention_mask&quot; field,
+    Each tensor should have shape [bs, seqlen, *] or [bs].
+
+    This function will divide the global batch into segments each with consecutive
+    `granularity` sequences, and then redistribute the segments (e.g., for GRPO).
+    &quot;&quot;&quot;
+    all_gathered = all_gather_tensor_container(data, group=group)
+
+    all_data = []
+    for d in all_gathered:
+        bs = get_batch_size(d)
+        assert bs % granularity == 0
+        all_data += [
+            _slice_tensor_dict(d, i, i + granularity) for i in range(0, bs, granularity)
+        ]
+
+    seqlens = [d[&quot;attention_mask&quot;].sum().item() for d in all_data]
+
+    # Remove pad positions
+    for d in all_data:
+        max_sequence_length = d[&quot;attention_mask&quot;].sum(-1).max().item()
+        attn_mask_shape = d[&quot;attention_mask&quot;].shape
+        for k, v in d.items():
+            if (
+                torch.is_tensor(v)
+                and len(v.shape) &gt;= 2
+                and v.shape[:2] == attn_mask_shape[:2]
+            ):
+                d[k] = v[:, :max_sequence_length]
+
+    # No capacity limit leads to balanced partition across this group
+    group_indices = ffd_allocate(
+        seqlens, capacity=int(1e12), min_groups=dist.get_world_size(group)
+    )
+    local_indices = group_indices[dist.get_rank(group=group)]
+
+    data = concat_padded_tensors([all_data[i] for i in local_indices])
+    return RedistributedData(
+        all_data=all_data,
+        data=data,
+        rank=dist.get_rank(group=group),
+        group_indices=group_indices,
+    )
+
+</code></pre>
+
+</details>
+
+<p>In addition, the most core logic in the <code>DistRolloutCoordinator</code> class is actually the distributed communication pattern, implementing a classic Head-Worker synchronization pattern, which is reflected in the <code>prepare_batch</code> function and the <code>_broadcast_and_redistribute_batch</code> it calls. In <code>prepare_batch</code>, the function judges whether the rank is the head, and only the head rank can call <code>prepare_batch</code> for generation.</p>
+<p>The generated data is first moved to the current computing device (GPU), and then enters the core communication pipeline <code>_broadcast_and_redistribute_batch</code>.</p>
+<p>In this pipeline, the Head node holding the data first calls <code>redistribute</code> within the data parallel group, using the aforementioned FFD algorithm to slice and repackage the Batch to complete load balancing calculation.</p>
+<p>Next, the code sets a strict synchronization barrier (<code>dist.barrier</code>). All Worker nodes (including non-Head nodes) will wait here until the Head node completes the above data preparation and redistribution work, ensuring the consistency of the cluster state.</p>
+<p>After synchronization is lifted, it enters the broadcast phase. The Head node acts as the source (<code>src_rank</code>) and distributes the processed and load-balanced data to all Workers in the <code>context_and_model_parallel_group</code> through <code>broadcast_tensor_container</code>. Finally, synchronization is performed again to ensure that all ranks have received the data completely. This design not only avoids the waste of computing power caused by repeated Rollout generation on all nodes but also ensures that data can be efficiently and evenly synchronized to the entire distributed cluster.</p>
+<details>
+<summary>prepare_batch() Code</summary>
+
+
+<pre><code class="language-python">def prepare_batch(
+        self,
+        dataloader: StatefulDataLoader,
+        workflow: RolloutWorkflow | type[RolloutWorkflow] | str,
+        granularity: int = 1,
+        workflow_kwargs: dict[str, Any] | None = None,
+        should_accept_fn: Callable[[dict[str, Any]], bool] | str | None = None,
+    ) -&gt; dict[str, Any]:
+
+        batch = None
+        if self.train_engine.is_data_parallel_head():
+            batch = self.rollout_engine.prepare_batch(
+                dataloader,
+                workflow=workflow,
+                workflow_kwargs=workflow_kwargs,
+                should_accept_fn=should_accept_fn,
+            )
+            batch = tensor_container_to(batch, current_platform.current_device())
+
+        return self._broadcast_and_redistribute_batch(batch, granularity=granularity)
+
+</code></pre>
+
+</details>
+
+<details>
+<summary>_broadcast_and_redistribute_batch() Code</summary>
+
+
+<pre><code class="language-python">def _broadcast_and_redistribute_batch(
+        self,
+        batch: dict[str, Any] | None,
+        granularity: int = 1,
+    ) -&gt; dict[str, Any]:
+
+        if batch is not None:
+            redist = redistribute(
+                batch,
+                granularity=granularity,
+                group=self.train_engine.data_parallel_group,
+            )
+            batch = redist.data
+
+        current_platform.synchronize()
+        dist.barrier(group=self.train_engine.cpu_group)
+
+        batch = broadcast_tensor_container(
+            batch,
+            src_rank=self.train_engine.current_data_parallel_head(),
+            group=self.train_engine.context_and_model_parallel_group,
+            )
+
+        current_platform.synchronize()
+        dist.barrier(group=self.train_engine.cpu_group)
+
+        return batch
+</code></pre>
+
+</details>
+
+<h2 id="training">Training</h2>
+<p>After the Actor obtains the trajectories, it enters the core training logic:</p>
+<ul>
+<li><strong>Micro-Batching</strong>: To handle ultra-large Batches (such as the large amount of sampling required by GRPO), the Actor first calls <code>split_padded_tensor_dict_into_mb_list</code> (see <code>areal/utils/data.py</code>, used in <code>Actor.train_batch</code>) to split the large Batch into multiple Micro-Batches based on the number of Tokens using Dynamic Batching. Detailed analysis of the method can be found in the Dynamic Batching section below.</li>
+<li><strong>Gradient Accumulation</strong>: For each Micro-Batch, the Actor calls the underlying <code>TrainEngine</code> (FSDP / Megatron)'s <code>train_batch</code> interface (<code>areal/engine/fsdp_engine.py</code>):<ul>
+<li>Execute Forward calculation;</li>
+<li>Calculate log probs, KL divergence, and advantage;</li>
+<li>Execute Backward and accumulate gradients;</li>
+</ul>
+</li>
+<li><strong>Parameter Update</strong>: After processing all Micro-Batches, execute <code>optimizer.step()</code> to update model parameters.</li>
+</ul>
+<h3 id="micro-batching">Micro-Batching</h3>
+<p>The logic of Micro-Batching is mainly scattered in the <code>split_padded_tensor_dict_into_mb_list</code> function in <code>areal/utils/data.py</code>. Here, a large Batch is split into multiple small Micro-Batches, grouping sequences of different lengths so that the total number of Tokens in each Micro-Batch does not exceed <code>max_tokens_per_mb</code>, thereby avoiding OOM (Out of Memory). The logic here is the same as the coordinator implemented by <code>DistRolloutCoordinator</code> through the FFD algorithm, so it will not be analyzed in detail here.</p>
+<details>
+<summary>Core Code Implementation</summary>
+
+
+<pre><code class="language-python">def split_padded_tensor_dict_into_mb_list(
+    data: dict[str, Any],
+    mb_spec: MicroBatchSpec,
+    group: dist.ProcessGroup | None = None,
+) -&gt; MicroBatchList:
+    # 1. Length statistics: Calculate the effective length of each data based on attention_mask
+    seq_lens = data[&quot;attention_mask&quot;].sum(1).long().cpu().numpy().tolist()
+
+    # 2. Group aggregation: If granularity exists (e.g., GRPO), first aggregate the total Tokens within the group
+    granularity = mb_spec.granularity
+    bs = data[&quot;attention_mask&quot;].shape[0]
+    input_lens = (
+        data[&quot;attention_mask&quot;]
+        .view(bs // granularity, granularity, -1)
+        .sum(dim=(1, 2))
+        .long()
+        .cpu()
+        .numpy()
+    )
+
+    # 3. Load balancing allocation: Use FFD (First-Fit Decreasing) algorithm for bin packing planning
+    # Ensure the total Token count of each Micro-batch does not exceed max_tokens_per_mb
+    group_indices = allocate_balanced_mbs_synced(mb_spec, input_lens, group=group)
+
+    # 4. Index mapping: Map the allocation results back to the original data indices
+    group_indices = [
+        datapack.flat2d(
+            [list(range(i * granularity, (i + 1) * granularity)) for i in group_index]
+        )
+        for group_index in group_indices
+    ]
+
+    # 5. Physical reordering and splitting: Reassemble Tensors according to the calculated indices
+    def _split(tensor):
+        unpacked = [tensor[i] for i in range(bs)]
+        reordered = reorder_list(unpacked, forward_indices)
+        reordered = torch.stack(reordered)
+
+        splitted = []
+        offset = 0
+        for _n_seqs in group_n_seqs:
+            splitted.append(reordered[offset : offset + _n_seqs])
+            offset += _n_seqs
+        return splitted
+
+    to_split = dict_map(to_split, lambda x: _split(x))
+
+    return MicroBatchList(...)
+</code></pre>
+
+</details>
+
+<h2 id="update-weights">Update weights</h2>
+<p>After Training, the rollout side needs to be updated accordingly. This process is controlled by the <code>WeightUpdateMeta</code> configuration, which defines how the Actor (initiator) transmits parameters to the Rollout Engine (receiver).</p>
+<ol>
+<li><strong>Configuration Driven</strong>:<ul>
+<li><code>WeightUpdateMeta</code> defines the transmission method (NCCL-based <code>_update_weights_from_distributed</code> or direct disk writing-based <code>_update_weights_from_disk</code>) and the destination address. The Actor decides which update path to take based on this metadata.</li>
+</ul>
+</li>
+<li><strong>Actor Initiates Update</strong>:<ul>
+<li>The Actor calls <code>update_weights</code> (see <code>fsdp_engine.py</code>).</li>
+<li>If it is NCCL mode, execute <code>_update_weights_from_distributed</code> to broadcast parameters via NCCL; if it is disk mode, execute <code>_update_weights_from_disk</code> to save the Checkpoint.</li>
+</ul>
+</li>
+<li><strong>Rollout Engine Responds</strong>:<ul>
+<li>The Actor calls the corresponding interface of the rollout_engine (such as <code>update_weights_from_distributed</code>, see <code>sglang_remote.py</code>).</li>
+<li>The Rollout Engine sends an HTTP request carrying Meta information to the remote SGLang Server, instructing the Server to perform weight synchronization or loading.</li>
+</ul>
+</li>
+</ol>
+<h2 id="ray-placement-group-launch"><strong>Ray Placement Group &amp; Launch</strong></h2>
+<p>The ray-related code is concentrated in <code>areal/launcher/ray.py</code>, where the most important class is <code>RayLauncher</code>.</p>
+<h3 id="allocationmode">AllocationMode</h3>
+<p><code>AllocationMode</code> is essentially an encapsulation of a <strong>Configuration Class</strong> and a <strong>Parser</strong>.</p>
+<ul>
+<li>It contains <code>_LLMParallelParser</code>, responsible for parsing the DSL string entered by the user (such as <code>"sglang:d2+fsdp:d4"</code>) into structured data.</li>
+<li>It also stores the parsed result (<code>ModelAllocation</code> object list). All subsequent queries in the program regarding "how many models I have", "how many cards each model uses", and "who shares resources with whom" are obtained by directly accessing the properties of the <code>AllocationMode</code> instance.</li>
+</ul>
+<p>For colocate and disaggregate, AReaL controls them through the following parameters:</p>
+<pre><code class="language-python"># disaggregation / separation (parts connected by &quot;+&quot;)
+allocation_mode=&quot;sglang[rollout]:d2+fsdp[actor]:d4+fsdp[critic]:d2&quot;
+</code></pre>
+<p>The layout here means: Rollout: 2 GPUs (SGLang, 2DP), Actor: 4 GPUs (FSDP, 4DP), Critic: 2 GPUs (FSDP, 4DP), totaling 8 GPUs (2+4+2).</p>
+<pre><code class="language-python"># Colocation (colocation parts connected by &quot;|&quot;)
+allocation_mode=&quot;sglang[rollout]:d4+fsdp[actor]:d4|fsdp[critic]:d4&quot;
+</code></pre>
+<p>The layout here means: <strong>Rollout</strong>: 4 GPUs (SGLang, 4DP), <strong>Actor &amp; Critic</strong>: share another 4 GPUs (FSDP, 4DP), totaling 8 GPUs (4+4).</p>
+<h3 id="raylauncher-ray_main">RayLauncher / ray_main()</h3>
+<p><code>ray_main()</code> is the entrypoint for the entire RL process of AReaL. Its core responsibility is to request Ray resources according to the parameter settings in <code>AllocationMode</code>, and start the Rollout Engine and Training Actor in sequence. The following code shows the process of the Launcher starting the SGLang inference service. From the code, it is clear that it first extracts the parallelism parameters of the Rollout side (such as dp_size, world_size) from <code>AllocationMode</code>, calculates the corresponding Ray Placement Group specifications based on this, and finally submits specific startup instructions to the Ray cluster for execution via <code>launcher.submit_array()</code>.</p>
+<p>The launcher for the Trainer is similar and will not be repeated here.</p>
+<details>
+<summary>Launch SGLang Code</summary>
+
+
+<pre><code class="language-python">if allocation_mode.gen_backend == &quot;sglang&quot;:
+    # Launcher should launch SGLang servers according to allocation mode.
+    config.sglang = to_structured_cfg(config.sglang, SGLangConfig)
+    n_sglang_servers = allocation_mode.gen.dp_size
+    n_sglang_nodes = max(1, allocation_mode.gen.world_size // n_gpus_per_node)
+    node_group_size = max(1, allocation_mode.gen_instance_size // n_gpus_per_node)
+    n_servers_per_node = max(n_sglang_servers // n_sglang_nodes, 1)
+    cross_nodes = allocation_mode.gen_instance_size &gt; n_gpus_per_node
+
+    base_seed = config.sglang.random_seed
+    sglang_args_list = [
+        [
+            sys.argv[1:]
+            + [f&quot;sglang.random_seed={base_seed + i * n_servers_per_node}&quot;]
+        ]
+        for i in range(n_sglang_nodes)
+    ]
+    sglang_entry_point = str(
+        pathlib.Path(__file__).resolve().parent.joinpath(&quot;sglang_server.py&quot;)
+    )
+
+    def sglang_env_hook(
+        n_tasks: int, task_group_size: int, placement_group: PlacementGroup
+    ) -&gt; list[dict]:
+        master_addrs = []
+        master_ports = []
+        for i in range(0, n_tasks, task_group_size):
+            host_ip, port = get_placement_group_master_ip_and_port(
+                placement_group, i
+            )
+            master_addrs.append(host_ip)
+            master_ports.append(port)
+
+        env_vars = []
+        for i in range(n_tasks):
+            env_vars.append(
+                dict(
+                    AREAL_SGLANG_MULTI_NODE_RANK=str(i % task_group_size),
+                    AREAL_SGLANG_MULTI_NODE_MASTER_ADDR=master_addrs[
+                        i // task_group_size
+                    ],
+                    AREAL_SGLANG_MULTI_NODE_MASTER_PORT=str(
+                        master_ports[i // task_group_size]
+                    ),
+                )
+            )
+
+        return env_vars
+
+    # launch a task to start all sglang servers in one node
+    launcher.submit_array(
+        job_name=&quot;llm_server&quot;,
+        file_path=sglang_entry_point,
+        func_name=DEFAULT_MAIN_FUNC_NAME,
+        count=n_sglang_nodes,
+        nodes=n_sglang_nodes,
+        list_args=sglang_args_list,
+        gpus_per_task=n_gpus_per_node,
+        cpus_per_task=config.launcher.inference_server_cpus_per_gpu
+        * n_gpus_per_node,
+        mem_per_task=config.launcher.inference_server_mem_per_gpu * n_gpus_per_node,
+        env_vars=get_env_vars(
+            config.cluster.cluster_name,
+            config.launcher.inference_server_env_vars,
+        ),
+        env_hook=(
+            partial(sglang_env_hook, n_sglang_nodes, node_group_size)
+            if cross_nodes
+            else None
+        ),
+    )
+    # Get SGLang server addresses via name_resolve
+    try:
+        sglang_addrs = wait_llm_server_addrs(
+            config.experiment_name,
+            config.trial_name,
+            n_sglang_servers,
+        )
+    except (TimeoutError, KeyboardInterrupt) as e:
+        launcher.stop_all(
+            force=False
+        )  # force=False will send KeyboardInterrupt to sglang_server.main() to further clean all sglang-related processes
+        raise e
+</code></pre>
+
+</details>
+
+<h3 id="bundle-ray-placement-group">Bundle &amp; <strong>Ray Placement Group</strong></h3>
+<p>In <code>RayLauncher.submit_array</code>, the definition of bundles in AReaL appears. According to the code, AReaL's bundle size is not fixed, and the number of GPUs and CPUs per bundle is not fixed. Instead, it is allocated directly in units of nodes.</p>
+<pre><code class="language-python">tasks_per_node = count // nodes
+gpus_per_node = gpus_per_task * tasks_per_node
+cpus_per_node = cpus_per_task * tasks_per_node
+mem_per_node = mem_per_task * tasks_per_node
+
+device_bundles = [
+    {
+        &quot;CPU&quot;: cpus_per_node,
+        &quot;GPU&quot;: gpus_per_node,
+        &quot;memory&quot;: mem_per_node * 1024 * 1024,  # Convert MB to bytes
+    }
+] * nodes
+
+placement_group = ray.util.placement_group(
+        bundles=device_bundles, strategy=&quot;PACK&quot;
+)
+</code></pre>
+<p>The typical calling method (such as on the Trainer side) is:</p>
+<pre><code class="language-python">count = trainer_n_nodes * n_gpus_per_node
+nodes = trainer_n_nodes
+gpus_per_task = 1
+
+# Substitute into the formula above, i.e.
+tasks_per_node = n_gpus_per_node
+gpus_per_node = 1 * n_gpus_per_node = n_gpus_per_node
+</code></pre>
+<p>In other words, each bundle corresponds to all GPUs + corresponding CPU/memory of a node.
+This node-level bundle granularity avoids resource fragmentation from the source and ensures topology controllability and performance stability for communication-intensive parallel schemes like FSDP / Megatron to the greatest extent.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/areal/code-walk-through_EN.md">rlhf/areal/code-walk-through_EN.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

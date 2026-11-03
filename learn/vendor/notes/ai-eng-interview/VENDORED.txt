@@ -1,0 +1,1 @@
+Vendored from https://github.com/amitshekhariitbhu/ai-engineering-interview-questions (Apache-2.0, Amit Shekhar (Outcome School)). Markdown copied verbatim; rendered to learn/notes/ai-eng-interview/ by scripts/build_notes.py.

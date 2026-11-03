@@ -1,0 +1,67 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A Quick Reproduce to Evaluate the Speed of TP 2</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/tool_examples/debug-tp-2.md</div>
+<article class="note"><h1 id="a-quick-reproduce-to-evaluate-the-speed-of-tp-2">A Quick Reproduce to Evaluate the Speed of TP 2</h1>
+<pre><code class="language-bash">docker run \
+    -it \
+    --shm-size 32g \
+    --gpus all \
+    -v {YOUR_HUGGINGFACE_CACHE_DIR}:/root/.cache \
+    --ipc=host \
+    --network=host \
+    --privileged \
+    --name sglang-FSDP-TP-2 \
+    lmsysorg/sglang:dev \
+    /bin/zsh
+</code></pre>
+<pre><code class="language-bash">apt update
+apt install -y python3.10 python3.10-venv
+python3 -m ensurepip --upgrade
+
+python3 -m venv ~/.python/veRL-multiturn-rollout
+
+source ~/.python/veRL-multiturn-rollout/bin/activate
+
+python3 -m pip install uv
+</code></pre>
+<pre><code class="language-bash">cd ~
+git clone -b fsdp_tp_2_sgl https://github.com/volcengine/verl.git
+cd verl
+
+python3 -m uv pip install -e &quot;.[sglang]&quot;
+
+python3 -m uv pip install wheel
+python3 -m uv pip install packaging
+# best to use for torch 2.6.0 and sglang 0.4.6.post1 flash-attn 2.7.4.post1
+python3 -m uv pip install flash-attn==2.7.4.post1 --no-build-isolation --no-deps
+
+python3 -m uv pip install .
+python3 -m uv pip install -r ./requirements.txt
+</code></pre>
+<pre><code class="language-bash">export WANDB_API_KEY={YOUR_WANDB_API_KEY}
+
+function now() {
+    date '+%Y-%m-%d-%H-%M'
+}
+</code></pre>
+<pre><code class="language-bash">python3 ./examples/data_preprocess/gsm8k_multiturn_w_tool.py
+</code></pre>
+<pre><code class="language-bash">bash profile-sglang.sh 1
+
+# The final 1 is the number of SGLang TP size.
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/tool_examples/debug-tp-2.md">rlhf/verl/multi-turn/tool_examples/debug-tp-2.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

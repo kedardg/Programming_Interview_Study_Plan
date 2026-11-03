@@ -1,0 +1,53 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-Turn Rollout with Fast Tokenization (GSM8K)</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/fast_tokenization/verRL-multiturn-fast-tokenization.md</div>
+<article class="note"><h1 id="multi-turn-rollout-with-fast-tokenization-gsm8k">Multi-Turn Rollout with Fast Tokenization (GSM8K)</h1>
+<p>This example demonstrates how to perform <strong>multi-turn rollout</strong> using SGLang with fast tokenization.</p>
+<h2 id="usage">Usage</h2>
+<h3 id="prerequisites">Prerequisites</h3>
+<p>Install veRL from fast tokenization branch:</p>
+<pre><code class="language-bash">cd ~
+git clone https://github.com/jybsuper/verl.git
+cd verl
+git checkout tokenization
+
+conda create -n verl python==3.10
+conda activate verl
+# The offical dependency installation script does not use uv.
+# To speed up the installation, feel free to add uv prefix to the pip command in it.
+bash scripts/install_vllm_sglang_mcore.sh
+pip install --no-deps -e .
+</code></pre>
+<h3 id="step-1-download-gsm8k-dataset">Step 1: Download GSM8K Dataset</h3>
+<pre><code class="language-bash">cd examples/data_preprocess
+python3 gsm8k_multiturn_w_tool.py
+</code></pre>
+<p>This will download and preprocess the GSM8K dataset into <code>~/data/gsm8k/</code>.</p>
+<h3 id="step-2-validate-multi-turn-rollout-for-qwen25-3b">Step 2: Validate Multi-Turn Rollout for Qwen2.5-3B</h3>
+<p>If you have 8 GPUs
+Use the standard 8-GPU script:</p>
+<pre><code class="language-bash">bash examples/sglang_multiturn/run_qwen2.5-3b_gsm8k_multiturn.sh
+</code></pre>
+<p>If you have only 4 GPUs
+Use the fallback 4-GPU script:</p>
+<pre><code class="language-bash">bash examples/sglang_multiturn/run_qwen2.5-3b_gsm8k_multiturn_4xgpu.sh 
+</code></pre>
+<h3 id="step-3-validate-multi-turn-rollout-for-qwen3-4b">Step 3: Validate Multi-Turn Rollout for Qwen3-4B</h3>
+<p>This validation uses 8 GPUs</p>
+<pre><code class="language-bash">bash examples/sglang_multiturn/run_qwen3-4b_gsm8k_multiturn.sh
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/fast_tokenization/verRL-multiturn-fast-tokenization.md">rlhf/verl/multi-turn/fast_tokenization/verRL-multiturn-fast-tokenization.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

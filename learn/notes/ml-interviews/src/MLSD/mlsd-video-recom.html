@@ -1,0 +1,296 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design a video recommendation system</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-video-recom.md</div>
+<article class="note"><h1 id="design-a-video-recommendation-system">Design a video recommendation system</h1>
+<h2 id="1-problem-formulation">1. Problem Formulation</h2>
+<p>User-video interaction </p>
+<p>Some existing data examples:<br>
+* videos data
+* User historic data 
+* Recommendations data 
+* Reviews </p>
+<!-- * video features include:  
+Url, 
+types
+name,
+desc_snippet,
+recent_reviews,
+all_reviews,
+release_date,
+developer,
+publisher,
+popular_tag, -->
+
+<h3 id="clarifying-questions">Clarifying questions</h3>
+<ul>
+<li>Use case? Homepage?</li>
+<li>Does user sends a text query as well?</li>
+<li>Business objective? </li>
+<li>Increase user engagement (play, like, click, share), purchase?, create a better ultimate gaming experience </li>
+<li>Similar to previously played, or personalized for the user? Personalized for the user</li>
+<li>User locations? Worldwide (multiple languages) </li>
+<li>User’s age group: </li>
+<li>Do users have any favorite lists, play later, etc?</li>
+<li>How many videos? 100 million</li>
+<li>How many users? 100 million DAU</li>
+<li>Latency requirements  - 200msec?</li>
+<li>Data access </li>
+<li>Do we log and have access to any data? Can we build a dataset using user interactions ?</li>
+<li>Do we have textual description of items? </li>
+<li>can users become friends on the platform and do we wanna take that into account?</li>
+<li>Free or Paid?  </li>
+</ul>
+<h3 id="ml-objective">ML objective</h3>
+<ul>
+<li>Recommend most engaging (define) videos</li>
+<li>Max. No. of clicks (clickbait)</li>
+<li>Max. No. completed videos/sessions/levels (bias to shorter)</li>
+<li>Max. total hours played ()</li>
+<li>
+<p>Max. No. of relevant items (proxy by user implicit/explicit reactions) -&gt; more control over signals, not the above shortcomings</p>
+</li>
+<li>
+<p>Define relevance: e.g. like is relevant, or playing half of it is, …</p>
+</li>
+<li>ML Objective: build dataset and model to predict the relevance score b/w user and a video</li>
+<li>I/O: I: user_id, O: ranked list of videos + relevance score</li>
+<li>ML category: Recommendation System</li>
+</ul>
+<h2 id="2-metrics-offline-and-online">2. Metrics (Offline and Online)</h2>
+<ul>
+<li>Offline: <ul>
+<li>precision @k, mAP, and diversity </li>
+</ul>
+</li>
+<li>Online: <ul>
+<li>CTR, # of completed, # of purchased, total play time, total purchase, user feedback </li>
+</ul>
+</li>
+</ul>
+<h2 id="3-architectural-components-mvp-logic">3. Architectural Components (MVP Logic)</h2>
+<p>The main approaches used for personalized recommendation systems: 
+* Content-based filtering: suggest items similar to those user found relevant (e.g. liked)
+    * No need for interaction data, recommends new items to users (no item cold start)
+    * Capture unique interests of users
+    * New user cold start 
+    * Needs domain knowledge 
+* CF: Using user-user (user based CF) or item-item similarities (item based CF)
+    * Pros
+        * No domain knowledge 
+        * Capture new areas of interest 
+        * Faster than content (no content info needed)
+    * Cons: 
+        * Cold start problem (both user and item)
+        * No niche interest 
+* Hybrid 
+    * Parallel hybrid: combine(CF results, content based)
+    * Sequential: [CF based] -&gt; Content based</p>
+<p>What do we choose? 
+We choose a sequential hybrid model (standard e.g. for video recommendation)</p>
+<p>We follow  the three stage recommender system (funnel architecture) in order to meet latency requirements and be able to scale the system to billions of items. </p>
+<pre><code class="language-mermaid">   Candidate generation --&gt; Ranking --&gt; Re-ranking
+</code></pre>
+<p>In the first stage, we use a light model to retrive thousands of items from millions
+In the second (ranking) stage, we focus on high precision using a powerful model. This will not impact serving speed much because it's only run on smaller subset of items. </p>
+<p>Candidate generation in practice comes from aggregation of different candidate generation models. Here we can assume three candidate generation modules: </p>
+<ol>
+<li>Candidate generation 1 (Relevance based)</li>
+<li>Candidate generation 2 (Popularity)</li>
+<li>Candidate generation 3 (Trending)  </li>
+</ol>
+<p>where we use CF for candidate generation 1</p>
+<p>We use content based modeling for ranking.</p>
+<h2 id="4-data-preparation">4. Data preparation</h2>
+<p>Data Sources: </p>
+<ol>
+<li>
+<p>Users (user profile, historical interactions):</p>
+<ul>
+<li>User profile</li>
+<li>User_id, username, age, gender, location (city, country), lang, timezone</li>
+</ul>
+</li>
+<li>
+<p>videos (structures, metadata, video content - what is it?)
+   - video_id, title, date, rating, expected_length?,  #reviews, language, tags, description, price, developer, publisher, level, #levels</p>
+</li>
+<li>
+<p>User-video interactions:<br>
+Historical interactions: Play, purchase, like, and search history, etc<br>
+   - User_id, video_id, timestamp, interaction_type(purchase, play, like, impression, search), interaction_val, location</p>
+</li>
+<li>
+<p>Context: time of the day, day of the week, device, OS</p>
+</li>
+</ol>
+<p>Type</p>
+<ul>
+<li>Removing duplicates </li>
+<li>filling missing values </li>
+<li>normalizing data.</li>
+</ul>
+<h3 id="labeling">Labeling:</h3>
+<p>For features in the form of <user, video> pairs -&gt; labeling strategy based on explicit or implicit feedback 
+e.g. "positive" if user liked the item explicitly or interacted (e.g. watched/played) at least for X (e.g. half of it). <br>
+negative samples: sample from background distribution -&gt; correct via importance smapling </p>
+<h2 id="5-feature-engineering">5. Feature engineering</h2>
+<p>There are several machine learning features that can be extracted from videos. Here are some examples:</p>
+<ul>
+<li>video metadata features</li>
+<li>video state: e.g. the positions of players, the status of objects and obstacles, the time remaining, and the score.</li>
+<li>video mechanics: The rules and interactions that govern the video. </li>
+<li>User engagement: e.g. the length of play sessions, frequency of play, and player retention rates.</li>
+<li>Social interactions: b/w players: to identify patterns of behavior, such as the formation of alliances, the sharing of resources, and the types of communication used between players.</li>
+<li>Player preferences: which video features are most popular among players, which can help inform video design decisions.</li>
+<li>Player behaviors: player movement patterns, the types of actions taken by players, and the strategies used to achieve objectives.</li>
+</ul>
+<p>We select some important features as follows:</p>
+<ul>
+<li>video metadata features: </li>
+<li>
+<p>video ID, 
+  Duration, 
+  Language, 
+  Title, 
+  Description,
+  Genre/Category, 
+  Tags,<br>
+  Publisher(popularity, reviews), 
+  Release date, 
+  Ratings, 
+  Reviews, 
+  (video content ?)
+video titles, genres, platforms, release dates, user ratings, and user reviews.</p>
+</li>
+<li>
+<p>User profile: </p>
+</li>
+<li>
+<p>User ID, Age, Gender, Language, City, Country </p>
+</li>
+<li>
+<p>User-item historical features: </p>
+</li>
+<li>User-item interactions <ul>
+<li>Played, liked, impressions</li>
+<li>purchase history (avg. price)</li>
+</ul>
+</li>
+<li>
+<p>User search history </p>
+</li>
+<li>
+<p>Context</p>
+</li>
+</ul>
+<h3 id="feature-representation">Feature representation:</h3>
+<ul>
+<li>Categorical data (video_id, user_id, language, city): Use embedding layers, learned during
+training </li>
+<li>Categorical_data(gender, age): one_hot</li>
+<li>Continuous variables: normalize, or bucketize and one-hot (e.g. price) </li>
+<li>Text:(title, desc, tags): title/description use embeddings, pre-trained BERT, fine tune on video language?, tags: CBOW</li>
+<li></li>
+<li>video content embeddings? </li>
+</ul>
+<h2 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h2>
+<h3 id="61-candidate-generation">6.1 Candidate Generation</h3>
+<p>For candidate generation 1 (Relevance Based), we choose CF. </p>
+<p>For CF there are two embedding based modeling options: 
+1. Matrix Factorization 
+   * Pros: Training speed (only two matrices to learn), Serving speed (static learned embeddings)
+   * Cons: only relies on user-item interactions (No user profile info e.g. language is used); new-user cold start problem 
+2. Two tower neural network:
+   * Pros: Accepts user features (user profile + user search history) -&gt; better quality recommendation; handles new users 
+   * Cons: Expensive training, serving speed     </p>
+<p>We chose two-tower network here. </p>
+<h4 id="two-tower-network">Two-tower network</h4>
+<ul>
+<li>two encoder towers (user tower + encoder tower)</li>
+<li>user tower encodes user features into user embeddings  $u$ </li>
+<li>item tower encodes item features into item embeddings   $v_i$</li>
+<li>similarity $u$, $v_i$ is considered as a relevance score (ranking as classification problem)</li>
+</ul>
+<h4 id="loss-function">Loss function:</h4>
+<p>Minimize cross entropy for each positive label and sampled negative examples </p>
+<h3 id="62-ranking">6.2 Ranking</h3>
+<p>For Ranking stage, we prioritize precision over efficiency. We choose content based filtering. Choose a model that relies in item features.<br>
+ML Obj options: 
+   - max P(watch| U, C)
+   - max expected total watch time 
+   - multi-objective (multi-task learning: add corresponding losses)</p>
+<p>Model Options: 
+- FF NN (e.g. similar tower network to a tower network) + logistic regression 
+- Deep Cross Network (DCN)</p>
+<p>Features  </p>
+<ul>
+<li>Video ID embeddings (watched video embedding avg, impression video embedding), </li>
+<li>Video historic</li>
+<li>No. of previous impressions, reviews, likes, etc</li>
+<li>Time features (e.g. time since last play), </li>
+<li>Language embedding (user, item), </li>
+<li>User profile </li>
+<li>User Historic (e.g. search history)</li>
+</ul>
+<h3 id="63-re-ranking">6.3 Re-Ranking</h3>
+<p>Re-ranks items by additional business criteria (filter, promote)<br>
+We can use ML models for clickbait, harmful content, etc or use heuristics <br>
+Examples: 
+* Age restriction filter 
+* Region restriction filter 
+* Video freshness (promote fresh content)
+* Deduplication 
+* Fairness, bias, etc </p>
+<h2 id="7-prediction-service">7. Prediction Service</h2>
+<p>two-tower network inference: find the k-top most relevant items given a user -&gt;<br>
+It's a classic nearest neighbor problem -&gt; use approximate nearest neighbor (ANN) algorithms  </p>
+<h2 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h2>
+<p>Standard approaches as before.  </p>
+<h2 id="9-scaling">9. Scaling</h2>
+<p>The three stage candidate generation - ranking - re-ranking can be scaled well as described earlier. It also meets the requirements of speed (funnel architecture), precision(ranking component), and diversity (multiple candid generation). </p>
+<h3 id="cold-start-problem">Cold start problem:</h3>
+<ul>
+<li>new users: two tower architectures accepts new users and we can still use user profile info even with no interaction </li>
+<li>new items: recommend to random users and collect some data - then fine tune the model using new data</li>
+</ul>
+<h3 id="training">Training:</h3>
+<p>We need to be able to fine tune the model </p>
+<h3 id="exploration-exploitation-trade-off">Exploration exploitation trade-off</h3>
+<ul>
+<li>Multi-armed bandit (an agent repeatedly selects an option and receives a reward/cost. The goal of to maximize its cumulative reward over time, while simultaneously learning which options are most valuable.)</li>
+</ul>
+<h3 id="other-extensions">Other Extensions:</h3>
+<ul>
+<li><a href="https://daiwk.github.io/assets/youtube-multitask.pdf">Multi-task learning</a></li>
+<li>Includes a shared feature extractor that is trained jointly with multiple prediction heads, each of which is responsible for predicting a different aspect of user behavior, such as click-through rate, watch time, and view count. The model is trained using a combination of supervised and unsupervised learning techniques, including cross-entropy loss, pairwise ranking loss, and self-supervised contrastive learning.</li>
+<li>Positional bias (detection and correction) </li>
+<li>Selection bias (detection and correction)</li>
+<li>Add negative feedback (dislike)</li>
+<li>Locality preservation: </li>
+<li>Use sequential user behavior info (CBOW model)</li>
+<li>effect of seasonality </li>
+<li>what if we only have a query and personal (item, provider) history? </li>
+<li>item embeddings, provider embeddings, query embeddings </li>
+<li>we can build a query-aware attention mechanism that computes </li>
+</ul>
+<h3 id="more-resources">More resources</h3>
+<ul>
+<li><a href="https://www.kaggle.com/code/fetenbasak/content-based-recommendation-video-recommender">Content-based</a>, <a href="https://www.kaggle.com/code/greentearus/steam-reviews-nlp-analysis">NLP analysis</a>, <a href="https://www.kaggle.com/code/krsnewwave/collaborative-denoising-autoencoder-steam">Collaborative Denoising AE</a>  </li>
+<li><a href="https://github.com/manandesai/video-recommendation-engine">User-based CF, item-based CF and MF</a> (<a href="https://github.com/manandesai/video-recommendation-engine/blob/main/recommenders.ipynb">github</a>)</li>
+<li><a href="https://github.com/AudreyGermain/video-Recommendation-System">CF and content based</a> </li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-video-recom.md">src/MLSD/mlsd-video-recom.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

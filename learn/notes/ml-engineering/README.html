@@ -1,0 +1,175 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Machine Learning Engineering Open Book</title><link rel="stylesheet" href="../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../index.html">Learn</a><div class="links"><a href="../../notes.html" class="here">Notes library</a><a href="../../index.html">All chapters</a><a href="../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../notes.html">Notes library</a> › <a href="../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › README.md</div>
+<article class="note"><h1 id="machine-learning-engineering-open-book">Machine Learning Engineering Open Book</h1>
+<!-- not-in-ebook-start -->
+<p><a href="#ebook-versions-of-the-book"><img src="images/Machine-Learning-Engineering-book-cover-200x259.png" align="right" width="200" height="259" alt="Machine Learning Engineering Open Book cover"></a></p>
+<!-- not-in-ebook-end -->
+
+<p>This is an open collection of methodologies, tools and step by step instructions to help with successful training and fine-tuning of large language models and multi-modal models and their inference.</p>
+<p>This is a technical material suitable for LLM/VLM training engineers and operators. That is the content here contains lots of scripts and copy-n-paste commands to enable you to quickly address your needs.</p>
+<p>This repo is an ongoing brain dump of my experiences training Large Language Models (LLM) (and VLMs); a lot of the know-how I acquired while training the open-source <a href="https://huggingface.co/bigscience/bloom">BLOOM-176B</a> model in 2022 and <a href="https://huggingface.co/HuggingFaceM4/idefics-80b-instruct">IDEFICS-80B</a> multi-modal model in 2023, and RAG models at <a href="https://contextual.ai/">Contextual.AI</a> in 2024.</p>
+<p>I've been compiling this information mostly for myself so that I could quickly find solutions I have already researched in the past and which have worked, but as usual I'm happy to share these notes with the wider ML community.</p>
+<h2 id="table-of-contents">Table of Contents</h2>
+<p><strong>Part 1. Insights</strong></p>
+<ol>
+<li>
+<p><strong><a href="insights/ai-battlefield.html">The AI Battlefield Engineering</a></strong> - what you need to know in order to succeed.</p>
+</li>
+<li>
+<p><strong><a href="insights/how-to-choose-cloud-provider.html">How to Choose a Cloud Provider</a></strong> - these questions will empower you to have a successful compute cloud experience.</p>
+</li>
+<li>
+<p><strong><a href="insights/when-to-upgrade-gpus/README.html">When Is It Worth Upgrading GPUs?</a></strong> - a practical framework for deciding whether a GPU generation upgrade is worth its cost, worked through on a real H200 → B200 benchmark.</p>
+</li>
+</ol>
+<p><strong>Part 2. Hardware</strong></p>
+<ol>
+<li>
+<p><strong><a href="https://github.com/stas00/ml-engineering/blob/main/compute">Compute</a></strong> - accelerators, CPUs, CPU memory.</p>
+</li>
+<li>
+<p><strong><a href="https://github.com/stas00/ml-engineering/blob/main/storage">Storage</a></strong> - local, distributed and shared file systems.</p>
+</li>
+<li>
+<p><strong><a href="https://github.com/stas00/ml-engineering/blob/main/network">Network</a></strong> - intra- and inter-node networking.</p>
+</li>
+</ol>
+<p><strong>Part 3. Orchestration</strong></p>
+<ol>
+<li><strong><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration">Orchestration Systems</a></strong> - managing containers and resources</li>
+<li><strong><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm">SLURM</a></strong> - Simple Linux Utility for Resource Management</li>
+</ol>
+<p><strong>Part 4. Training</strong></p>
+<ol>
+<li><strong><a href="https://github.com/stas00/ml-engineering/blob/main/training">Training</a></strong> - model training-related guides</li>
+</ol>
+<p><strong>Part 5. Inference</strong></p>
+<ol>
+<li><strong><a href="https://github.com/stas00/ml-engineering/blob/main/inference">Inference</a></strong> - model inference insights</li>
+</ol>
+<p><strong>Part 6. Development</strong></p>
+<ol>
+<li>
+<p><strong><a href="https://github.com/stas00/ml-engineering/blob/main/debug">Debugging and Troubleshooting</a></strong> - how to debug easy and difficult issues</p>
+</li>
+<li>
+<p><strong><a href="https://github.com/stas00/the-art-of-debugging">And more debugging</a></strong></p>
+</li>
+<li>
+<p><strong><a href="https://github.com/stas00/ml-engineering/blob/main/testing">Testing</a></strong> - numerous tips and tools to make test writing enjoyable</p>
+</li>
+</ol>
+<p><strong>Part 7. Miscellaneous</strong></p>
+<ol>
+<li><strong><a href="https://github.com/stas00/ml-engineering/blob/main/resources">Resources</a></strong> - LLM/VLM chronicles</li>
+</ol>
+<h2 id="updates">Updates</h2>
+<p>I announce any significant updates on my twitter channel <a href="https://twitter.com/StasBekman">https://twitter.com/StasBekman</a>.</p>
+<h2 id="ebook-versions-of-the-book">Ebook versions of the book</h2>
+<p>You can download various ebook formats of this book:
+* <a href="https://huggingface.co/stas/ml-engineering-book/resolve/main/Stas%20Bekman%20-%20Machine%20Learning%20Engineering.pdf?download=true">PDF</a>
+* <a href="https://huggingface.co/stas/ml-engineering-book/resolve/main/Stas%20Bekman%20-%20Machine%20Learning%20Engineering.epub?download=true">EPUB</a></p>
+<p>I will try to rebuild these once in a few weeks or so, but if you want the latest ebook versions, the instructions for building are <a href="https://github.com/stas00/ml-engineering/blob/main/build">here</a>.</p>
+<p>Thanks to HuggingFace for giving me permission to host my book's ebook formats at the <a href="https://huggingface.co/stas/ml-engineering-book">HF hub</a>.</p>
+<h2 id="skills-for-ai-agents">Skills for AI agents</h2>
+<p>I maintain two <a href="skills/README.html">SKILL.md</a> files that you can use to teach your AI agent:</p>
+<ul>
+<li><a href="skills/ml-engineering/SKILL.html">Machine Learning Engineering</a> — train and operate large-scale ML models.</li>
+<li><a href="skills/evaluate-cluster/SKILL.html">Evaluate a GPU cluster</a> — trial-node / acceptance loop: compute, network, and storage, then a markdown report.</li>
+</ul>
+<p>See also the companion skills: <a href="https://github.com/stas00/the-art-of-debugging/blob/master/SKILL.md">The Art of Debugging</a> and <a href="https://github.com/stas00/python-cookbook/blob/master/SKILL.md">Stas' Python Cookbook</a>.</p>
+<h2 id="courses">Courses</h2>
+<ul>
+<li><strong><a href="https://github.com/stas00/ml-engineering/blob/main/courses/lesson-learned">Lessons Learned from Training LLMs</a></strong> - provides a very different way of reading my open books, by going over the terse learned insights and allowing you to quickly dive deeper when you need to.</li>
+</ul>
+<h2 id="lecturestalks">Lectures/Talks</h2>
+<ul>
+<li><a href="https://www.youtube.com/watch?v=IBJUt9JPKHk">Building resilient ML Engineering skills</a> given on 2026-01-10 for the <a href="https://github.com/gpu-mode">GPU Mode community</a>. Only had time to discuss performance reality of accelerators, network and storage and how each of them can be crucial to the ensemble's performance. Thanks to <a href="https://github.com/msaroufim">Mark Saroufim</a> for organizing and providing an awesome support during the talk.</li>
+</ul>
+<h2 id="discussions">Discussions</h2>
+<p>If you want to discuss something related to ML engineering this repo has the <a href="https://github.com/stas00/ml-engineering/discussions">community discussions</a> available - so please don't hesitate to share your experience or start a new discussion about something you're passionate about.</p>
+<h2 id="key-comparison-tables">Key comparison tables</h2>
+<p>High end accelerators:</p>
+<ul>
+<li><a href="compute/accelerator/README.html#tflops-comparison-table">Theoretical accelerator TFLOPS</a></li>
+<li><a href="compute/accelerator/README.html#accelerator-memory-size-and-speed">Accelerator memory size and speed</a></li>
+</ul>
+<p>Networks:</p>
+<ul>
+<li><a href="network/README.html#inter-node-networking">Theoretical inter-node speed</a></li>
+<li><a href="network/README.html#intra-node-networking">Theoretical intra-node speed</a></li>
+</ul>
+<h2 id="shortcuts">Shortcuts</h2>
+<p>Things that you are likely to need to find quickly and often.</p>
+<p>Tools:</p>
+<ul>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/network/benchmarks/torch-dist-bench.py">torch-dist-bench.py</a> - a much easier way to benchmark network throughput than nccl-tests (used to be called <code>all_reduce_bench.py</code>).</li>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/debug/torch-distributed-gpu-test.py">torch-distributed-gpu-test.py</a> - a tool to quickly test your inter-node connectivity</li>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/compute/accelerator/benchmarks/mamf-finder.py">mamf-finder.py</a> - what is the actual TFLOPS measurement you can get from your accelerator.</li>
+</ul>
+<p>Guides:</p>
+<ul>
+<li><a href="debug/pytorch.html">debugging pytorch applications</a> - quick copy-n-paste solutions to resolve hanging or breaking pytorch applications</li>
+<li><a href="orchestration/slurm/users.html">slurm for users</a> - a slurm cheatsheet and tricks</li>
+<li><a href="debug/pytorch.html#faster-debug-and-development-with-tiny-models-tokenizers-and-datasets">make tiny models/datasets/tokenizers</a></li>
+<li><a href="resources/README.html#publicly-available-training-llmvlm-logbooks">LLM/VLM chronicles collection</a></li>
+</ul>
+<h2 id="gratitude">Gratitude</h2>
+<p>None of this would have been possible without me being entrusted with doing the specific LLM/VLM trainings I have learned the initial know-how from. This is a privilege that only a few enjoy due to the prohibitively expensive cost of renting huge ML compute clusters. So hopefully the rest of the ML community will vicariously learn from these notes.</p>
+<p>Special thanks go to <a href="https://github.com/thomwolf">Thom Wolf</a> who proposed that I lead the BLOOM-176B training back when I didn't know anything about large scale training. This was the project that catapulted me into the intense learning process. And, of course, HuggingFace for giving me the opportunity to work full time on BLOOM-176B and later on IDEFICS-80B trainings.</p>
+<p>Recently, I continued expanding my knowledge and experience while training models and building scalable training/inference systems at <a href="https://contextual.ai/">Contextual.AI</a> and I'm grateful for that opportunity to Aman and Douwe.</p>
+<p>I'd also like to thank the numerous <a href="contributors.html">contributors</a> who have been making this text awesome and error-free.</p>
+<h2 id="contributing">Contributing</h2>
+<p>If you found a bug, typo or would like to propose an improvement please don't hesitate to open an <a href="https://github.com/stas00/ml-engineering/issues">Issue</a> or contribute a PR.</p>
+<h2 id="related-open-books">Related Open Books</h2>
+<ul>
+<li><a href="https://github.com/stas00/the-art-of-debugging">The Art of Debugging Open Book</a> — methodologies and recipes for debugging Unix, Python and PyTorch programs.</li>
+<li><a href="https://github.com/stas00/python-cookbook">Stas' Python Cookbook</a> — everyday Python and standard-library recipes.</li>
+</ul>
+<h2 id="license">License</h2>
+<p>The content of this site is distributed under <a href="https://github.com/stas00/ml-engineering/blob/main/LICENSE-CC-BY-SA">Attribution-ShareAlike 4.0 International</a>.</p>
+<h2 id="citation">Citation</h2>
+<pre><code class="language-bibtex">@misc{bekman2024mlengineering,
+  author = {Bekman, Stas},
+  title = {Machine Learning Engineering Open Book},
+  year = {2023-2026},
+  publisher = {Stasosphere Online Inc.},
+  journal = {GitHub repository},
+  url = {https://github.com/stas00/ml-engineering}
+}
+</code></pre>
+<h2 id="my-repositories-map">My repositories map</h2>
+<p>✔ <strong>Books:</strong>
+ <a href="https://github.com/stas00/ml-engineering">Machine Learning Engineering</a> |
+ <a href="https://github.com/stas00/the-art-of-debugging">The Art of Debugging</a> |
+ <a href="https://github.com/stas00/python-cookbook">Stas' Python Cookbook</a></p>
+<p>✔ <strong>Applications:</strong>
+ <a href="https://github.com/stas00/ipyexperiments">ipyexperiments</a></p>
+<p>✔ <strong>Tools and Cheatsheets:</strong>
+ <a href="https://github.com/stas00/bash-tools">bash</a> |
+ <a href="https://github.com/stas00/conda-tools">conda</a> |
+ <a href="https://github.com/stas00/git-tools">git</a> |
+ <a href="https://github.com/stas00/jupyter-notebook-tools">jupyter-notebook</a> |
+ <a href="https://github.com/stas00/make-tools">make</a> |
+ <a href="https://github.com/stas00/python-tools">python</a> |
+ <a href="https://github.com/stas00/tensorboard-tools">tensorboard</a> |
+ <a href="https://github.com/stas00/unix-tools">unix</a></p>
+<p>✔ <strong>Other Machine Learning:</strong>
+ <a href="https://github.com/stas00/ml-ways">ML ways</a> |
+ <a href="https://github.com/stas00/porting">Porting</a></p></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/README.md">README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

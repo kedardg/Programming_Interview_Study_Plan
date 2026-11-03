@@ -1,0 +1,182 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Interactive Profiling in SGLang</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/interactive-profiling/Interactive_Profiling_en.md</div>
+<article class="note"><h1 id="interactive-profiling-in-sglang">Interactive Profiling in SGLang</h1>
+<h2 id="1-introduction">1. Introduction</h2>
+<p>I’ve recently been investigating load-balancing issues in distributed Serving.</p>
+<p>Our goal is to pinpoint the exact moment when load imbalance starts by monitoring real-time logs, and then validate the uneven-load hypothesis by analyzing the execution time of critical operators across ranks using trace data.</p>
+<p>The main challenge is that enabling profiling from the very beginning of the server launch often produces trace files that are too large to manage. Therefore, we’d like to capture traces for selected time windows interactively while the SGLang server is running normally.</p>
+<p>After reviewing the relevant sections in the SGLang documentation, I learned that SGLang now supports <strong>Profile a server with HTTP API endpoints</strong>, which allows flexible control of PyTorch Profiler. However, the “Profile with Nsys” documentation only describes configuring a delay and duration. This implies profiling must be enabled at server startup and the profiling window must be predetermined, which is not flexible enough for practical debugging.</p>
+<p>This article covers three parts:</p>
+<ul>
+<li><strong>PyTorch Profiler</strong>: how to profile a server via HTTP API endpoints (as described in SGLang docs).</li>
+<li><strong>Nsight Systems (nsys)</strong>: an interactive profiling approach that differs from the documented delay/duration method.</li>
+<li><strong>Multi-rank analysis</strong>: tips for conveniently comparing per-rank profiling results in Nsight Systems or Perfetto.</li>
+</ul>
+<h2 id="2-interactive-profiling-using-http-api-endpoints">2. Interactive Profiling using HTTP API endpoints</h2>
+<p>This section mainly references relevant content from the SGLang docs.</p>
+<p>SGLang provides two sets of HTTP APIs during server runtime: <code>/start_profile</code> and <code>/end_profile</code>. This allows us to start capturing traces at any time after the server is up and stop at an appropriate moment without restarting the service or pre-setting a profiling time window, thus more accurately aligning with specific workload patterns.</p>
+<h3 id="21-endpoint-introduction">2.1 Endpoint Introduction</h3>
+<p><strong>start_profile</strong></p>
+<p>Enables profiling on the SGLang server. We can control information such as the output file location, the starting step, the number of steps to capture, and the activities to be profiled.</p>
+<pre><code class="language-bash"># Wait 5 steps (warmup), then profile for 10 steps 
+curl -X POST http://127.0.0.1:30000/start_profile \   
+  -H &quot;Content-Type: application/json&quot; \   
+  -d '{     
+    &quot;output_dir&quot;: &quot;/tmp/profiles&quot;,
+    &quot;start_step&quot;: 5,
+    &quot;num_steps&quot;: 10,
+    &quot;activities&quot;: [&quot;CPU&quot;, &quot;GPU&quot;, &quot;MEM&quot;],
+    &quot;merge_profiles&quot;: true,
+    &quot;profile_prefix&quot;: &quot;my_experiment_001&quot;
+    }' 
+</code></pre>
+<p>Introduction to key parameters (all optional):</p>
+<ul>
+<li>
+<p><code>output_dir</code>: Determines the output folder. If not set, it defaults to the <code>SGLANG_TORCH_PROFILER_DIR</code> environment variable or <code>/tmp</code>.</p>
+</li>
+<li>
+<p><code>start_step</code>: When to start profiling; used to skip the warm-up phase.</p>
+</li>
+<li>
+<p><code>num_steps</code>: The number of steps to profile. If not set, profiling will continue indefinitely.</p>
+</li>
+<li>
+<p><code>activities</code>: The activities to profile. Includes CPU, GPU, MEM, and RPD. The default is CPU and GPU.</p>
+</li>
+<li>
+<p><code>merge_profiles</code>: Automatically merges analysis results from all ranks. Default is <code>false</code>.</p>
+</li>
+<li>
+<p><code>profile_prefix</code>: Adds a specified prefix to the trace file for distinction.</p>
+</li>
+</ul>
+<p>Generated trace file naming format:</p>
+<p><code>{$profile_prefix}-{profile_id}-TP-{tp}-DP-{dp}-PP-{pp}-EP-{ep}.trace.json.gz</code></p>
+<p>Merged file format:</p>
+<p><code>merged-{profile_id}.trace.json.gz</code></p>
+<p>Full parameters:</p>
+<pre><code class="language-python"># sglang/python/sglang/srt/managers /io_struct.py
+
+class ProfileReqInput(BaseReq):
+    # The output directory
+    output_dir: Optional[str] = None
+    # Specify the steps to start the profiling
+    start_step: Optional[int] = None
+    # If set, it profile as many as this number of steps.
+    # If it is set, profiling is automatically stopped after this step, and
+    # the caller doesn't need to run stop_profile.
+    num_steps: Optional[int] = None
+    # The activities to record. The choices are [&quot;CPU&quot;, &quot;GPU&quot;, &quot;MEM&quot;, &quot;RPD&quot;]
+    activities: Optional[List[str]] = None
+    # Whether profile by stages (e.g., prefill and decode) separately
+    profile_by_stage: bool = False
+    # Whether to record source information (file and line number) for the ops.
+    with_stack: Optional[bool] = None
+    # Whether to save information about operator’s input shapes.
+    record_shapes: Optional[bool] = None
+    # Merge profiles from all ranks into a single trace
+    merge_profiles: bool = False
+    # The prefix of the profile filenames
+    profile_prefix: Optional[str] = None
+    # Only profile these stages and ignore others
+    profile_stages: Optional[List[str]] = None
+</code></pre>
+<p><strong>/end_profile</strong></p>
+<p>Manually stops the server profile. If num_steps was already set in start_profile, the server will automatically stop after completing the specified steps.</p>
+<pre><code class="language-bash">curl -X POST http://127.0.0.1:30000/end_profile
+</code></pre>
+<h3 id="22-two-typical-workflows">2.2 Two Typical Workflows</h3>
+<p>Assume we have already launched the server.</p>
+<p><strong>a. Fixed Window Capture</strong></p>
+<p>If you only want to capture trace information for 10 steps, send start_profile in another terminal:</p>
+<pre><code class="language-bash">curl -X POST http://127.0.0.1:30000/start_profile \
+  -H &quot;Content-Type: application/json&quot; \
+  -d '{ 
+    &quot;num_steps&quot;: 10 
+  }' 
+</code></pre>
+<p><strong>b. Flexible Control of Profiling Period</strong></p>
+<p>Manually send start_profile and end_profile in another terminal:</p>
+<pre><code class="language-bash">curl -X POST http://127.0.0.1:30000/start_profile  
+
+# serving...
+
+curl -X POST http://127.0.0.1:30000/end_profile 
+</code></pre>
+<h2 id="3-interactive-profiling-based-on-nsys">3. Interactive Profiling based on Nsys</h2>
+<h3 id="31-non-interactive-profiling">3.1 Non-interactive Profiling</h3>
+<p>In this section, the SGLang Docs only introduce profiling the SGLang server by setting the delay and duration parameters. This means we need to configure the start time and duration (in seconds) of the profile when the server starts.</p>
+<pre><code class="language-bash"># launch the server, set the delay and duration times according to needs
+# after the duration time has been used up, server will be killed by nsys
+
+nsys profile --trace-fork-before-exec=true --cuda-graph-trace=node \
+    -o sglang.out --delay 60 --duration 70 \
+    python3 -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B-Instruct --disable-radix-cache
+
+# client
+python3 -m sglang.bench_serving --backend sglang \
+    --num-prompts 1000 --dataset-name random \
+    --random-input 1024 --random-output 512
+</code></pre>
+<p>Where:  </p>
+<ul>
+<li>
+<p><code>cuda-graph-trace</code> controls the granularity of CUDA graph collection, determining whether to treat each CUDA graph as a whole or expand it into a set of nodes.</p>
+</li>
+<li>
+<p><code>delay</code> controls when profiling starts.</p>
+</li>
+<li>
+<p><code>duration</code> controls how long profiling lasts.</p>
+</li>
+</ul>
+<p>Finally, the user needs to find the profile session-id via:</p>
+<pre><code class="language-bash">nsys sessions list
+</code></pre>
+<p>And then manually kill the profiler:</p>
+<pre><code class="language-bash">nsys stop --session=profile-XXXXX
+</code></pre>
+<h3 id="32-interactive-profiling-based-on-nsys-start-and-nsys-stop">3.2 Interactive Profiling based on nsys start and nsys stop</h3>
+<p>When launching the SGLang server, add the extra parameter start-later to nsys profile. This will prevent nsys profile from starting immediately.</p>
+<pre><code class="language-bash">nsys profile --trace-fork-before-exec=true --cuda-graph-trace=node \
+    -o sglang.out --start-later \
+    python3 -m sglang.launch_server --model-path meta-llama/Llama-3.1-8B-Instruct --disable-radix-cache 
+</code></pre>
+<p>In another terminal, we can view the running nsys profile session ID via nsys sessions list.</p>
+<pre><code class="language-bash">              ID         TIME                       STATE LAUNCH NAME
+        10345602        00:41           DelayedCollection      1 profile-345586
+</code></pre>
+<p>When you want to profile, use nsys start:</p>
+<pre><code class="language-bash">nsys start --session=10345602
+
+# we can see
+              ID         TIME                       STATE LAUNCH NAME
+        10345602        02:35                  Collection      1 profile-345586 
+</code></pre>
+<p>When you want to end profiling, use nsys stop:</p>
+<pre><code class="language-bash">nsys stop --session=10345602
+</code></pre>
+<p>An <code>nsys-rep</code> file will be generated in the current directory. At this point, the server will not stop running, and we can continue to <code>start</code> and <code>stop</code> to capture traces of the server over multiple time periods.</p>
+<h2 id="4-tips-for-visualizing-multi-rank-traces">4. Tips for Visualizing Multi-Rank Traces</h2>
+<p>After capturing traces from multiple ranks, how can we conveniently observe and compare the execution time of kernels across different ranks?</p>
+<p>Currently, one answer is: Whether using Perfetto or Nsight Systems, you can pin the key rows (pin row). Afterward, you can conveniently compare them while zooming in and out of the entire visualization graph. Of course, if there are better methods, corrections and suggestions are welcome.</p>
+<h2 id="references">References</h2>
+<p>https://github.com/sgl-project/sglang/issues/9638</p>
+<p>https://docs.sglang.io/developer_guide/benchmark_and_profiling.html</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/interactive-profiling/Interactive_Profiling_en.md">sglang/interactive-profiling/Interactive_Profiling_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

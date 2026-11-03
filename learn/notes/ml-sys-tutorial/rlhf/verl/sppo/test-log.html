@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test log</title><link rel="stylesheet" href="../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../index.html">Learn</a><div class="links"><a href="../../../../../notes.html" class="here">Notes library</a><a href="../../../../../index.html">All chapters</a><a href="../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../notes.html">Notes library</a> › <a href="../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/sppo/test-log.md</div>
+<article class="note"><h1 id="test-log">Test log</h1>
+<ol>
+<li>构建 container container</li>
+</ol>
+<pre><code class="language-bash">docker run \
+ -it \
+ --shm-size 32g \
+ --gpus all \
+ -v {CACHE PATH}:/root/.cache \
+ --ipc=host \
+ --network=host \
+ --privileged \
+ --name verl_sppo \
+ lmsysorg/sglang:dev \
+ /bin/zsh
+</code></pre>
+<ol start="2">
+<li>安装 verl</li>
+</ol>
+<pre><code class="language-bash">mkdir -p /tmp
+chmod 1777 /tmp
+apt update
+apt install -y python3.10 python3.10-venv
+python3 -m ensurepip --upgrade
+sudo apt install tmux
+python3 -m venv ~/.python/sglang
+source ~/.python/sglang/bin/activate
+python3 -m pip install uv
+python3 -m uv pip install wheel
+python3 -m uv pip install packaging
+python3 -m uv pip install flash-attn --no-build-isolation --no-deps
+cd ~
+git clone https://github.com/yhyang201/verl.git &amp;&amp; cd verl
+git checkout sppo
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source &quot;$HOME/.cargo/env&quot;
+python3 -m uv pip install -e &quot;.[sglang]&quot;
+</code></pre>
+<ol start="3">
+<li>wandb login</li>
+</ol>
+<pre><code class="language-bash">wandb login
+</code></pre>
+<ol start="4">
+<li>Download dataset and model</li>
+</ol>
+<pre><code class="language-bash">python3 examples/data_preprocess/math_dataset.py --local_dir ~/data/math
+huggingface-cli download Qwen/Qwen2.5-7B-Instruct --local-dir $HOME/models/Qwen2.5-7B-Instruct
+</code></pre>
+<ol start="5">
+<li>run bash (tested on h20x4)</li>
+</ol>
+<pre><code class="language-bash">export CUDA_VISIBLE_DEVICES=0,1,2,3
+cd recipe/sppo
+bash run_qwen2.5-7b_rm.sh
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/sppo/test-log.md">rlhf/verl/sppo/test-log.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

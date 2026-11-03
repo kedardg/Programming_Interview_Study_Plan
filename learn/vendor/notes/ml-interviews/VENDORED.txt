@@ -1,0 +1,1 @@
+Vendored from https://github.com/alirezadir/Machine-Learning-Interviews (MIT, Alireza Dirafzoon). Markdown copied verbatim; rendered to learn/notes/ml-interviews/ by scripts/build_notes.py.
