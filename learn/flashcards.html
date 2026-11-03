@@ -29,7 +29,7 @@
 <nav class="topnav">
   <a class="home" href="index.html">Learn</a>
   <div class="links">
-    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="flashcards.html" class="here">Flashcards</a>
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="flashcards.html" class="here">Flashcards</a>
   </div>
   <div class="spacer"></div>
   <button class="theme-btn" id="themeBtn">◐ theme</button>
@@ -118,6 +118,22 @@ const DECKS = {
 ["Ring attention?","Shard the sequence across devices; KV blocks circulate around the ring so every query sees every key with overlap of compute and comms. Exact, enables million-token contexts."],
 ["Sliding-window attention trade?","O(n·w) cost; each layer sees w tokens but receptive field grows with depth. Pairs with a few global/full layers."],
 ["FlashAttention-2 vs 3 in one line each?","FA-2: better work partitioning/parallelism across warps. FA-3: Hopper async copies + warp specialization overlapping softmax and matmul."]
+],
+"Architectures": [
+["GPT-2 → Llama: name the five standard substitutions.","Post-norm LayerNorm→pre-norm RMSNorm, learned positions→RoPE, GeLU MLP→SwiGLU, MHA→GQA, and dropping all biases."],
+["Why do architecture changes get adopted at scale?","They fix a training-stability problem (pre-norm, QK-norm, softcapping) or an inference-cost problem (GQA, MLA, MoE) — rarely for small-scale benchmark wins."],
+["MoE in one line: what grows with E, what grows with k?","Total parameters (capacity) grow with expert count E; per-token FLOPs grow only with top-k active experts. DeepSeek-V3: 671B total, 37B active."],
+["What is a shared expert (DeepSeekMoE)?","One always-on expert handling common knowledge so the routed, fine-grained experts can specialize."],
+["Expert collapse — what is it and two fixes?","Router's rich-get-richer feedback starves most experts. Fixes: auxiliary load-balance loss (fights quality) or DeepSeek's aux-loss-free per-expert bias applied only to routing decisions."],
+["What does MoE cost at serving time?","Two all-to-alls per MoE layer (dispatch/combine) across expert-parallel GPUs, plus load-balancing (EPLB) and expert placement."],
+["Mamba's 'selective' in selective state space?","Transition/input gates depend on the current token, so the fixed-size state can choose what to write and forget — content-based addressing like attention."],
+["SSM vs attention: the fundamental memory trade?","Attention: O(n) growing cache, exact recall. SSM: O(1) state, constant decode cost, but lossy compression of the past — hence hybrids."],
+["Why did hybrids (Jamba, Nemotron-H, Kimi-Linear) win over pure SSMs?","A few full-attention layers restore exact recall/copying while SSM or linear-attention layers do cheap bulk mixing."],
+["Gemma-3's 5:1 pattern?","Five sliding-window (local) attention layers per one global full-attention layer — full attention rationed as a scarce resource; cache becomes mostly small ring buffers."],
+["Linear attention's trick?","Replace softmax(QKᵀ)V with φ(Q)(φ(K)ᵀV); associativity gives a running d×d state — recurrent at decode, parallel at training. Gated variants (GLA, Gated DeltaNet) fix forgetting."],
+["Multi-token prediction (DeepSeek-V3) buys what at inference?","The MTP head doubles as a built-in draft model for self-speculative decoding — high acceptance, no separate draft deployment."],
+["The LLaVA multimodal pattern?","Frozen-ish vision encoder (ViT/SigLIP) → small projector → image patches become tokens in the LLM's embedding space; fine-tune on interleaved data."],
+["What architectural shape has NOT changed since GPT-2?","Tokenizer+embeddings → repeated mixer+MLP blocks with residuals and norms → LM head. Components change; the shape persists."]
 ],
 "GPU": [
 ["GPU vs CPU design philosophy in one line?","CPU minimizes latency of one thread; GPU hides latency with tens of thousands of threads and spends transistors on ALUs, not caches."],

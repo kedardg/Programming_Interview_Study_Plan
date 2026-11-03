@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Architecture Evolution</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html" class="here">Architectures</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>LLM Architecture Evolution</h1>
+<p class="dim">Every architectural development since GPT-2 that survived contact with scale: what changed, why it won, and what it costs at inference time. This chapter assumes the <a href="transformers.html">transformer block</a> and <a href="attention.html">attention variants</a>; here we track how the whole organism evolved.</p>
+
+<h2 id="lineage">1. The dense lineage: GPT-2 → Llama 3 as a sequence of small wins</h2>
+<p>Strip away scale, and the modern dense LLM differs from GPT-2 (2019) by half a dozen targeted substitutions. None is dramatic alone; together they are the difference between a model that trains unstably at 1B and one that trains cleanly at 400B. The honest way to read this table is as a list of <em>fixes</em>, each motivated by a failure at larger scale:</p>
+<table class="cmp">
+<tr><th>Component</th><th>GPT-2 (2019)</th><th>Modern dense (Llama/Qwen era)</th><th>Why it changed</th></tr>
+<tr><td>Normalization</td><td>Post-norm LayerNorm</td><td><strong>Pre-norm RMSNorm</strong></td><td>Pre-norm keeps the residual stream an identity path → stable deep training; RMSNorm drops mean-centering and bias for the same quality, cheaper kernels</td></tr>
+<tr><td>Position</td><td>Learned absolute embeddings</td><td><strong>RoPE</strong></td><td>Relative by construction, no learned table, extends via YaRN/NTK scaling (see <a href="attention.html">Ch. 4</a>)</td></tr>
+<tr><td>MLP</td><td>4d GeLU</td><td><strong>SwiGLU</strong> (~8/3·d, gated)</td><td>Gating consistently wins at equal FLOPs (PaLM ablation); the ⅔ width keeps parameters matched</td></tr>
+<tr><td>Attention</td><td>MHA</td><td><strong>GQA</strong> (or MLA)</td><td>KV cache shrinks 8×+ — a pure serving win adopted into pretraining (Ch. 4, <a href="inference.html#kv-cache">Ch. 9</a>)</td></tr>
+<tr><td>Biases</td><td>Everywhere</td><td><strong>None</strong></td><td>No measurable quality loss, fewer parameters, simpler kernels</td></tr>
+<tr><td>Vocabulary</td><td>50K</td><td><strong>128K–256K</strong></td><td>Fewer tokens per text = less compute per document and longer effective context, at embedding-size cost</td></tr>
+<tr><td>Stability extras</td><td>—</td><td><strong>QK-norm, logit softcapping, z-loss</strong> (Gemma/Olmo lineage)</td><td>Tame attention-logit and output-logit blowups that only appear after ~10²³ FLOPs of training</td></tr>
+</table>
+<p>The meta-lesson: <strong>architecture changes get adopted when they fix a training-stability problem or an inference-cost problem</strong> — almost never because they raise benchmark scores at small scale. GQA and MLA entered pretraining purely because of the serving math you saw in the <a href="inference.html#kv-cache">KV-cache section</a>.</p>
+
+<div class="card">
+<h3>Interactive: the family tree of layer stacks</h3>
+<canvas id="stackViz" class="viz" width="900" height="340"></canvas>
+<div class="controls">
+  <label class="ctl">Model
+    <select id="stackModel">
+      <option value="gpt2">GPT-2 (dense, MHA)</option>
+      <option value="llama" selected>Llama-3 70B (dense, GQA)</option>
+      <option value="mixtral">Mixtral 8×7B (MoE every layer)</option>
+      <option value="dsv3">DeepSeek-V3 (MLA + fine-grained MoE + MTP)</option>
+      <option value="gemma">Gemma-3 style (5:1 sliding/full hybrid)</option>
+      <option value="jamba">Jamba/Nemotron-H style (Mamba–attention hybrid)</option>
+    </select>
+  </label>
+</div>
+<p class="caption">Each column of blocks is the model's repeating layer pattern (bottom = first layer). Color = block type: attention flavor, MLP vs MoE, or SSM. Switch models and watch the composition change — the industry's whole architectural history is visible as changes in this stacking pattern.</p>
+</div>
+
+<h2 id="moe">2. Mixture of Experts: paying for capacity, not per token</h2>
+<p>A dense model spends every parameter on every token. MoE breaks that coupling: replace the MLP with <em>E</em> expert MLPs and a tiny <strong>router</strong> that sends each token to its top-k experts. Total parameters grow with E (knowledge capacity); per-token FLOPs grow only with k (compute cost). DeepSeek-V3 is the canonical modern datapoint: <strong>671B total parameters, 37B active per token</strong> — GPT-4-class capacity at mid-size compute.</p>
+<p>The engineering is all in the routing:</p>
+<ul>
+<li><strong>Top-k softmax routing</strong>: router logits → pick k experts → weight their outputs by the (re-normalized) router probabilities. Mixtral uses top-2 of 8; DeepSeek top-8 of 256 <em>fine-grained</em> experts plus one always-on <strong>shared expert</strong> for common knowledge, so routed experts can specialize.</li>
+<li><strong>Load balancing</strong>: left alone, routers collapse onto a few favorite experts, starving the rest (dead experts) and overloading devices. Classic fix: an auxiliary balance loss pushing uniform usage — which fights quality. DeepSeek-V3's <strong>aux-loss-free balancing</strong> instead adjusts a per-expert bias only for <em>routing decisions</em>, leaving gradients clean.</li>
+<li><strong>The systems bill</strong>: experts live on different GPUs, so every MoE layer costs two all-to-alls (dispatch and combine) — the expert-parallelism animation in <a href="parallelism.html">Chapter 10</a>. Serving MoE well is why DeepEP/EPLB exist, and why the <a href="hardware.html">NKI Library</a> ships dedicated MoE kernels for both prefill (CTE) and decode (TKG).</li>
+</ul>
+
+<div class="card">
+<h3>Animation: top-k routing and expert collapse</h3>
+<canvas id="moeViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="moePlay">▶ Play</button>
+  <button class="btn secondary" id="moeReset">Reset</button>
+  <label class="ctl"><input type="checkbox" id="moeBal" checked> load balancing on</label>
+  <span class="dim" id="moeStats"></span>
+</div>
+<p class="caption">Tokens stream through a top-2-of-8 router. Bars show cumulative load per expert. Untick balancing and watch the rich-get-richer collapse: the router's slight initial preference compounds until two experts take nearly all traffic — the failure every MoE training recipe is designed to prevent.</p>
+</div>
+
+<h2 id="ssm">3. State-space models: Mamba and the case against the KV cache</h2>
+<p>Attention's superpower is also its bill: a cache that grows linearly with context and a decode step that must re-read all of it (<a href="inference.html#kv-cache">Ch. 9</a>). State-space models make the opposite trade: compress the entire past into a <strong>fixed-size recurrent state</strong>. Decode cost and memory are then <em>constant</em> in sequence length.</p>
+<p><strong>Mamba</strong>'s contribution (over earlier S4-style SSMs) is <em>selectivity</em>: the state-transition and input gates are functions of the current token, so the model can choose what to write into its state and what to forget — recovering some of attention's content-based addressing. <strong>Mamba-2 (SSD)</strong> then showed the selective scan can be computed with matmul-shaped primitives (semiseparable matrices), making it tensor-core friendly and revealing a formal duality with linear attention. Training parallelism comes from the <strong>associative scan</strong> — the same parallel-scan primitive you built in <a href="kernels.html">the kernels chapter</a>.</p>
+<p>The honest scorecard: SSMs win on long-context throughput and memory; pure SSMs lag attention on exact recall ("needle in a haystack", copying, in-context lookup) because a fixed state must lossily compress the past. Which is why the production answer became…</p>
+<p><strong>Hybrids.</strong> Interleave mostly-SSM (or linear-attention) layers with a few full-attention layers: the SSM layers carry cheap sequence mixing, the sparse attention layers provide exact recall. Jamba, Nemotron-H, Falcon-H1, Bamba, IBM Granite 4, and Kimi-Linear (hybrid with <strong>Gated DeltaNet</strong>-style linear attention) all follow this recipe — and you already met Gated DeltaNet, Mamba-2 SSD, and linear/selective scans as <em>kernels</em> in the NKI Library's experimental catalog: new architectures become real exactly when someone writes fast kernels for them.</p>
+
+<div class="card">
+<h3>Animation: KV cache vs recurrent state</h3>
+<canvas id="ssmViz" class="viz" width="900" height="280"></canvas>
+<div class="controls">
+  <button class="btn" id="ssmPlay">▶ Play</button>
+  <button class="btn secondary" id="ssmReset">Reset</button>
+</div>
+<p class="caption">Both models read the same stream. Top: attention appends every token's K,V — memory grows, and each step re-reads it all. Bottom: the SSM folds each token into a fixed-width state (watch it update in place — older contributions fade). Constant memory, constant step cost; the price is that faded information is gone unless a hybrid's attention layer can still see it.</p>
+</div>
+
+<h2 id="linear">4. Linear attention and sliding windows: cheaper mixers</h2>
+<p>Two other families attack the same O(n²)/O(n) costs without abandoning attention entirely:</p>
+<ul>
+<li><strong>Linear attention</strong> replaces softmax(QKᵀ)V with feature-mapped φ(Q)(φ(K)ᵀV), which associativity turns into a running (d×d) state — recurrent at decode, parallel at training. Modern gated variants (GLA, <strong>Gated DeltaNet</strong>, RWKV's line) add forgetting and delta-rule updates that fix the early versions' quality gap. Mamba-2's duality result means this family and SSMs are near-relatives.</li>
+<li><strong>Sliding-window attention</strong> keeps exact softmax attention but only over the last w tokens: O(n·w), cache capped at w. Alone it loses global context; in a <strong>hybrid ratio</strong> it's the current mainstream — Gemma 3 runs 5 local layers per 1 global, GPT-OSS alternates banded and dense layers, Mistral popularized w=4K windows. The global layers (often RoPE-less or long-RoPE) carry document-scale information; local layers do the bulk of mixing cheaply.</li>
+</ul>
+<p>Pattern to remember for interviews: <strong>full attention is becoming a scarce resource spent on a few layers</strong>, with cheap mixers (windows, SSMs, linear attention) doing everything else. Serving engines mirror this: a hybrid's cache is a mix of per-layer ring buffers (windows), constant states (SSM), and real paged KV (full layers).</p>
+
+<h2 id="mtp">5. Multi-token prediction and architecture-for-inference</h2>
+<p>DeepSeek-V3 trains an auxiliary <strong>MTP head</strong>: at each position the model also predicts the token after next, through a small extra transformer block. Training signal densifies (slightly better model), but the real payoff is serving: the MTP head is a built-in draft model for <a href="inference.html#speculative">speculative decoding</a> — self-speculation with high acceptance, no separate draft model to deploy. Medusa and EAGLE (Ch. 9) are the bolt-on versions of the same idea.</p>
+<p>This is the clearest example of a broader shift: <strong>architectures are now co-designed with their inference systems</strong>. MLA exists to shrink the cache; fine-grained MoE assumes expert parallelism; window/global ratios are tuned against paged-KV implementations; MTP assumes a speculative scheduler. Reading a model card now means reading its serving plan.</p>
+
+<h2 id="multimodal">6. Multimodal architectures</h2>
+<p>Three dominant patterns, in increasing order of integration:</p>
+<ul>
+<li><strong>Encoder + projector (LLaVA pattern)</strong>: a pretrained vision encoder (ViT/SigLIP) turns the image into patch embeddings; a small projector (MLP or cross-attention resampler) maps them into the LLM's embedding space as "image tokens"; the LLM is then fine-tuned on interleaved data. Cheap, modular, and still the workhorse — Llama-Vision, Qwen-VL, Pixtral, InternVL all descend from it. Resolution handling (tiling, any-res) decides most of the quality.</li>
+<li><strong>Early-fusion / native multimodal</strong>: one transformer consumes text, image (and audio/video) tokens from the start of pretraining — unified representation, better cross-modal reasoning, much more expensive to train. Gemini-class and GPT-4o-class models, and open models like Gemma 3n with audio (the plan's Axolotl list includes Voxtral for audio).</li>
+<li><strong>Generation-side</strong>: diffusion or autoregressive image decoders bolted to the same trunk — outside this plan's scope, but the serving implication isn't: image tokens are thousands of prefill tokens, making multimodal serving prefill-heavy (<a href="inference.html">Ch. 9</a>'s chunked prefill matters even more; see vLLM's multimodal-inputs doc from Step 12).</li>
+</ul>
+
+<h2 id="frontier">7. The current frontier, honestly labeled</h2>
+<ul>
+<li><strong>Reasoning-era training</strong> (o1/R1 lineage): long chain-of-thought via RL (GRPO, <a href="training.html">Ch. 11</a>). Architecturally mostly <em>unchanged</em> — the innovation is post-training + test-time compute, and the serving impact is huge: thousands-of-token "thinking" generations shift load decode-ward.</li>
+<li><strong>Text diffusion LMs</strong>: generate by iterative denoising of whole sequences instead of left-to-right AR — parallel token generation, very different serving profile. Real research momentum (and an Axolotl training feature), not yet a production default.</li>
+<li><strong>Sparse attention at pretraining time</strong>: DeepSeek's NSA and sparse indexers (an NKI experimental kernel) train the sparsity pattern instead of retrofitting it.</li>
+<li><strong>What hasn't changed</strong>: tokenizer+embedding → repeated mixer/MLP blocks with residuals and norms → LM head. Every winner since 2019 is still that shape. Bet on components changing, not the shape.</li>
+</ul>
+
+<h2 id="reading">8. Where to go deeper</h2>
+<ul>
+<li><a href="https://arxiv.org/abs/2405.04434">DeepSeek-V2</a> (MLA) and <a href="https://arxiv.org/html/2412.19437">DeepSeek-V3</a> (fine-grained MoE, aux-loss-free balancing, MTP) — the densest single sources of modern architecture ideas.</li>
+<li><a href="https://arxiv.org/abs/2312.00752">Mamba</a> and <a href="https://arxiv.org/abs/2405.21060">Mamba-2/SSD</a>; <a href="https://arxiv.org/abs/2502.11089">Native Sparse Attention</a>.</li>
+<li>Sebastian Raschka's annual <a href="https://magazine.sebastianraschka.com/p/the-big-llm-architecture-comparison">Big LLM Architecture Comparison</a> — the best running catalog of exactly this chapter.</li>
+<li>Steps 12, 14–16 of the <a href="../index.html">plan</a>; the <a href="flashcards.html">Architectures deck</a>; and the <a href="vendor/mm/index.html">mm visualizer</a>'s attention and MLP presets to see these shapes in 3D.</li>
+</ul>
+
+<div class="footer-nav"><a href="attention.html">← Attention</a><a href="gpu.html">GPU →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------- 1. layer stack family tree ----------
+(function(){
+const cv=document.getElementById('stackViz'),ctx=cv.getContext('2d');
+const TYPES={
+ mha:{c:'#5b8cff',l:'MHA attention'},gqa:{c:'#4cc3e5',l:'GQA attention'},mla:{c:'#b07cff',l:'MLA attention'},
+ swa:{c:'#38c6a0',l:'sliding-window attn'},mamba:{c:'#9ad24c',l:'Mamba (SSM)'},
+ mlp:{c:'#f2a65a',l:'dense MLP'},moe:{c:'#e5604c',l:'MoE (routed experts)'},mtp:{c:'#e5a0c3',l:'MTP head'}};
+const MODELS={
+ gpt2:{name:'GPT-2: 12-48 × [MHA + MLP], post-norm, learned pos',pat:['mha','mlp'],rep:6,extra:[]},
+ llama:{name:'Llama-3 70B: 80 × [GQA + SwiGLU MLP], RMSNorm, RoPE',pat:['gqa','mlp'],rep:6,extra:[]},
+ mixtral:{name:'Mixtral 8×7B: 32 × [GQA + top-2-of-8 MoE]',pat:['gqa','moe'],rep:6,extra:[]},
+ dsv3:{name:'DeepSeek-V3: 61 × [MLA + shared+256-expert MoE] + MTP head (first 3 layers dense)',pat:['mla','moe'],rep:5,extra:['mla','mlp','mtp']},
+ gemma:{name:'Gemma-3 style: 5 × [sliding-window + MLP] per 1 × [full attention + MLP]',pat:['swa','mlp','swa','mlp','swa','mlp','swa','mlp','swa','mlp','gqa','mlp'],rep:1,extra:[]},
+ jamba:{name:'Mamba–attention hybrid (Jamba/Nemotron-H): mostly SSM blocks, periodic attention, some MoE',pat:['mamba','mlp','mamba','mlp','mamba','mlp','gqa','moe'],rep:1,extra:['mamba','mlp']}};
+const sel=document.getElementById('stackModel');
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const m=MODELS[sel.value],dim=css('--text-dim'),txt=css('--text');
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText(m.name,24,26);
+  let blocks=[];for(let r=0;r<m.rep;r++)blocks=blocks.concat(m.pat);blocks=blocks.concat(m.extra);
+  const bw=150,bh=Math.min(20,(H-90)/blocks.length-3);
+  const x0=60,y0=H-34;
+  blocks.forEach((t,i)=>{
+    const y=y0-i*(bh+3);
+    ctx.fillStyle=TYPES[t].c;ctx.globalAlpha=t==='mtp'?0.9:0.85;
+    ctx.fillRect(x0,y-bh,bw,bh);ctx.globalAlpha=1;
+  });
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.save();
+  ctx.translate(40,y0-blocks.length*(bh+3)/2);ctx.rotate(-Math.PI/2);ctx.textAlign='center';
+  ctx.fillText('layers (bottom = first) — pattern repeats to full depth',0,0);ctx.restore();
+  // legend
+  const used=[...new Set(blocks)];let ly=60;
+  used.forEach(t=>{ctx.fillStyle=TYPES[t].c;ctx.fillRect(300,ly-10,14,14);ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText(TYPES[t].l,322,ly+1);ly+=24;});
+  // annotations
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  const notes={gpt2:'Every parameter touches every token. Cache: full MHA — the 1× baseline.',
+   llama:'Same shape, five fixes (RMSNorm, RoPE, SwiGLU, GQA, no biases). Cache: 8× smaller.',
+   mixtral:'MLP → 8 experts, top-2 active: 47B params, ~13B active/token.',
+   dsv3:'671B total / 37B active. MLA shrinks cache ~10×; MTP head drafts for free speculation.',
+   gemma:'Full attention is rationed: 1 global layer per 5 cheap local ones. Cache mostly ring buffers.',
+   jamba:'SSM layers: constant-size state. Few attention layers supply exact recall. Cache tiny.'};
+  wrap(ctx,notes[sel.value]||'',520,70,350,18);
+}
+function wrap(c,text,x,y,w,lh){const words=text.split(' ');let line='',yy=y;for(const wd of words){const t=line+wd+' ';if(c.measureText(t).width>w){c.fillText(line,x,yy);line=wd+' ';yy+=lh;}else line=t;}c.fillText(line,x,yy);}
+sel.onchange=draw;draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 2. MoE routing ----------
+(function(){
+const cv=document.getElementById('moeViz'),ctx=cv.getContext('2d');
+const E=8;let load,pref,t,timer=null;
+function init(){load=Array(E).fill(0);pref=Array(E).fill(0).map(()=>Math.random()*0.4+0.8);t=0;}
+function softmax(a){const m=Math.max(...a);const e=a.map(x=>Math.exp(x-m));const s=e.reduce((x,y)=>x+y,0);return e.map(x=>x/s);}
+function tick(){
+  t++;
+  const bal=document.getElementById('moeBal').checked;
+  // router logits: expert preference + noise; rich-get-richer: preference drifts toward loaded experts when unbalanced
+  const logits=pref.map((p,i)=>p+(bal?0:load[i]*0.015)+Math.random()*0.5);
+  const probs=softmax(logits);
+  // bias correction when balancing: subtract overload bias
+  const avg=load.reduce((a,b)=>a+b,0)/E;
+  const adj=bal?probs.map((p,i)=>p*Math.exp(-(load[i]-avg)*0.05)):probs;
+  const idx=[...Array(E).keys()].sort((a,b)=>adj[b]-adj[a]).slice(0,2);
+  idx.forEach(i=>load[i]++);
+  draw(idx);
+  if(t>=240)stop();
+}
+function draw(active){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent');
+  ctx.font='12px sans-serif';
+  // token + router
+  ctx.fillStyle=acc;ctx.beginPath();ctx.arc(70,H/2,16,0,7);ctx.fill();
+  ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText('tok',70,H/2+4);
+  ctx.fillStyle=css('--bg-card');ctx.strokeStyle=css('--border');
+  ctx.fillRect(140,H/2-30,90,60);ctx.strokeRect(140,H/2-30,90,60);
+  ctx.fillStyle=txt;ctx.fillText('router',185,H/2-6);ctx.fillStyle=dim;ctx.fillText('top-2 of 8',185,H/2+12);
+  // experts + bars
+  const maxL=Math.max(1,...load);
+  for(let i=0;i<E;i++){
+    const y=28+i*32;
+    const isA=active&&active.includes(i);
+    ctx.strokeStyle=isA?acc:css('--border');ctx.lineWidth=isA?2.5:1;
+    if(isA){ctx.beginPath();ctx.moveTo(230,H/2);ctx.lineTo(330,y+10);ctx.stroke();}
+    ctx.fillStyle=isA?acc:css('--bg-card');
+    ctx.fillRect(330,y,90,22);ctx.strokeRect(330,y,90,22);
+    ctx.fillStyle=isA?'#fff':txt;ctx.textAlign='center';ctx.fillText('expert '+i,375,y+15);
+    const w=(load[i]/maxL)*380;
+    ctx.fillStyle=load[i]/Math.max(1,t*2/E)>1.8?'#e5604c':css('--accent2');
+    ctx.fillRect(440,y+3,Math.max(2,w),16);
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText(load[i],448+Math.max(2,w),y+16);
+  }
+  const tot=load.reduce((a,b)=>a+b,0);
+  const top2=[...load].sort((a,b)=>b-a).slice(0,2).reduce((a,b)=>a+b,0);
+  document.getElementById('moeStats').textContent=t+' tokens routed — busiest 2 experts carry '+(tot?Math.round(100*top2/tot):0)+'% of load';
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('moePlay').textContent='▶ Play';}}
+document.getElementById('moePlay').onclick=function(){if(timer){stop();return;}if(t>=240)init();this.textContent='⏸ Pause';timer=setInterval(tick,60);};
+document.getElementById('moeReset').onclick=()=>{stop();init();draw();};
+init();draw();
+new MutationObserver(()=>draw()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3. KV cache vs SSM state ----------
+(function(){
+const cv=document.getElementById('ssmViz'),ctx=cv.getContext('2d');
+const N=22;let t=0,timer=null,state=Array(8).fill(0);
+function tick(){if(t<N){t++;
+  // fold token into state: decaying update
+  for(let i=0;i<8;i++)state[i]=state[i]*0.82+ (Math.sin((t*13+i*7))*0.5+0.5)*0.35;
+  draw();}else stop();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  ctx.fillText('Attention: KV cache after '+t+' tokens — '+t+' entries, each decode step reads all of them',24,30);
+  for(let i=0;i<t;i++){
+    ctx.fillStyle=acc;ctx.globalAlpha=0.9;
+    ctx.fillRect(24+i*38,42,32,26);ctx.globalAlpha=1;
+    ctx.fillStyle='#fff';ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText('K,V',40+i*38,59);
+  }
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('SSM (Mamba): fixed state after '+t+' tokens — same 8 slots, updated in place',24,140);
+  for(let i=0;i<8;i++){
+    const v=Math.min(1,state[i]);
+    ctx.fillStyle=acc2;ctx.globalAlpha=0.25+v*0.75;
+    ctx.fillRect(24+i*52,152,44,34);ctx.globalAlpha=1;
+    ctx.strokeStyle=css('--border');ctx.strokeRect(24+i*52,152,44,34);
+    ctx.fillStyle='#fff';ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText(v.toFixed(2),46+i*52,173);
+  }
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText('memory: attention grows O(n) and decode reads O(n); SSM stays O(1) both ways — but old information fades unless a hybrid attention layer retains it',24,H-20);
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('ssmPlay').textContent='▶ Play';}}
+document.getElementById('ssmPlay').onclick=function(){if(timer){stop();return;}if(t>=N){t=0;state=Array(8).fill(0);}this.textContent='⏸ Pause';timer=setInterval(tick,420);};
+document.getElementById('ssmReset').onclick=()=>{stop();t=0;state=Array(8).fill(0);draw();};
+draw();
+new MutationObserver(()=>draw()).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>
