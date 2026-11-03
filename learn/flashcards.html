@@ -108,6 +108,10 @@ const DECKS = {
 ["GPT-2 → Llama-3: name three architectural changes.","LayerNorm→RMSNorm (pre-norm), learned positions→RoPE, GeLU MLP→SwiGLU, MHA→GQA, no biases."]
 ],
 "Attention": [
+["Latent Sparse Attention (LSA) in one line?","Cluster keys hierarchically in a learned latent space; each query scores cluster centroids, then attends only to the chosen buckets' keys plus a sink and local window — the attention kernel is unchanged, only key selection changes (Prefrontal AI, 2026)."],
+["D-LSA vs N-LSA?","D-LSA distills an indexer onto a pretrained model (flat, tree, or training-free PCA map); N-LSA trains natively on next-token loss, matches full attention, trains ~1.6× faster per layer at 128k."],
+["In hybrid models, what does the KV cache carry vs the recurrent state?","Exact retrieval of specific items lives in the attention KV cache (64–98% of accuracy through it alone, ~0 with recurrent state only); the recurrent state carries language, style and persona (arXiv 2609.04434)."],
+
 ["Attention formula with shapes (single head)?","softmax(QKᵀ/√d)V, Q:(n×d) K:(n×d) V:(n×d) → scores (n×n) → output (n×d). The n×n is the memory villain."],
 ["Why multiple heads instead of one wide head?","Different heads learn different relations (syntax, copying, position) in different subspaces; concatenation recombines them."],
 ["GQA in one line, and its cache saving?","Groups of query heads share K/V heads: cache shrinks by n_heads/n_kv (e.g. 64→8 = 8×) with minimal quality loss."],
@@ -120,6 +124,10 @@ const DECKS = {
 ["FlashAttention-2 vs 3 in one line each?","FA-2: better work partitioning/parallelism across warps. FA-3: Hopper async copies + warp specialization overlapping softmax and matmul."]
 ],
 "Architectures": [
+["CLM vs MLM vs prefix-LM?","Causal LM: left-to-right next-token, incremental decoding for free (GPT lineage). Masked LM: bidirectional, great encoders/embeddings, awkward generation (BERT). Prefix/encoder-decoder (T5, UL2): bidirectional prefix + causal target."],
+["Masked diffusion LMs vs continuous diffusion LMs?","Masked/discrete (LLaDA, Mercury, Gemini Diffusion): iteratively unmask tokens in parallel, a weighted MLM over mask ratios. Continuous (Diffusion-LM, CDCD): diffuse in embedding space, then round back to tokens — rounding is the hard part."],
+["System 1 vs System 2 models?","System 1: one forward pass per token, pattern completion. System 2: deliberate test-time compute — CoT, self-consistency, search, and RLVR-trained reasoning models with thinking budgets; System-2 distillation compiles it back into fast behavior."],
+
 ["GPT-2 → Llama: name the five standard substitutions.","Post-norm LayerNorm→pre-norm RMSNorm, learned positions→RoPE, GeLU MLP→SwiGLU, MHA→GQA, and dropping all biases."],
 ["Why do architecture changes get adopted at scale?","They fix a training-stability problem (pre-norm, QK-norm, softcapping) or an inference-cost problem (GQA, MLA, MoE) — rarely for small-scale benchmark wins."],
 ["MoE in one line: what grows with E, what grows with k?","Total parameters (capacity) grow with expert count E; per-token FLOPs grow only with top-k active experts. DeepSeek-V3: 671B total, 37B active."],
@@ -149,6 +157,12 @@ const DECKS = {
 ["What makes full-duplex speech-to-speech hard?","Latency budget ~200ms: needs streaming audio encoders, interleaved audio/text tokens, and generating while listening (Moshi-style) rather than STT→LLM→TTS pipelines."]
 ],
 "RL & Robotics": [
+["Monte Carlo vs TD(0) value estimation?","MC averages full returns: unbiased, high variance, needs episode ends. TD(0) bootstraps on r + γV(s′): biased, low variance, learns online. Sutton & Barto's random walk shows TD converging faster at good α."],
+["SARSA vs Q-learning?","SARSA (on-policy) updates toward Q(s′, a′) for the action actually taken; Q-learning (off-policy) toward max_a Q(s′, a). On the cliff walk SARSA learns the safe path, Q-learning the optimal risky one."],
+["The deadly triad?","Bootstrapping + off-policy learning + function approximation can diverge; DQN's replay buffer and target network tame it."],
+["Why does DPO avoid a reward model?","Under a KL-regularized objective with a Bradley-Terry preference model the optimal policy has a closed form, so preferences can be fit directly as a classification loss on (chosen, rejected) pairs with strength β."],
+["RLHF as a bandit?","One step, terminal reward, no state transitions — contextual bandit math; that's why PPO/GRPO for LLMs need no value bootstrapping across time."],
+
 ["An MDP in one line?","(S, A, P, R, γ): states, actions, transition dynamics, reward, discount. Goal: a policy maximizing expected discounted return."],
 ["Bellman optimality for Q?","Q*(s,a) = E[r + γ max_a' Q*(s',a')]. Q-learning bootstraps toward this target from samples — off-policy."],
 ["Policy gradient theorem, intuitively?","∇J = E[∇log π(a|s) · A(s,a)]: push up log-probs of actions with positive advantage, down for negative. REINFORCE uses returns; actor-critic uses a learned baseline."],

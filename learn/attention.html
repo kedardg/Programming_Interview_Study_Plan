@@ -121,15 +121,54 @@
 
 <p><strong>Sparse attention</strong> attacks n² itself. <em>MInference</em> observes that long-context prefill attention is dominated by a few recurring patterns per head (A-shapes, vertical-slash bands, block-sparse blobs), classifies each head offline, and computes only the pattern — up to ~10× faster prefill at 1M tokens on existing models, no retraining. <em>Native Sparse Attention (NSA)</em> instead <em>trains</em> the model sparse: each query reads compressed block summaries, a selected set of fine blocks, and a sliding window, with hardware-aligned block sizes — so the sparsity is learned end-to-end rather than guessed post hoc. <strong>Sliding-window attention</strong> (Mistral) is the degenerate-but-effective case: attend only to the last w tokens; stacked layers still propagate information w tokens per layer, like a CNN's growing receptive field.</p>
 
-<h2 id="serving">7. Attention kernels in serving engines</h2>
+
+<h2 id="lsa">7. Sparse attention at ultra-long context: Latent Sparse Attention, and what attention vs recurrence actually carries in hybrids</h2>
+<p>Section 6 ended with three ways to spend less than n² — pattern-based sparsity (MInference), trained block sparsity (NSA), and plain sliding windows. Production models in 2025–26 converged on a fourth: a learned <strong>indexer</strong> that scores past tokens cheaply and lets each query attend only to its top-k (DeepSeek Sparse Attention and its relatives; see the <a href="architectures.html#recent">developments table</a>). The indexer is the new bottleneck: scoring every past key is still linear per query, which at 10 million tokens is a lot of linear. <strong>Latent Sparse Attention (LSA)</strong>, from Prefrontal AI (<a href="https://arxiv.org/abs/2610.42147">arXiv 2610.42147</a>, <a href="https://github.com/Prefrontal-AI/latent-sparse-attention">code, Apache-2.0</a>), attacks exactly that step: don't score keys, score <em>clusters</em> of keys.</p>
+<p>The mechanism is an approximate-nearest-neighbor index in the spirit of vector databases, built into the attention layer. Keys are projected into a learned latent space and clustered hierarchically into buckets; each bucket keeps a centroid. A query scores the centroids (hundreds or thousands of them, not millions of keys), picks the top buckets, and attends to the keys inside them — plus two fixed companions: the <em>attention sink</em> (the first tokens, which softmax attention leans on) and a <em>local sliding window</em> for recency. Everything downstream is untouched: the FlashAttention-style kernel receives a shorter list of keys and runs as usual. <strong>LSA only decides which keys are read.</strong> That is the deployment-critical property — it slots into an engine as a key-selection policy, not as a new kernel to tune per GPU generation.</p>
+<p>Two ways to get such an index:</p>
+<ul>
+<li><strong>D-LSA (Distilled)</strong> retrofits a pre-trained model by distilling the model's own indexer into the latent clustering. It comes in a flat-search variant (score all centroids), a tree-search variant (two-level centroids: score coarse groups, then the fine buckets inside the winners), and a training-free variant that uses a PCA map of the key space instead of a learned one. Reported results: on GLM-5.3-Flash at 10 million tokens, one attention layer runs 22.7× faster in prefill and 4.6× faster in decode than the model's <em>own</em> DeepSeek-style sparse attention; on Qwen3.8-27B it is 72.4× (prefill) and 42.5× (decode) faster than full attention, with RULER accuracy at 4k/32k around 0.97 — matching the paper's numbers in a clean reproduction.</li>
+<li><strong>N-LSA (Native)</strong> trains the model from scratch with LSA in place, on the next-token loss alone (no auxiliary indexer loss). It matches full-attention accuracy, and training is 1.6× faster per layer at 128k tokens — sparsity paying off during pretraining, not only at inference.</li>
+</ul>
+<p>The systems view connects back to <a href="inference.html">Chapter 11</a>: attention cost at long context splits into <em>index cost</em> (find the keys) and <em>attention cost</em> (read them). Windows and sinks make the attention term bounded; DSA-style indexers make it bounded but leave a linear index term; LSA makes the index term scale with the number of buckets, which is why its speedups grow with context length. The engineering details are telling, too: LSA ships as an SGLang plugin on top of an SGLang fork that adds the context parallelism a 10M-token run needs; key selection for prefill happens on the host, so prefill CUDA graphs are disabled while decode stays graph-captured — a reminder that "subquadratic" is bought with scheduler and runtime work, not just math. Compare the <a href="gallery.html">Gallery</a> cards for GLM-5.3-Flash and Qwen3.8-27B to see the layer mixes these results were measured on.</p>
+
+<div class="card">
+<h3>Interactive: how LSA chooses which keys a query reads</h3>
+<canvas id="lsaViz" class="viz" width="900" height="380"></canvas>
+<div class="controls">
+  <button class="btn" id="lsaNewQ">New query</button>
+  <label class="ctl">buckets <input type="range" id="lsaB" min="4" max="24" value="10"> <span id="lsaBLabel">10</span></label>
+  <label class="ctl">top-k buckets <input type="range" id="lsaK" min="1" max="6" value="2"> <span id="lsaKLabel">2</span></label>
+  <label class="ctl"><input type="checkbox" id="lsaTree"> tree search (two levels)</label>
+  <span class="dim" id="lsaStats"></span>
+</div>
+<p class="caption">The plane is the learned latent key space: 200 past keys (dots), clustered into buckets with centroids (rings). The query (star) scores only the centroids, opens the top-k buckets (highlighted), and reads their keys plus the sink tokens (left edge) and the local window (most recent keys, right edge). The counter compares keys read with the n that full attention would read; drag the bucket and top-k sliders to see the index-cost/recall trade. Tree search groups buckets under coarse super-centroids so the query scores even fewer things first.</p>
+</div>
+
+<h3>What attention recalls and recurrence controls</h3>
+<p>Hybrids (Chapter 5's Gated-DeltaNet and Mamba mixes) raise a sharper question than "how sparse can attention be": what does each mixer actually <em>carry</em>? <a href="https://arxiv.org/abs/2609.04434">"What Attention Recalls and Recurrence Controls in Hybrid Language Models"</a> (arXiv 2609.04434) probes this on models including Qwen3.5-27B by ablating state at inference time. The reported finding is clean: <strong>exact retrieval of specific items depends on the attention KV cache</strong> — with only the KV cache intact, retrieval survives at 64–98% of full accuracy; with only the recurrent state, it collapses to zero — while <strong>the recurrent state carries output language, style and persona</strong>. In other words, the few full-attention layers are the model's address book and the recurrent layers are its disposition. A companion line of work on <a href="https://arxiv.org/abs/2609.25053">cross-model state transfer</a> (arXiv 2609.25053) exploits the same split: a hybrid "receiver" model consumes another model's recurrent state through a small residual correction while both models stay frozen, because that state encodes transferable context rather than exact indices.</p>
+<p><strong>Crystallized Attention: Fixed-State Carriers and Exact Index Correction for the Full-Attention Heads of a 27B Hybrid Language Model</strong> (<a href="https://www.researchgate.net/publication/414829237_Crystallized_Attention_Fixed-State_Carriers_and_Exact_Index_Correction_for_the_Full-Attention_Heads_of_a_27B_Hybrid_Language_Model">ResearchGate, 2026</a>) sits exactly at this seam. <em>Title-level summary — the paper itself was not accessible when this page was written, so what follows is inference from its title in the light of the two results above, not a reading of its method or numbers.</em> The title indicates giving the full-attention heads of a 27B hybrid a <em>fixed-size state</em> ("fixed-state carriers", the property recurrent layers already have, which caps memory per token) while adding an <em>exact index-correction</em> mechanism so the precise positional and content lookups that only true attention provides — the 64–98% of exact recall that collapses without a KV cache — are preserved. If that reading is right, it is an attempt at constant-memory heads without the recall cliff, which would make a hybrid almost entirely constant-memory. What is known: the title, venue, and the two findings it evidently responds to. What is inferred: the mechanism and whether the recall is fully exact. Read the paper and check both before quoting it.</p>
+<table class="cmp">
+<tr><th>Mixer</th><th>Memory per token</th><th>Index cost per query</th><th>Exact recall</th><th>Training needed</th></tr>
+<tr><td>Full attention</td><td>Full K,V (grows O(n))</td><td>None — reads all n keys (O(n) attention)</td><td>Yes</td><td>None (the baseline)</td></tr>
+<tr><td>Sliding window (SWA)</td><td>Capped at w</td><td>None</td><td>Only within w</td><td>Pretrain with window (or fine-tune)</td></tr>
+<tr><td>DSA-style indexer (top-k)</td><td>Full K,V kept</td><td>O(n) cheap scores, then top-k attention</td><td>High (misses when indexer errs)</td><td>Train/distill the indexer</td></tr>
+<tr><td>Latent Sparse Attention</td><td>Full K,V kept + centroids</td><td>O(buckets) [+ tree levels], then top-k buckets</td><td>High (≈0.97 RULER reported)</td><td>D-LSA: distill (or PCA, training-free); N-LSA: pretrain</td></tr>
+<tr><td>Fixed-state recurrent (DeltaNet/Mamba)</td><td>Constant</td><td>None</td><td>Collapses to ~0 alone (2609.04434)</td><td>Pretrain</td></tr>
+<tr><td>"Crystallized" heads (title-level)</td><td>Constant (fixed-state carriers)</td><td>Index correction step (details unknown)</td><td>Claimed preserved via exact index correction (unverified here)</td><td>Unknown</td></tr>
+</table>
+
+<h2 id="serving">8. Attention kernels in serving engines</h2>
 <p>Serving adds one more twist: the KV cache is <a href="inference.html#paged">paged</a>, so K and V are not even contiguous — kernels must gather blocks through a block table. <strong>FlashInfer</strong> is the library built for this regime: paged and ragged KV layouts, prefill/decode/append variants, shared-prefix batch kernels, and JIT-tuned schedules, used inside vLLM and SGLang. During decode there is no parallelism over query length (one token), so these kernels split work across the <em>KV length</em> instead (FlashDecoding-style), merging partial results with — once again — the online softmax. One idea, four scales: tile, thread block, device ring, serving batch.</p>
 
-<h2 id="reading">8. Where to go deeper</h2>
+<h2 id="reading">9. Where to go deeper</h2>
 <ul>
 <li><a href="https://arxiv.org/abs/2205.14135">FlashAttention</a>, <a href="https://arxiv.org/abs/2307.08691">FA-2</a>, <a href="https://arxiv.org/abs/2407.08608">FA-3</a> — read them in order; each is a lesson in hardware-algorithm co-design (Step 12).</li>
 <li><a href="https://arxiv.org/abs/1805.02867">Online normalizer calculation for softmax</a> — the Week 5 kernel you build yourself.</li>
 <li><a href="https://arxiv.org/abs/2305.13245">GQA</a> and <a href="https://arxiv.org/abs/2405.04434">DeepSeek-V2 (MLA)</a> — the cache-variant papers (Step 14).</li>
 <li><a href="https://arxiv.org/abs/2310.01889">Ring Attention</a>, <a href="https://arxiv.org/abs/2407.02490">MInference</a>, <a href="https://arxiv.org/abs/2502.11089">NSA</a> — long context (Steps 12, 15).</li>
+<li><a href="https://arxiv.org/abs/2610.42147">Latent Sparse Attention</a> and its <a href="https://github.com/Prefrontal-AI/latent-sparse-attention">Apache-2.0 repo</a> (SGLang plugin, distillation and native training code, RULER harness) — the current frontier of ultra-long-context sparsity.</li>
+<li><a href="https://arxiv.org/abs/2609.04434">What Attention Recalls and Recurrence Controls in Hybrid LMs</a>, <a href="https://arxiv.org/abs/2609.25053">cross-model recurrent-state transfer</a>, and <a href="https://www.researchgate.net/publication/414829237_Crystallized_Attention_Fixed-State_Carriers_and_Exact_Index_Correction_for_the_Full-Attention_Heads_of_a_27B_Hybrid_Language_Model">Crystallized Attention</a> — what each mixer in a hybrid actually carries, and an attempt at constant-memory full-attention heads (read the last one yourself; this page only had its title).</li>
 <li>Then build it: a Triton flash-attention forward pass is the Week 9 project in the <a href="../index.html">3-month schedule</a>, and the <a href="flashcards.html">Attention deck</a> locks in the formulas.</li>
 </ul>
 
@@ -383,6 +422,61 @@ function draw(){
 document.getElementById('ringStep').onclick=()=>{if(step<P-1)step++;draw();};
 document.getElementById('ringReset').onclick=()=>{step=0;draw();};
 draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 7. Latent Sparse Attention ----------
+(function(){
+const cv=document.getElementById('lsaViz');if(!cv)return;const ctx=cv.getContext('2d');
+const N=200,SINK=4,WIN=12;let keys=[],q=null,B=10,K=2,tree=false,cents=[],assign=[],superC=[],superOf=[];
+function rnd(seed){let x=seed;return()=>{x=(x*1664525+1013904223)%4294967296;return x/4294967296;};}
+function gen(){const r=rnd(7);keys=[];const blobs=8;const bc=[];for(let b=0;b<blobs;b++)bc.push([80+r()*560,60+r()*230]);
+  for(let i=0;i<N;i++){const b=i%blobs;const c=bc[b];keys.push({x:c[0]+(r()-0.5)*110+(r()-0.5)*60,y:c[1]+(r()-0.5)*90,i});}}
+function kmeans(){const r=rnd(B*31+1);cents=[];for(let b=0;b<B;b++){const k=keys[Math.floor(r()*N)];cents.push({x:k.x,y:k.y});}
+  for(let it=0;it<12;it++){assign=keys.map(k=>{let bi=0,bd=1e18;cents.forEach((c,ci)=>{const d=(c.x-k.x)**2+(c.y-k.y)**2;if(d<bd){bd=d;bi=ci;}});return bi;});
+    const sum=cents.map(()=>({x:0,y:0,n:0}));keys.forEach((k,i)=>{const a=assign[i];sum[a].x+=k.x;sum[a].y+=k.y;sum[a].n++;});
+    cents=cents.map((c,ci)=>sum[ci].n?{x:sum[ci].x/sum[ci].n,y:sum[ci].y/sum[ci].n}:c);}
+  // tree: group centroids into ~sqrt(B) super-centroids
+  const S=Math.max(2,Math.round(Math.sqrt(B)));superC=[];for(let si=0;si<S;si++)superC.push({x:cents[si%B].x,y:cents[si%B].y});
+  for(let it=0;it<8;it++){superOf=cents.map(c=>{let bi=0,bd=1e18;superC.forEach((s,si)=>{const d=(s.x-c.x)**2+(s.y-c.y)**2;if(d<bd){bd=d;bi=si;}});return bi;});
+    const sum=superC.map(()=>({x:0,y:0,n:0}));cents.forEach((c,ci)=>{const a=superOf[ci];sum[a].x+=c.x;sum[a].y+=c.y;sum[a].n++;});
+    superC=superC.map((s,si)=>sum[si].n?{x:sum[si].x/sum[si].n,y:sum[si].y/sum[si].n}:s);}}
+function newQ(){q={x:80+Math.random()*560,y:60+Math.random()*230};draw();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),bd=css('--border');
+  const d2=(a,b)=>(a.x-b.x)**2+(a.y-b.y)**2;
+  // choose buckets
+  let candidates=[...Array(B).keys()];let scoredSupers=0;
+  if(tree){const order=[...Array(superC.length).keys()].sort((a,b)=>d2(superC[a],q)-d2(superC[b],q));const openSupers=order.slice(0,Math.max(1,Math.ceil(superC.length/2)));
+    candidates=candidates.filter(ci=>openSupers.includes(superOf[ci]));scoredSupers=superC.length;}
+  const picked=candidates.sort((a,b)=>d2(cents[a],q)-d2(cents[b],q)).slice(0,K);
+  const read=new Set();keys.forEach((k,i)=>{if(picked.includes(assign[i]))read.add(i);});
+  for(let i=0;i<SINK;i++)read.add(i);for(let i=N-WIN;i<N;i++)read.add(i);
+  // keys
+  keys.forEach((k,i)=>{const r=read.has(i);ctx.fillStyle=r?acc2:dim;ctx.globalAlpha=r?1:0.35;ctx.beginPath();ctx.arc(k.x,k.y,r?4:3,0,7);ctx.fill();ctx.globalAlpha=1;});
+  // sink / window markers along bottom strip
+  ctx.font='11px sans-serif';ctx.fillStyle=dim;ctx.textAlign='left';
+  ctx.fillText('sink tokens (first '+SINK+') and local window (last '+WIN+') are always read',20,H-12);
+  // centroids
+  cents.forEach((c,ci)=>{const on=picked.includes(ci);ctx.strokeStyle=on?acc:bd;ctx.lineWidth=on?3:1.5;ctx.beginPath();ctx.arc(c.x,c.y,on?16:11,0,7);ctx.stroke();
+    if(on){ctx.strokeStyle=acc;ctx.globalAlpha=0.5;ctx.beginPath();ctx.moveTo(q.x,q.y);ctx.lineTo(c.x,c.y);ctx.stroke();ctx.globalAlpha=1;}});
+  if(tree){superC.forEach(s=>{ctx.strokeStyle=warn;ctx.setLineDash([5,4]);ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(s.x,s.y,34,0,7);ctx.stroke();ctx.setLineDash([]);});}
+  // query star
+  ctx.fillStyle=warn;star(q.x,q.y,11);
+  // counters
+  const scored=(tree?scoredSupers+candidates.length:B);
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('full attention reads '+N+' keys; LSA scores '+scored+(tree?' (super-centroids + surviving centroids)':' centroids')+' and reads '+read.size+' keys',20,24);
+  document.getElementById('lsaStats').textContent='keys read: '+read.size+' / '+N+' ('+Math.round(100*read.size/N)+'%)';
+  function star(x,y,r){ctx.beginPath();for(let i=0;i<10;i++){const a=-Math.PI/2+i*Math.PI/5;const rr=i%2?r/2.3:r;ctx.lineTo(x+Math.cos(a)*rr,y+Math.sin(a)*rr);}ctx.closePath();ctx.fill();}
+}
+const $=id=>document.getElementById(id);
+$('lsaB').oninput=function(){B=parseInt(this.value);$('lsaBLabel').textContent=B;kmeans();draw();};
+$('lsaK').oninput=function(){K=parseInt(this.value);$('lsaKLabel').textContent=K;draw();};
+$('lsaTree').onchange=function(){tree=this.checked;draw();};
+$('lsaNewQ').onclick=newQ;
+gen();kmeans();q={x:420,y:170};draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 </script>
 </body>
