@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flashcards</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+.deckgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.deck { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; cursor: pointer; transition: border-color .12s; }
+.deck:hover { border-color: var(--accent); }
+.deck .d-name { font-weight: 700; }
+.deck .d-meta { font-size: .8rem; color: var(--text-dim); margin-top: 4px; }
+.deck .bar { height: 6px; border-radius: 3px; background: var(--bg-inset); margin-top: 8px; overflow: hidden; }
+.deck .bar i { display: block; height: 100%; background: var(--accent2); }
+#stage { perspective: 1200px; margin: 18px 0; }
+#cardEl { position: relative; width: 100%; min-height: 260px; transform-style: preserve-3d; transition: transform .45s cubic-bezier(.2,.7,.3,1); cursor: pointer; }
+#cardEl.flipped { transform: rotateX(180deg); }
+.face { position: absolute; inset: 0; backface-visibility: hidden; -webkit-backface-visibility: hidden; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 26px; display: flex; flex-direction: column; justify-content: center; }
+.face.back { transform: rotateX(180deg); }
+.face .q { font-size: 1.15rem; font-weight: 650; line-height: 1.5; }
+.face .a { font-size: 1rem; line-height: 1.6; }
+.face .tag { position: absolute; top: 12px; left: 16px; font-size: .72rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: .06em; }
+.face .hint { position: absolute; bottom: 10px; right: 16px; font-size: .75rem; color: var(--text-dim); }
+.hidden { display: none; }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="flashcards.html" class="here">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Flashcards</h1>
+<p class="dim">One deck per chapter. Click a card (or press space) to flip; grade yourself with <strong>Again</strong> (resurfaces soon) or <strong>Good</strong> (spaced further out). Progress is saved in this browser. Cards you miss come back; cards you know retreat — a light version of spaced repetition.</p>
+
+<div id="deckPicker">
+  <div class="controls">
+    <button class="btn" id="studyDue">Study all due cards</button>
+    <button class="btn secondary" id="resetAll">Reset progress</button>
+    <span class="dim" id="dueSummary"></span>
+  </div>
+  <div class="deckgrid" id="deckGrid"></div>
+</div>
+
+<div id="study" class="hidden">
+  <div class="controls">
+    <button class="btn secondary" id="backBtn">← Decks</button>
+    <span class="dim" id="progress"></span>
+  </div>
+  <div id="stage">
+    <div id="cardEl">
+      <div class="face front"><span class="tag" id="tagF"></span><div class="q" id="qEl"></div><span class="hint">click / space to flip</span></div>
+      <div class="face back"><span class="tag" id="tagB"></span><div class="a" id="aEl"></div><span class="hint">1 = again · 2 = good</span></div>
+    </div>
+  </div>
+  <div class="controls" id="gradeRow" style="visibility:hidden">
+    <button class="btn bad" id="againBtn">Again (1)</button>
+    <button class="btn good" id="goodBtn">Good (2)</button>
+  </div>
+</div>
+
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+
+const DECKS = {
+"Math": [
+["What does the dot product a·b measure geometrically?","|a||b|cos θ — how aligned two vectors are. Zero means orthogonal. It is the primitive inside every attention score and every matmul."],
+["Chain rule in one line — and why it matters for deep learning?","d/dx f(g(x)) = f′(g(x))·g′(x). Backprop is just the chain rule applied layer by layer from loss to parameters."],
+["Why do gradients point uphill, and what does SGD do with that?","The gradient is the direction of steepest increase of the loss; SGD steps against it: θ ← θ − η∇L."],
+["What does temperature do in softmax?","Divides logits before exponentiating. T<1 sharpens (confident), T>1 flattens (diverse), T→0 becomes argmax."],
+["Cross-entropy loss, in terms of 'surprise'?","Expected surprise −Σ p log q: how many nats the model wastes predicting q when truth is p. Next-token training minimizes it."],
+["KL divergence KL(p‖q) — what is it and one key property?","Σ p log(p/q): extra surprise from using q instead of p. Always ≥ 0, zero iff p=q, not symmetric."],
+["Why does naive softmax overflow, and what is the fix?","e^x explodes for large logits. Subtract max(x) first — mathematically identical, numerically safe. This trick becomes online softmax in kernels."],
+["FLOPs of multiplying an m×k by k×n matrix?","2·m·n·k (one multiply + one add per term). The 2 matters when you compute arithmetic intensity."],
+["What does a matrix's determinant tell you about it as a map?","The factor by which it scales area/volume; 0 means it collapses a dimension (not invertible)."],
+["Eigenvector in one sentence?","A direction the matrix only stretches, never rotates: Av = λv."]
+],
+"Deep Learning": [
+["Why can't a stack of purely linear layers learn more than one linear layer?","Composition of linear maps is linear. Nonlinear activations between layers are what buy expressive power."],
+["Backward pass: what flows backward, and what is computed at each weight?","The gradient of the loss w.r.t. each activation flows backward; each weight gets ∂L/∂w = upstream grad × local input."],
+["Why momentum helps SGD?","It accumulates a moving average of gradients, damping oscillation across ravines and accelerating along consistent directions."],
+["Adam vs AdamW — the one difference that matters?","AdamW decouples weight decay from the adaptive gradient update, applying decay directly to weights. Standard for transformers."],
+["What do warmup and cosine decay each fix?","Warmup avoids huge unstable steps while Adam's statistics are still noisy; cosine decay anneals to fine-tune into a minimum."],
+["Dropout at train vs test time?","Train: randomly zero units (scale the rest) to prevent co-adaptation. Test: no dropout; expectations already match via scaling."],
+["Why do LLMs use RMSNorm instead of LayerNorm?","RMSNorm skips mean-centering and bias — cheaper, fewer reductions, and empirically just as good at scale."],
+["Chinchilla's rule of thumb?","Compute-optimal training uses ~20 tokens per parameter. Modern models over-train far past this because inference cost favors smaller models."],
+["The 6ND rule?","Training FLOPs ≈ 6 × N params × D tokens (2 forward + 4 backward per param per token)."],
+["Mixed-precision training: what stays in FP32?","Master weights and optimizer states (and usually norms/softmax); matmuls run in BF16/FP16, gradients may be scaled to avoid underflow."],
+["Gradient clipping — why?","Rare huge gradients (bad batch, loss spike) can destroy weights; clipping the global norm bounds the step size."]
+],
+"Transformers": [
+["What does BPE actually learn?","A greedy merge table of the most frequent symbol pairs — frequent strings become single tokens, rare ones split into pieces."],
+["Q, K, V in one metaphor?","Each token asks a question (Q), advertises what it contains (K), and carries content to share (V). Scores = how well questions match adverts."],
+["Why divide attention scores by √d_k?","Dot products grow with dimension; without scaling, softmax saturates and gradients vanish."],
+["What does the causal mask enforce?","Token i may only attend to positions ≤ i — so training on all positions in parallel matches left-to-right generation."],
+["Why residual connections?","They give gradients a direct path through 100 layers and let each block learn a refinement instead of a full mapping."],
+["Pre-norm vs post-norm?","Pre-norm (norm before attention/MLP) keeps the residual stream clean and trains stably at depth; post-norm was the original but needs careful warmup."],
+["Perplexity in plain terms?","e^(cross-entropy): the effective branching factor — 'the model is as confused as if choosing uniformly among k tokens'."],
+["Top-p (nucleus) sampling?","Sample only from the smallest set of tokens whose cumulative probability ≥ p — adaptive truncation, unlike fixed top-k."],
+["What is an MoE layer?","A router sends each token to a few expert MLPs out of many (plus often a shared expert); capacity grows with total params, cost with active params."],
+["GPT-2 → Llama-3: name three architectural changes.","LayerNorm→RMSNorm (pre-norm), learned positions→RoPE, GeLU MLP→SwiGLU, MHA→GQA, no biases."]
+],
+"Attention": [
+["Attention formula with shapes (single head)?","softmax(QKᵀ/√d)V, Q:(n×d) K:(n×d) V:(n×d) → scores (n×n) → output (n×d). The n×n is the memory villain."],
+["Why multiple heads instead of one wide head?","Different heads learn different relations (syntax, copying, position) in different subspaces; concatenation recombines them."],
+["GQA in one line, and its cache saving?","Groups of query heads share K/V heads: cache shrinks by n_heads/n_kv (e.g. 64→8 = 8×) with minimal quality loss."],
+["MLA's trick?","Store a small shared latent compression of K/V per token; decompress per head on the fly. ~10×+ cache reduction (DeepSeek-V2/V3)."],
+["How does RoPE encode position?","Rotates each (q,k) 2D pair by an angle ∝ position; dot products then depend only on relative offset — which is why it extrapolates/scales."],
+["FlashAttention's core insight?","Attention is bottlenecked by HBM traffic, not FLOPs: tile Q/K/V through SRAM and never materialize the n×n matrix."],
+["Online softmax: what two running values are maintained?","Running max m and running denominator l, updated per tile with rescaling e^(m_old−m_new) — exact, single pass."],
+["Ring attention?","Shard the sequence across devices; KV blocks circulate around the ring so every query sees every key with overlap of compute and comms. Exact, enables million-token contexts."],
+["Sliding-window attention trade?","O(n·w) cost; each layer sees w tokens but receptive field grows with depth. Pairs with a few global/full layers."],
+["FlashAttention-2 vs 3 in one line each?","FA-2: better work partitioning/parallelism across warps. FA-3: Hopper async copies + warp specialization overlapping softmax and matmul."]
+],
+"GPU": [
+["GPU vs CPU design philosophy in one line?","CPU minimizes latency of one thread; GPU hides latency with tens of thousands of threads and spends transistors on ALUs, not caches."],
+["The memory hierarchy, fastest to slowest?","Registers → shared memory/L1 (SRAM, ~TB/s, KBs) → L2 → HBM (GBs, ~TB/s but far) → NVLink/PCIe → host."],
+["What is a warp, and why 32?","32 threads executing one instruction in lockstep (SIMT) — the hardware scheduling unit; divergence within a warp serializes both paths."],
+["Occupancy — what is it and why does it hide latency?","Resident warps per SM vs maximum. More resident warps = scheduler can switch to ready warps while others wait on memory."],
+["Memory coalescing rule of thumb?","Threads in a warp should touch consecutive addresses; then 32 loads become a few wide transactions. Strided access multiplies traffic."],
+["Arithmetic intensity — definition and why it matters?","FLOPs per byte moved. Compare to hardware's FLOPs/bandwidth ratio: below the ridge you're bandwidth-bound (vector add, decode GEMV), above it compute-bound (big matmul)."],
+["Roofline: where does attention prefill vs decode land?","Prefill matmuls: high AI, near compute roof. Decode (batch 1): AI < 1, pinned to the bandwidth roof — the whole reason for batching."],
+["Shared-memory bank conflicts?","32 banks; threads hitting the same bank (different addresses) serialize. Pad tiles (e.g. [32][33]) to avoid."],
+["First three things to read in an Nsight Compute report?","Speed-of-light (compute vs memory %), achieved occupancy, memory workload (DRAM throughput, L2 hit rate) — tells you which wall you're on."],
+["Your RTX 5080 in one line?","Consumer Blackwell sm_120: 16GB GDDR7 ~960GB/s, warp-level mma.sync incl. FP8/FP4 — no wgmma/tcgen05 (those are datacenter)."]
+],
+"Kernels": [
+["Vector add: why is it hopeless to optimize?","AI = 1 FLOP / 12 bytes moved — pure bandwidth. The only win is coalesced access; it's a memcpy with an add."],
+["Tree reduction in shared memory — the pattern?","Each step halves active threads: s=n/2, n/4, ... each adding partner's value; log₂(n) steps; finish with warp shuffles."],
+["Why stage a transpose through shared memory?","So both the global read AND write are coalesced; the transpose (strided access) happens in fast SRAM. Pad to dodge bank conflicts."],
+["Single-pass (online) softmax recurrence?","Keep running max m and sum l; per element: m′=max(m,x), l′=l·e^(m−m′)+e^(x−m′). Enables fusion and FlashAttention."],
+["Tiled matmul: what does each thread block do?","Loads a BM×BK tile of A and BK×BN tile of B into shared memory, accumulates a BM×BN tile of C in registers, marching over K."],
+["Register blocking (thread tiling)?","Each thread computes a small sub-tile (e.g. 8×8) of C in registers, reusing each loaded value many times — raises AI past the shared-memory ceiling."],
+["Double buffering?","Prefetch the next K-tile into one buffer while computing on the other — overlaps memory latency with math."],
+["The siboehm matmul ladder, roughly?","Naive ~1% of cuBLAS → coalescing → smem tiling → 1D/2D register blocking → vectorized loads → ~94%; tensor cores are the next ladder."],
+["What does one tensor-core mma.sync instruction compute?","A small matrix product, e.g. m16n8k16, across a warp, with fragments distributed over the 32 lanes' registers."],
+["When does Triton beat CUDA for you?","When tile-level abstraction suffices: you write block programs with masked loads; the compiler handles threads/smem/pipelining. Custom fusions in hours, ~peak perf."],
+["Benchmarking a kernel correctly?","Warm up, use CUDA events (not wall clock), synchronize, compare against PyTorch/cuBLAS for both correctness (allclose w/ tolerance) and speed."]
+],
+"Quantization": [
+["Exponent vs mantissa — what does each buy?","Exponent bits = dynamic range; mantissa bits = precision within the range. BF16 keeps FP32's 8 exponent bits — range over precision for training."],
+["FP8 E4M3 vs E5M2 — when each?","E4M3 (more precision) for weights/activations forward; E5M2 (more range) for gradients. "],
+["Absmax INT8 quantization of a tensor?","scale = max|x|/127; q = round(x/scale). One outlier inflates scale and crushes everything else — hence per-channel/per-group scales."],
+["Why does weight-only 4-bit help decode so much?","Decode is bandwidth-bound: weights are the traffic. 140GB→35GB ≈ 4× fewer bytes per token; dequant to BF16 in registers costs little."],
+["GPTQ vs AWQ, one line each?","GPTQ: error-compensating rounding using second-order (Hessian) info, column by column. AWQ: keep salient channels (by activation magnitude) effectively higher precision via scaling."],
+["NVFP4/MX formats' key idea?","Micro-block scaling: each 16/32-element block carries its own scale (FP8), so FP4's 16 values stretch across a wide range per block."],
+["KIVI's split treatment of KV cache?","Keys quantized per-channel (outlier channels persist across tokens), values per-token — matching where their outliers live."],
+["QLoRA's three tricks?","NF4 4-bit base weights (information-theoretically matched to normal weights), double quantization of scales, paged optimizers; adapters train in BF16."],
+["Straight-through estimator?","Forward uses the quantized (non-differentiable) value; backward pretends it was identity, passing gradients through — makes QAT trainable."],
+["2:4 structured sparsity?","Exactly 2 of every 4 weights are zero; tensor cores skip them for up to 2× math throughput — unstructured sparsity rarely pays on GPUs."]
+],
+"Inference": [
+["Prefill vs decode — bound by what?","Prefill: compute-bound (big parallel matmuls). Decode: bandwidth-bound (stream all weights + KV per token). Every serving design follows from this."],
+["The KV-cache size formula?","2 × layers × KV heads × head_dim × tokens × batch × bytes. Know it cold; every variant attacks one factor."],
+["TTFT and TPOT?","Time to first token (≈ prefill) and time per output token (≈ one decode step). Latency ≈ TTFT + TPOT × output length."],
+["Continuous batching (Orca)?","Admit/evict sequences at every iteration instead of per-batch — no padding, no waiting for stragglers; backbone of vLLM/SGLang/TRT-LLM."],
+["PagedAttention?","KV cache in fixed-size blocks + per-sequence block tables (OS paging): near-zero fragmentation, prefix sharing with copy-on-write."],
+["Chunked prefill (Sarathi) solves what?","A long prefill stalls all decoding requests; splitting it into chunks co-scheduled with decode bounds the stall (TTFT/TPOT trade)."],
+["Why does batch size raise decode throughput ~linearly (for a while)?","Each HBM sweep of the weights is amortized over the batch; until KV memory or compute saturates."],
+["Prefill/decode disaggregation?","Separate GPU pools per phase (DistServe/Splitwise/Mooncake/Dynamo), KV shipped between them — no interference, independent scaling."],
+["Speculative decoding — why is it lossless?","Rejection sampling: target model verifies k drafted tokens in one pass; accept/resample rule reproduces the target distribution exactly."],
+["RadixAttention (SGLang)?","Keep finished KV in a radix tree keyed by token prefix — automatic cache reuse across requests sharing prefixes (agents, few-shot, multi-turn)."],
+["Goodput vs throughput?","Requests served within TTFT+TPOT SLOs per unit hardware — raw tokens/sec can always be bought by violating latency."],
+["vLLM vs SGLang vs TensorRT-LLM in one line each?","vLLM: default, broadest. SGLang: prefix-reuse and structured programs. TRT-LLM: peak NVIDIA performance via compiled engines."]
+],
+"Parallelism": [
+["Ring all-reduce cost?","Each GPU sends/receives 2(N−1)/N × data — nearly bandwidth-optimal; done as reduce-scatter then all-gather around the ring."],
+["Tensor parallelism (Megatron) for an MLP?","Split first weight by columns (each GPU gets GeLU of its slice), second by rows; one all-reduce merges outputs. Per-layer sync → needs NVLink."],
+["Why does TP usually stop at 8?","That's the NVLink island; crossing to InfiniBand makes the per-layer all-reduces dominate."],
+["Pipeline parallelism's bubble?","Stages idle while the pipe fills/drains: bubble ≈ (stages−1)/microbatches. 1F1B and interleaved virtual stages shrink it."],
+["ZeRO stages 1/2/3?","Shard optimizer states (1), + gradients (2), + parameters (3, = FSDP full shard) across data-parallel ranks; all-gather params on demand."],
+["Expert parallelism's communication pattern?","All-to-all: tokens scatter to their routed experts across GPUs, compute, all-to-all back. Load balance (EPLB) decides efficiency."],
+["Sequence/context parallelism — Ulysses vs ring?","Ulysses: all-to-all swaps sequence-sharding for head-sharding during attention. Ring: KV blocks circulate; overlap comms with compute."],
+["Serving Llama-70B FP8 on 4×H100 TP=4 — the arithmetic?","~70GB weights / 4 = 17.5GB per GPU; ~60GB left each for KV/activations; TP cuts per-token latency ~4× at per-layer all-reduce cost."],
+["DP vs TP vs PP — what does each scale?","DP: throughput (more replicas/batch). TP: fits bigger models and cuts latency. PP: fits bigger models with low interconnect needs."],
+["Inference parallelism rule of thumb?","TP inside a node for latency/memory, replicas (DP) for throughput, PP/EP only when the model demands it; disaggregate prefill/decode at scale."]
+],
+"Training": [
+["Memory of full fine-tuning a 7B in BF16 + Adam?","Params 14GB + grads 14GB + Adam m,v in FP32 56GB + FP32 master 28GB ≈ 112GB before activations — why PEFT exists."],
+["LoRA in one equation?","W′ = W + (α/r)·B·A with A:(r×d), B:(d×r), r≪d; train only A,B (~0.1–1% of params), merge after."],
+["Gradient checkpointing trade?","Drop activations, recompute them in backward: ~√L memory for ~33% extra compute."],
+["Sample packing?","Concatenate variable-length sequences into full blocks with block-diagonal attention masks — no padding waste, big throughput win (Axolotl default)."],
+["DPO vs RLHF-PPO?","DPO optimizes preferences directly via a classification-style loss on chosen vs rejected (no reward model, no rollouts); PPO maximizes a learned reward with KL constraint."],
+["GRPO's trick for reasoning RL?","Sample a group of answers per prompt; advantage = score − group mean. No value network; rewards from verifiable checkers."],
+["SFT vs preference tuning — what does each teach?","SFT: the format and skills from demonstrations. Preference tuning: which of two valid outputs humans prefer — style, safety, helpfulness."],
+["Liger kernels / Cut Cross Entropy fuse what?","Fused RMSNorm/RoPE/SwiGLU etc., and CE computed without materializing the full vocab-size logit tensor — big activation-memory wins."],
+["FSDP vs DeepSpeed in one line?","Same ZeRO-3 idea; FSDP is native PyTorch (FSDP2 composes with TP), DeepSpeed adds stages/offload config via JSON. Axolotl supports both."],
+["Why over-train past Chinchilla?","Training is paid once, inference forever: a smaller model trained on more tokens is cheaper to serve at equal quality."]
+],
+"Hardware": [
+["NeuronCore's four engines?","Tensor (128×128 systolic matmul), Vector (reductions/norms), Scalar (activations), GpSIMD (custom ops) — explicit pipelines vs a GPU's uniform SMs."],
+["SBUF and PSUM ≈ what in CUDA terms?","SBUF ≈ software-managed shared memory (24MB staging for tiles); PSUM ≈ matmul accumulator space. NKI makes the staging explicit."],
+["NKI's programming model in one line?","Python tile programs: nl.load HBM→SBUF, compute on tiles (partition dim ≤128), nl.store back — simulate on CPU with nki.simulate_kernel."],
+["Why does NKI Library split CTE vs TKG attention kernels?","Same reason as prefill/decode: context encoding is big-matmul compute-bound; token generation is bandwidth/latency-bound — different tilings win."],
+["Deepgram-on-Trainium lessons (3)?","Compile static shapes with zero CPU fallbacks; replicate (8 copies/instance) for throughput; hand-write NKI kernels only for the hot, repeatedly-called layers."],
+["Systolic array in one line?","A grid of MACs where weights stay put and activations march through, accumulating partial sums each clock — peak efficiency at the right tile sizes, rigid otherwise."],
+["TPU's kernel story?","Pallas (JAX) exposes VMEM/MXU tiles — same tile-level model as Triton/NKI; ICI links pods at scale."],
+["AMD's stack for kernels?","HIP (CUDA-like), Composable Kernel / AITER libraries, HipKittens tiles; CDNA MI350 with large HBM is the hardware."],
+["The porting checklist for any accelerator?","Are shapes static? Are all ops covered (no CPU fallback)? Which few layers dominate latency → custom kernels there only."],
+["Why 'vendor peaks are not measurements'?","Peak TOPS assume perfect tiling/utilization; real models hit memory, layout, and dependency walls — benchmark your workload."]
+],
+"Agents": [
+["The agent loop?","LLM → (reason) → tool call → observation appended to context → LLM … until final answer. The context window is its working memory."],
+["Why does constrained decoding matter for agents?","Tool calls must parse: grammar-masked sampling guarantees valid JSON/schema without retries (XGrammar-style, ~free per token)."],
+["Compounding error problem?","0.95 per-step success over 20 steps ≈ 36% task success — why verification, retries, and shorter horizons dominate agent design."],
+["RAG pipeline stages?","Chunk → embed → index → retrieve top-k (dense + BM25 hybrid) → rerank → generate with citations."],
+["RAG vs long context vs fine-tuning?","RAG: fresh/large corpora, citable. Long context: small stable corpus, no infra. Fine-tuning: style/skills, not facts."],
+["ReAct pattern?","Interleave explicit reasoning ('thought') with actions and observations — grounding each step, easier to debug than plan-everything-first."],
+["MCP in one line?","An open protocol where servers expose tools/resources to any model/client — decouples agent integrations from the app."],
+["Why are agent workloads a prefix-cache dream?","Every loop iteration re-sends the same system prompt + history; radix/prefix caching (SGLang) skips recomputing it."],
+["Orchestrator-workers pattern?","A lead agent decomposes and routes subtasks to parallel specialist agents, then integrates — trades tokens for latency/quality."],
+["Evaluating agents — the two levels?","End-to-end task success (what users feel) and per-step correctness (where it broke); plus cost/latency per solved task."]
+],
+"System Design": [
+["The 4-step interview framework?","1 Understand & scope (requirements, QPS/storage napkin math) 2 High-level design (boxes + data flow) 3 Deep-dives (bottlenecks, the interviewer's interest) 4 Wrap-up (tradeoffs, failures, evolution)."],
+["300M DAU, 2 posts/day, 100:1 read:write — write and read QPS?","Writes ≈ 600M/86400 ≈ 7K QPS; reads ≈ 700K QPS; design for 2–3× peak."],
+["Consistent hashing — what does it fix?","Mod-N hashing remaps nearly everything when N changes; the ring (+virtual nodes) remaps only ~1/N of keys on node join/leave."],
+["Cache-aside pattern + its classic failure?","Read: try cache, on miss read DB and fill. Failure: thundering herd on hot-key expiry — fix with locks/early refresh/jittered TTLs."],
+["Fanout on write vs read (news feed)?","Write: push to followers' feeds at post time (fast reads, celebrity problem). Read: assemble at request (slow reads, no fanout storms). Hybrid: fanout except celebrities."],
+["Snowflake ID layout?","Timestamp (41b) + datacenter/machine (10b) + sequence (12b): sortable by time, unique without coordination, ~4M IDs/sec/node."],
+["Token bucket rate limiting?","Bucket refills r tokens/sec to capacity b; request costs a token. Allows bursts of b, sustained rate r. Redis + Lua for atomicity."],
+["Quorum N/W/R — when is a read consistent?","W + R > N guarantees overlap with the latest write (e.g. N3 W2 R2). Tune W/R for write- vs read-latency."],
+["LSM tree vs B-tree?","LSM: writes go to memtable → flushed to sorted SSTables, compacted later (write-optimized; Cassandra/RocksDB). B-tree: in-place pages (read-optimized; MySQL/Postgres)."],
+["CAP in practice?","Under partition, choose availability (serve stale) or consistency (refuse). Most web systems choose A with eventual consistency; payments choose C."],
+["Exactly-once delivery?","Doesn't exist on the wire: build at-least-once + idempotent consumers (dedupe keys/idempotency tokens)."],
+["Design an LLM serving system — the skeleton?","Gateway → prefix-aware router → prefill pool → KV transfer (NIXL) → decode pool (continuous batching + paged KV) → streaming; autoscale on goodput under TTFT/TPOT SLOs."]
+]
+};
+
+// ---------- spaced repetition lite ----------
+const LS='learn-cards-v1';
+function load(){try{return JSON.parse(localStorage.getItem(LS))||{}}catch(e){return {}}}
+function save(s){try{localStorage.setItem(LS,JSON.stringify(s))}catch(e){}}
+let state=load();
+function key(d,i){return d+'|'+i}
+function due(d,i){const c=state[key(d,i)];return !c||c.due<=Date.now()}
+function grade(d,i,ok){const k=key(d,i);const c=state[k]||{box:0};
+  c.box=ok?Math.min(c.box+1,6):0;
+  const mins=[1,10,60*24,60*24*3,60*24*7,60*24*14,60*24*30][c.box];
+  c.due=Date.now()+mins*60*1000;state[k]=c;save(state);}
+
+// ---------- deck grid ----------
+const grid=document.getElementById('deckGrid');
+function renderGrid(){
+  grid.innerHTML='';let totalDue=0;
+  Object.keys(DECKS).forEach(name=>{
+    const cards=DECKS[name];const d=cards.filter((_,i)=>due(name,i)).length;totalDue+=d;
+    const known=cards.filter((_,i)=>{const c=state[key(name,i)];return c&&c.box>=2}).length;
+    const el=document.createElement('div');el.className='deck';
+    el.innerHTML='<div class="d-name">'+name+'</div><div class="d-meta">'+cards.length+' cards · '+d+' due · '+known+' known</div><div class="bar"><i style="width:'+Math.round(100*known/cards.length)+'%"></i></div>';
+    el.onclick=()=>start(name);grid.appendChild(el);
+  });
+  document.getElementById('dueSummary').textContent=totalDue+' cards due across all decks';
+}
+
+// ---------- study session ----------
+let queue=[],cur=null,flipped=false;
+const $=id=>document.getElementById(id);
+function start(deckName){
+  queue=[];
+  const names=deckName?[deckName]:Object.keys(DECKS);
+  names.forEach(n=>DECKS[n].forEach((c,i)=>{if(!deckName?due(n,i):true)queue.push({n,i,q:c[0],a:c[1]});}));
+  if(deckName){ /* whole deck, due first */ queue.sort((a,b)=>(due(a.n,a.i)?0:1)-(due(b.n,b.i)?0:1)); }
+  if(!queue.length){alert('Nothing due — come back later or open a specific deck.');return;}
+  $('deckPicker').classList.add('hidden');$('study').classList.remove('hidden');next();
+}
+function next(){
+  if(!queue.length){end();return;}
+  cur=queue.shift();flipped=false;
+  $('cardEl').classList.remove('flipped');
+  setTimeout(()=>{$('qEl').textContent=cur.q;$('aEl').textContent=cur.a;$('tagF').textContent=cur.n;$('tagB').textContent=cur.n;},flipped?0:150);
+  $('qEl').textContent=cur.q;$('aEl').textContent=cur.a;$('tagF').textContent=cur.n;$('tagB').textContent=cur.n;
+  $('gradeRow').style.visibility='hidden';
+  $('progress').textContent=queue.length+' remaining';
+}
+function flip(){if(!cur)return;flipped=!flipped;$('cardEl').classList.toggle('flipped',flipped);$('gradeRow').style.visibility=flipped?'visible':'hidden';}
+function answer(ok){if(!cur||!flipped)return;grade(cur.n,cur.i,ok);if(!ok)queue.push({...cur});next();}
+function end(){$('study').classList.add('hidden');$('deckPicker').classList.remove('hidden');renderGrid();}
+$('cardEl').onclick=flip;
+$('againBtn').onclick=()=>answer(false);
+$('goodBtn').onclick=()=>answer(true);
+$('backBtn').onclick=end;
+$('studyDue').onclick=()=>start(null);
+$('resetAll').onclick=()=>{if(confirm('Reset all flashcard progress?')){state={};save(state);renderGrid();}};
+document.addEventListener('keydown',e=>{
+  if($('study').classList.contains('hidden'))return;
+  if(e.code==='Space'){e.preventDefault();flip();}
+  if(e.key==='1')answer(false);
+  if(e.key==='2')answer(true);
+});
+renderGrid();
+</script>
+</main>
+</body>
+</html>

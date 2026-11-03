@@ -1,0 +1,2 @@
+Vendored from https://github.com/bhosmer/mm (MIT License, Copyright (c) Meta Platforms, Inc. and affiliates).
+Core app only; the large intro/ walkthrough assets were omitted. See LICENSE in this directory.

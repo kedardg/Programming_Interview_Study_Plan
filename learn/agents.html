@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Agents, Tool Use &amp; RAG</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="hardware.html">Hardware</a><a href="agents.html" class="here">Agents</a><a href="system-design.html">System Design</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>LLM Agents, Tool Use &amp; RAG</h1>
+<p class="dim">What changes when a language model stops being a text-completion endpoint and starts acting: the agent loop, tool calling, retrieval-augmented generation, planning patterns and their failure modes, and what agents do to the serving systems underneath them.</p>
+
+<h2 id="loop">1. From chatbot to agent: the loop</h2>
+<p>A chatbot maps one prompt to one response. An <strong>agent</strong> is a model running in a loop with access to tools: it reads a goal, <em>decides</em> whether it needs information or an action from the outside world, emits a structured tool call instead of (or before) an answer, receives the tool's result as a new observation, and repeats until it judges the task done. The model never executes anything itself — the surrounding harness parses the tool call, runs the real function, and appends the result to the conversation. Everything the agent "knows" about the task lives in that growing conversation: the <strong>context window is the agent's working memory</strong>.</p>
+<p>That framing explains the two defining constraints of agent engineering. First, each loop iteration is just another LLM inference over the whole accumulated context, so a 30-step task pays for the transcript 30 times (mitigated by prefix caching — §5). Second, the context is finite: long-running agents must <em>manage</em> memory — summarize old turns, compact tool outputs, or write important facts to external storage and retrieve them later — or the oldest, often most load-bearing, instructions fall out of the window. Compaction is lossy; every production agent framework (including the one running this very loop pattern at scale) treats "what to keep verbatim vs summarize" as a core design decision.</p>
+
+<div class="card">
+<h3>Animation: one trip around the agent loop</h3>
+<canvas id="loopViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="loopStep">Step</button>
+  <button class="btn secondary" id="loopPlay">▶ Play</button>
+  <button class="btn secondary" id="loopReset">Reset</button>
+</div>
+<p class="caption">A real trace for "What's 15% of our 2023 revenue in sales.csv?". The model cannot read files or do reliable arithmetic, so it emits two tool calls before answering. Notice the transcript panel: every step <em>appends</em> — the second LLM call sees the first tool result, and the final answer sees everything. That transcript is the only state the agent has.</p>
+</div>
+
+<h2 id="tools">2. Tool use mechanics</h2>
+<p>A tool is advertised to the model as a <strong>schema</strong>: a name, a natural-language description, and a JSON Schema for its parameters. The description is prompt engineering — it is the only thing telling the model <em>when</em> this tool applies — and bad descriptions are the most common cause of tools being ignored or misused. At inference time the schemas are rendered into the system prompt (or a special token region), and the model is expected to emit a call in an exact format:</p>
+<div class="formula">{"name": "read_file", "description": "Read a local file and return its contents",
+ "input_schema": {"type": "object",
+   "properties": {"path": {"type": "string"}},
+   "required": ["path"]}}
+
+// the model emits:
+{"tool": "read_file", "input": {"path": "sales.csv"}}</div>
+<p>Models produce this format reliably for two reasons. They are <strong>fine-tuned for function calling</strong> — trained on millions of (request, tool call, result, response) traces so that emitting a call is a learned behavior, not a parlor trick. And serving engines back the format with <strong>constrained decoding</strong>: a grammar compiled from the JSON Schema masks invalid tokens at every step, making malformed JSON literally impossible to sample (see <a href="inference.html#structured">Inference §7</a> for how that works without distorting the distribution).</p>
+<p>Two mechanics matter in practice. <strong>Parallel tool calls</strong>: when actions are independent (read three files, hit two APIs), a model that emits them in one turn cuts loop iterations and wall-clock; a model that serializes needlessly is wasting the most expensive resource in the system. <strong>Errors are observations, not exceptions</strong>: a failed tool call (file not found, timeout, stack trace) is appended to the context like any other result, and a competent agent reads it and adapts — retries with a fix, tries another path, or reports the blocker. Agents that can recover from their own failed calls are what separate demos from products.</p>
+<p><strong>MCP</strong> (Model Context Protocol) standardizes the supply side of all this. Instead of every application hand-wiring its own tool definitions, an MCP <em>server</em> exposes tools, resources (readable data like files or database schemas), and prompt templates over a standard protocol; any MCP-capable client — a chat app, an IDE, an agent harness — can connect to it and the model sees its tools alongside the built-in ones. It is deliberately boring plumbing, like LSP was for editors: the point is that a Postgres server, a GitHub server, and a browser-control server are written once and work everywhere.</p>
+<p>The flip side of standardized tools is a standardized attack surface: anything a tool returns — a web page, a file, a database row — is <em>untrusted text injected into the model's context</em>, and "prompt injection" is exactly a tool result that tries to be read as instructions. Serious harnesses mark tool output as data, restrict which tools an agent may call without human approval, and sandbox execution.</p>
+
+<h2 id="rag">3. Retrieval-augmented generation</h2>
+<p>RAG attacks a different limitation: the model's knowledge is frozen at training time and its context is too small to hold your corpus. The pipeline has an <em>offline</em> half and an <em>online</em> half:</p>
+<ul>
+<li><strong>Offline</strong> — split documents into <strong>chunks</strong>, embed each chunk into a vector, store vectors in an index (HNSW or IVF for approximate nearest-neighbor search at scale).</li>
+<li><strong>Online</strong> — embed the user's query with the same model, retrieve the top-k nearest chunks, optionally <strong>rerank</strong> them with a cross-encoder (which reads query and chunk <em>together</em> and scores relevance far better than vector distance, but is too slow to run on the whole corpus — hence retrieve-100-rerank-to-5), then generate with the chunks pasted into the prompt and instructions to cite them.</li>
+</ul>
+
+<div class="card">
+<h3>Animation: the RAG pipeline</h3>
+<canvas id="ragViz" class="viz" width="900" height="380"></canvas>
+<div class="controls">
+  <button class="btn" id="ragStep">Step</button>
+  <button class="btn secondary" id="ragPlay">▶ Play</button>
+  <button class="btn secondary" id="ragReset">Reset</button>
+</div>
+<p class="caption">Left: a document is split into overlapping chunks (the overlap keeps a sentence that straddles a boundary intact in at least one chunk). Middle: chunks become points in embedding space — nearby points mean similar meaning. Right: the query (star) lands in that space, the k nearest chunks light up, the reranker reorders them, and the generator answers with citations. Step through and watch which chunks actually reach the prompt.</p>
+</div>
+
+<p><strong>Chunking is a real tradeoff</strong>, not a preprocessing detail. Small chunks (a few sentences) embed precisely but strip away context the generator needs; large chunks (a page) carry context but blur the embedding and waste prompt tokens on irrelevant text. Common practice: 200–800 tokens with 10–20% overlap, split on semantic boundaries (headings, paragraphs) rather than fixed character counts, and store chunk metadata (title, section) to prepend at generation time. Pure vector search also misses exact identifiers — error codes, part numbers, names — that keyword search catches trivially, so production systems run <strong>hybrid retrieval</strong>: BM25 (lexical) and dense (semantic) in parallel, fused with reciprocal rank fusion, then reranked.</p>
+<table class="cmp">
+<tr><th>Approach</th><th>Choose it when</th><th>Cost profile</th></tr>
+<tr><td><strong>RAG</strong></td><td>Corpus is large, changes often, or needs citations/access control</td><td>Index once, cheap per query; quality depends on retrieval</td></tr>
+<tr><td><strong>Long context</strong></td><td>Corpus fits in the window and the whole of it matters (one contract, one codebase file set)</td><td>Pay per query for every token; prefix caching amortizes repeats</td></tr>
+<tr><td><strong>Fine-tuning</strong></td><td>Teaching <em>behavior, format, or style</em> — not facts; facts drift and can't be cited</td><td>Train once, cheap forever; wrong tool for knowledge updates</td></tr>
+</table>
+
+<h2 id="planning">4. Planning patterns — and why long chains fail</h2>
+<p><strong>ReAct</strong> interleaves explicit reasoning with actions: the model writes a thought ("I need the revenue first"), then an action (tool call), then reads the observation, then thinks again. The pattern's value is mostly that the reasoning trace conditions better action choices and leaves an auditable trail; its weakness is myopia — each step is chosen greedily, so the agent can wander.</p>
+<p><strong>Plan-then-execute</strong> has the model write a full step list up front, then execute steps (often with a cheaper model or stricter loop). It resists wandering and makes progress legible, but plans go stale the moment reality disagrees with step 2 — so practical versions re-plan on failure rather than following the script off a cliff.</p>
+<p><strong>Reflection / self-critique</strong> adds a verification pass: generate, then critique your own output (or run tests, the best critic of all), then revise. It reliably buys quality on checkable tasks (code that must compile, math with a verifier) and reliably wastes tokens on uncheckable ones, where the critic hallucinates approval. The honest summary: self-critique works in proportion to how much of the checking is done by something other than the model.</p>
+<p><strong>Multi-agent orchestration</strong> — an orchestrator decomposes the task and dispatches worker agents (researcher, coder, reviewer), each with its own context and tools, then merges results. The real win is not anthropomorphic role-play but <em>context isolation</em>: workers burn tokens on exploration without polluting the orchestrator's window, and independent subtasks run in parallel. The real cost is the handoffs: each brief and each report is lossy, workers confidently return wrong findings in the same voice as right ones, and an orchestrator that spawns workers it didn't need pays twice.</p>
+
+<div class="card">
+<h3>Interactive: why long agent chains fail — compounding error</h3>
+<canvas id="compViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <label class="ctl">Per-step reliability <input type="range" id="compP" min="80" max="99" value="95"> <span id="compPLabel">95%</span></label>
+  <span class="dim" id="compNote"></span>
+</div>
+<p class="caption">If every step succeeds independently with probability p, a task needing n sequential steps succeeds with pⁿ. At 95% per step, a 20-step task succeeds 36% of the time; at 99%, it's 82%. This single curve explains most agent engineering: shorten the chain (better tools, parallel calls), raise p (verification, constrained outputs), or add recovery so one failure doesn't kill the run.</p>
+</div>
+
+<h2 id="serving">5. What agents do to the serving system</h2>
+<p>From the inference engine's point of view (see the <a href="inference.html">Inference chapter</a>), agent traffic is weird in three profitable ways. First, it is <strong>prefix-heavy</strong>: every loop iteration resends the same system prompt, tool schemas, and transcript, plus a small suffix. Engines with prefix caching — SGLang's RadixAttention, vLLM's automatic prefix caching — recompute only the new suffix's KV, turning what looks like quadratic token cost into near-linear; this is the single biggest serving win for agents. Second, sessions are <strong>long-lived with idle gaps</strong> (the agent waits seconds or minutes on a tool), so engines offload the session's KV cache to CPU memory or distributed stores (Mooncake-style) between turns instead of holding HBM hostage. Third, the <strong>token economics invert</strong>: an agent task's cost is dominated by re-read input tokens, not generated ones, which is why providers price cached input tokens ~10× cheaper and why "how big is your transcript" is a cost-engineering question.</p>
+
+<h2 id="eval">6. Evaluating agents</h2>
+<p>Two levels, and you need both. <strong>Task success</strong> (did the PR merge, did the answer match ground truth) is what users care about, but it is a sparse, end-of-episode signal that tells you nothing about <em>where</em> a 30-step run went wrong. <strong>Per-step evals</strong> — did it pick the right tool, were the arguments valid, did it recover from the injected error — localize failures and regression-test individual behaviors. Benchmarks follow the same split: SWE-bench (resolve real GitHub issues, verified by the repo's own tests) and τ-bench / BFCL-style tool-use suites (schema-correct calls under multi-turn pressure) measure ends and means respectively. Treat all public agent benchmarks with suspicion about contamination and harness effects: the harness often moves scores more than the model.</p>
+<p>Safety is mostly containment engineering: run tools in sandboxes with no ambient credentials, require human approval for irreversible actions (payments, deletes, sends), treat all tool output as untrusted input, and cap loop iterations and spend. An agent is exactly as dangerous as the blast radius of its tools.</p>
+
+<h2 id="reading">7. Where to go deeper</h2>
+<ul>
+<li><a href="https://www.anthropic.com/research/building-effective-agents">Anthropic, "Building Effective Agents"</a> — the pattern language above (augmented LLM → workflows → agents), with the advice most teams skip: use the simplest pattern that works, and most "agents" should be workflows.</li>
+<li><a href="https://modelcontextprotocol.io">MCP documentation</a> — the tool/resource server protocol from §2.</li>
+<li><a href="https://arxiv.org/abs/2210.03629">ReAct</a> and <a href="https://arxiv.org/abs/2303.11366">Reflexion</a> — the original planning-pattern papers.</li>
+<li><a href="https://arxiv.org/html/2312.07104">SGLang</a> — prefix reuse for exactly this workload; the serving view in §5.</li>
+<li>The <a href="../index.html">study plan</a>'s Step 17 watchlist tracks session-aware and agentic <em>scheduling</em> — serving systems that understand loops, not just requests — which is where §5 is heading next.</li>
+<li>The <a href="flashcards.html">Agents flashcard deck</a> to retain this chapter.</li>
+</ul>
+
+<div class="footer-nav"><a href="hardware.html">← Hardware</a><a href="system-design.html">System Design →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------- 1. agent loop ----------
+(function(){
+const cv=document.getElementById('loopViz'),ctx=cv.getContext('2d');
+const STATES=[
+ {node:'user', transcript:'USER: What is 15% of our 2023 revenue in sales.csv?', note:'The goal arrives. The model has no idea what is in the file.'},
+ {node:'llm',  transcript:'LLM (thinking): I need the file contents first.', note:'LLM call #1 — context: system prompt + tool schemas + user goal.'},
+ {node:'call', transcript:'TOOL CALL: {"tool":"read_file","input":{"path":"sales.csv"}}', note:'The model emits structured JSON. The harness, not the model, executes it.'},
+ {node:'tool', transcript:'RESULT: "year,revenue\\n2022,8.1M\\n2023,12.4M"', note:'The tool result is appended to the transcript as an observation.'},
+ {node:'llm',  transcript:'LLM (thinking): revenue=12.4M. Arithmetic → use python.', note:'LLM call #2 sees everything so far, including the file contents.'},
+ {node:'call', transcript:'TOOL CALL: {"tool":"python","input":{"code":"0.15*12.4e6"}}', note:'Models are unreliable calculators; good agents delegate arithmetic.'},
+ {node:'tool', transcript:'RESULT: 1860000.0', note:'Second observation appended.'},
+ {node:'llm',  transcript:'LLM: 15% of 2023 revenue ($12.4M) is $1.86M.', note:'LLM call #3 judges the task complete and answers instead of calling a tool.'},
+ {node:'answer',transcript:'ANSWER delivered. Loop exits.', note:'3 LLM calls, 2 tool calls, one growing transcript — that is the whole trick.'}];
+let step=-1,timer=null,log=[];
+const NODES={user:{x:120,y:60,label:'User request'},llm:{x:120,y:160,label:'LLM'},call:{x:120,y:255,label:'Tool call (JSON)'},tool:{x:330,y:255,label:'Tool executes'},answer:{x:330,y:60,label:'Final answer'}};
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  // edges
+  ctx.strokeStyle=bd;ctx.lineWidth=2;
+  arrow(NODES.user,NODES.llm);arrow(NODES.llm,NODES.call);arrow(NODES.call,NODES.tool);
+  curve(NODES.tool,NODES.llm);arrow(NODES.llm,NODES.answer,true);
+  // nodes
+  const active=step>=0?STATES[Math.min(step,STATES.length-1)].node:null;
+  for(const k in NODES){const n=NODES[k];
+    ctx.fillStyle=k===active?(k==='tool'?warn:k==='answer'?acc2:acc):css('--bg-card');
+    ctx.strokeStyle=k===active?'transparent':bd;ctx.lineWidth=1.5;
+    rr(n.x-78,n.y-20,156,40,9);ctx.fill();ctx.stroke();
+    ctx.fillStyle=k===active?'#fff':txt;ctx.font='bold 12px sans-serif';ctx.textAlign='center';
+    ctx.fillText(n.label,n.x,n.y+4);}
+  // loop label
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';
+  ctx.fillText('observation feeds back',228,215);
+  // transcript panel
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('Transcript (the agent’s working memory)',470,34);
+  ctx.strokeStyle=bd;ctx.strokeRect(465,44,415,250);
+  ctx.font='11px monospace';
+  log.slice(-13).forEach((l,i)=>{ctx.fillStyle=l.startsWith('LLM')||l.startsWith('ANSWER')?acc2:l.startsWith('TOOL CALL')?acc:l.startsWith('RESULT')?warn:txt;
+    wrap(l,475,64+i*18,395);});
+  // note
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  if(step>=0)wrap('▸ '+STATES[Math.min(step,STATES.length-1)].note,30,320,840);
+  else ctx.fillText('Press Step to run the trace.',30,320);
+  function wrap(s,x,y,w){let line='',yy=y;for(const word of s.split(' ')){if(ctx.measureText(line+word).width>w){ctx.fillText(line,x,yy);line=word+' ';yy+=15;}else line+=word+' ';}ctx.fillText(line,x,yy);}
+  function arrow(a,b,up){ctx.beginPath();ctx.moveTo(a.x,a.y+(up?-20:20));ctx.lineTo(b.x,b.y+(up?20:-20));ctx.stroke();}
+  function curve(a,b){ctx.beginPath();ctx.moveTo(a.x-78,a.y-8);ctx.quadraticCurveTo((a.x+b.x)/2-40,(a.y+b.y)/2+30,b.x+78,b.y+8);ctx.stroke();}
+  function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+}
+function advance(){if(step<STATES.length-1){step++;log.push(STATES[step].transcript);draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('loopPlay').textContent='▶ Play';}}
+document.getElementById('loopStep').onclick=()=>{stop();advance();};
+document.getElementById('loopReset').onclick=()=>{stop();step=-1;log=[];draw();};
+document.getElementById('loopPlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(advance,1300);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3. RAG pipeline ----------
+(function(){
+const cv=document.getElementById('ragViz'),ctx=cv.getContext('2d');
+const DOC='Q3 revenue grew 14% to $12.4M, driven by the enterprise tier. Gross margin held at 71% despite GPU cost inflation. The board approved a $2M expansion of the inference cluster. Hiring paused in sales; engineering added four kernel engineers. Churn fell to 1.1% monthly after the latency fixes shipped in August.';
+// chunk into 3 overlapping chunks (by sentence-ish spans)
+const CHUNKS=[
+ {text:'Q3 revenue grew 14% to $12.4M, driven by the enterprise tier. Gross margin held at 71%…',x:620,y:120,rel:0.95},
+ {text:'…margin held at 71% despite GPU cost inflation. The board approved a $2M expansion of the inference cluster.',x:700,y:200,rel:0.55},
+ {text:'Hiring paused in sales; engineering added four kernel engineers. Churn fell to 1.1%…',x:560,y:265,rel:0.2}];
+const NOISE=[[760,90],[820,160],[640,320],[790,290],[720,60],[850,240],[600,60]];
+const QUERY={x:645,y:155};
+let step=0,timer=null;
+const STEPS=['The source document.','Split into overlapping chunks — the overlap (highlighted) keeps boundary sentences whole in at least one chunk.','Each chunk is embedded: it becomes a point in a space where distance ≈ meaning. Grey dots are the rest of the corpus.','The query "how did revenue and margin develop?" is embedded into the SAME space (star).','Retrieve top-k by distance: the 2 nearest chunks light up. Chunk 3 (hiring/churn) is near-ish but loses.','Rerank: a cross-encoder reads query+chunk together and reorders — chunk 1 confirmed first.','Generate with retrieved chunks in the prompt: "Revenue grew 14% to $12.4M [1]; margin held at 71% [2]." Citations point back to chunks.'];
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  // left: document & chunks
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('Document → chunks',30,30);
+  ctx.font='11px sans-serif';
+  const lines=wrapText(DOC,230);
+  const chunkBands=[[0,3],[2,6],[5,9]]; // line ranges w/ overlap
+  lines.forEach((l,i)=>{
+    if(step>=1){chunkBands.forEach((b,ci)=>{if(i>=b[0]&&i<b[1]){
+      ctx.fillStyle=['rgba(91,140,255,0.13)','rgba(56,198,160,0.13)','rgba(242,166,90,0.13)'][ci];
+      ctx.fillRect(26+ci*3,44+i*17-12,240,16);}});}
+    ctx.fillStyle=txt;ctx.fillText(l,30,44+i*17);});
+  if(step>=1){ctx.fillStyle=dim;ctx.fillText('overlap: lines shared by two bands',30,44+lines.length*17+8);}
+  // right: embedding space
+  if(step>=2){
+    ctx.strokeStyle=bd;ctx.strokeRect(520,44,360,290);
+    ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('embedding space (2-D cartoon of 1024-D)',524,340+14);
+    NOISE.forEach(p=>{ctx.fillStyle='rgba(128,128,128,0.4)';dot(p[0],p[1],4);});
+    CHUNKS.forEach((c,i)=>{
+      let col=['#5b8cff','#38c6a0','#f2a65a'][i],r=7;
+      if(step>=4){const picked=c.rel>0.4;ctx.globalAlpha=picked?1:0.35;if(picked&&step>=4){ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(QUERY.x,QUERY.y);ctx.lineTo(c.x,c.y);ctx.stroke();}}
+      ctx.fillStyle=col;dot(c.x,c.y,r);ctx.globalAlpha=1;
+      ctx.fillStyle=txt;ctx.font='10px monospace';ctx.fillText('c'+(i+1),c.x+10,c.y+4);});
+    if(step>=3){ctx.fillStyle=css('--danger');star(QUERY.x,QUERY.y,9);ctx.fillStyle=txt;ctx.font='10px monospace';ctx.fillText('query',QUERY.x+12,QUERY.y-6);}
+    if(step>=5){ctx.fillStyle=txt;ctx.font='11px sans-serif';ctx.fillText('rerank: c1 (0.93) > c2 (0.81) — c3 dropped',524,60);}
+  }
+  // bottom: narrative
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';
+  wrapDraw('▸ '+STEPS[Math.min(step,STEPS.length-1)],30,352,840);
+  function wrapText(s,w){ctx.font='11px sans-serif';const out=[];let line='';for(const word of s.split(' ')){if(ctx.measureText(line+word).width>w){out.push(line);line=word+' ';}else line+=word+' ';}out.push(line);return out;}
+  function wrapDraw(s,x,y,w){ctx.font='12px sans-serif';let line='',yy=y;for(const word of s.split(' ')){if(ctx.measureText(line+word).width>w){ctx.fillText(line,x,yy);line=word+' ';yy+=15;}else line+=word+' ';}ctx.fillText(line,x,yy);}
+  function dot(x,y,r){ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fill();}
+  function star(x,y,r){ctx.beginPath();for(let i=0;i<10;i++){const a=Math.PI/5*i-Math.PI/2,rr=i%2?r/2.2:r;ctx.lineTo(x+rr*Math.cos(a),y+rr*Math.sin(a));}ctx.closePath();ctx.fill();}
+}
+function advance(){if(step<STEPS.length-1){step++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('ragPlay').textContent='▶ Play';}}
+document.getElementById('ragStep').onclick=()=>{stop();advance();};
+document.getElementById('ragReset').onclick=()=>{stop();step=0;draw();};
+document.getElementById('ragPlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(advance,1800);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4. compounding error ----------
+(function(){
+const cv=document.getElementById('compViz'),ctx=cv.getContext('2d');
+const slider=document.getElementById('compP'),label=document.getElementById('compPLabel'),note=document.getElementById('compNote');
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),danger=css('--danger'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const p=parseInt(slider.value)/100;label.textContent=slider.value+'%';
+  const x0=70,y0=H-50,pw=W-130,ph=H-100,NMAX=50;
+  // axes
+  ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x0,y0-ph);ctx.lineTo(x0,y0);ctx.lineTo(x0+pw,y0);ctx.stroke();
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';
+  for(let n=0;n<=NMAX;n+=10){ctx.fillText(n,x0+n/NMAX*pw,y0+18);}
+  ctx.fillText('steps in the task (n)',x0+pw/2,y0+36);
+  ctx.save();ctx.translate(20,y0-ph/2);ctx.rotate(-Math.PI/2);ctx.fillText('task success pⁿ',0,0);ctx.restore();
+  ctx.textAlign='right';
+  [0,25,50,75,100].forEach(v=>{ctx.fillText(v+'%',x0-8,y0-v/100*ph+4);
+    ctx.strokeStyle='rgba(128,128,128,0.12)';ctx.beginPath();ctx.moveTo(x0,y0-v/100*ph);ctx.lineTo(x0+pw,y0-v/100*ph);ctx.stroke();});
+  // reference curves
+  [[0.99,acc2],[0.95,dim],[0.90,dim]].forEach(([rp,col])=>{
+    if(Math.abs(rp-p)<0.004)return;
+    ctx.strokeStyle=col;ctx.globalAlpha=0.5;ctx.lineWidth=1.3;ctx.beginPath();
+    for(let n=0;n<=NMAX;n++){const y=y0-Math.pow(rp,n)*ph,x=x0+n/NMAX*pw;n?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();ctx.globalAlpha=1;
+    ctx.fillStyle=col;ctx.font='10px monospace';ctx.textAlign='left';ctx.fillText('p='+rp,x0+pw+4,y0-Math.pow(rp,NMAX)*ph);});
+  // active curve
+  ctx.strokeStyle=acc;ctx.lineWidth=3;ctx.beginPath();
+  for(let n=0;n<=NMAX;n++){const y=y0-Math.pow(p,n)*ph,x=x0+n/NMAX*pw;n?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();
+  // markers at n=10,20,30
+  ctx.font='bold 11px monospace';ctx.textAlign='left';
+  [10,20,30].forEach(n=>{const s=Math.pow(p,n),x=x0+n/NMAX*pw,y=y0-s*ph;
+    ctx.fillStyle=s>0.5?acc2:danger;ctx.beginPath();ctx.arc(x,y,4,0,7);ctx.fill();
+    ctx.fillText('n='+n+': '+(100*s).toFixed(0)+'%',x+7,y-6);});
+  note.textContent='a 20-step task succeeds '+(100*Math.pow(p,20)).toFixed(0)+'% of the time at p='+slider.value+'%';
+}
+slider.oninput=draw;draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

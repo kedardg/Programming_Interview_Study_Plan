@@ -13,6 +13,8 @@ Steps 1-4 build your coding foundations, Steps 5-18 cover GPU programming and AI
 
 The [3-Month Schedule](#3-month-schedule) below turns the plan into a week-by-week routine. For a web version with every item linked and progress tracking, open [index.html](./index.html) in a browser.
 
+**New: the [Interactive Notebook](./learn/index.html)** — 14 chapters covering the whole arc (math → deep learning → transformers → GPUs & kernels → quantization → inference systems → parallelism → training → Trainium/TPU → agents → system design) as readable pages with step-through animations, calculators, and a flashcard system with spaced repetition. It also vendors Meta's 3D matmul visualizer. Serve the repo with `python3 -m http.server` and open `learn/`, or browse it on GitHub Pages if enabled.
+
 ## 3-Month Schedule
 
 For 1 hour each weekday and 4 hours each weekend day: about 169 hours over 13 weeks, set up for an RTX 5080. It covers the core of each track and keeps the rest of the plan as reference. Every week touches every track, and no weekday repeats the day before it. In the table, `#` numbers are Blind 75 problems (Step 4), `L` numbers are GPU MODE lectures and `Ch` numbers are system design chapters (Step 21).
