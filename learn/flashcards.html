@@ -212,6 +212,11 @@ const DECKS = {
 ["Cost per million tokens — what drives it?","Hardware $/hr ÷ achieved tokens/sec per replica; prefill and decode differ, batch size and quantization move it most; compare fine-tune-small vs prompt-large on this number."]
 ],
 "RL Systems": [
+["The two meanings of RFT?","Rejection-sampling Fine-Tuning (sample k, keep grader-passing, SFT) and Reinforcement Fine-Tuning (RL on a small task set with a programmable grader, GRPO/PPO underneath). The first is the warm start for the second."],
+["Multi-turn RFT recipe for agents, in order?","Task + environment design → graders (outcome, rubric, process) → collect k trajectories with tools → rejection-sampled SFT warm start → multi-turn GRPO with loss masks and turn-level credit → held-out evals (success, pass@k, cost) → grow tasks from failures."],
+["Why warm-start with rejection-sampled SFT before multi-turn RL?","Sparse rewards: if the base policy never succeeds, every GRPO group is all-zero and gives no gradient. SFT on successful trajectories lifts the solve rate into the learnable band."],
+["Terminal-only vs turn-level credit assignment?","Terminal reward broadcast to all model tokens is unbiased but noisy over long episodes; per-turn/process rewards or step-level group baselines localize blame to the bad turn but can be hacked."],
+
 ["RLVR?","RL with verifiable rewards: checkers (exact match, unit tests, compilers) replace learned reward models — no reward-model hacking, scales to math/code (DeepSeek-R1, Tulu 3)."],
 ["GRPO vs PPO in systems terms?","GRPO drops the critic/value model (one fewer large model in memory) and uses the group mean of G samples as the baseline; PPO needs actor, critic, reference, reward."],
 ["DAPO's four tweaks?","Clip-higher (asymmetric ε), dynamic sampling (drop all-correct/all-wrong groups), token-level loss, overlong reward shaping."],
