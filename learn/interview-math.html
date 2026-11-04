@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Math for the ML Interview</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+details.drill { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; margin: 8px 0; }
+details.drill summary { cursor: pointer; font-weight: 600; }
+details.drill p { margin: 8px 0 2px; color: var(--text-dim); }
+tr.hl td { background: rgba(91, 140, 255, 0.16); }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 700px) { .two { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="interview-math.html" class="here">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Math for the ML Interview: probability, statistics and puzzles</h1>
+<p class="dim">Some companies run a dedicated math round — anything from a logic puzzle to a pen-and-paper derivation — and the same material resurfaces inside ML-coding and research discussions ("what's the variance of this estimator?", "how many samples do I need?"). This chapter follows the structure of <a href="https://alisawuffles.notion.site/math-notes">Alisa Liu's math notes</a>, written for exactly such an interview during her job search (mirrored in <a href="https://github.com/kedardg/job-prep">kedardg/job-prep</a>); every result here is re-derived in full, with simulators so you can see the closed forms emerge from randomness. Her study advice applies doubly here: solve on paper first, with AI off, until the moves are automatic.</p>
+
+<h2 id="lookup">1. The lookup table: hear the story, name the tool</h2>
+<p>Most interview math questions are a short story hiding a standard object. The fastest skill to build is pattern-matching the story to the concept before touching algebra. This table — Alisa's opening page, lightly expanded — is the whole chapter in miniature; the rest derives each row.</p>
+<table class="cmp">
+<tr><th>You hear…</th><th>Reach for…</th></tr>
+<tr><td>"how many trials until the first success / how long until the next event" — memoryless waiting</td><td>Geometric (discrete), Exponential (continuous)</td></tr>
+<tr><td>"trials that each succeed or fail"</td><td>Bernoulli, Binomial</td></tr>
+<tr><td>"how many events in a fixed window" (arrivals, typos, decays)</td><td>Poisson</td></tr>
+<tr><td>"a large sample, an average"</td><td>Law of large numbers, CLT: approximately Gaussian with variance σ²/n</td></tr>
+<tr><td>"bound a probability knowing only the mean / only mean and variance"</td><td>Markov / Chebyshev inequalities</td></tr>
+<tr><td>"estimate a parameter from data"</td><td>MLE (then MAP, Bayesian update)</td></tr>
+<tr><td>"update a belief after evidence"</td><td>Bayes' rule, law of total probability</td></tr>
+<tr><td>"expectation of a function of a random variable"</td><td>Jensen's inequality (convex vs concave)</td></tr>
+<tr><td>"expected number of things with some property"</td><td>Linearity of expectation over indicator variables</td></tr>
+<tr><td>"expected hitting time / probability of reaching a state"</td><td>First-step analysis — write the recurrence, solve it</td></tr>
+<tr><td>"the future depends only on the present"</td><td>Markov chain: transition matrix, stationary distribution, absorption</td></tr>
+<tr><td>"choose / arrange / split into groups"</td><td>Combinatorics table: permutations, combinations, stars and bars, inclusion–exclusion</td></tr>
+</table>
+
+<h2 id="distributions">2. Distributions: the seven you must own</h2>
+<p>Two axes organize them. <strong>Discrete vs continuous</strong>, and <strong>counting vs waiting</strong>: Binomial and Poisson count successes or events; Geometric and Exponential wait for the first one. Each distribution below comes with its mean and variance <em>derived</em>, because interviewers ask for the derivation, not the number.</p>
+
+<div class="card">
+<h3>Interactive: distribution explorer</h3>
+<div class="controls">
+  <label class="ctl">Distribution <select id="dSel">
+    <option value="bern">Bernoulli(p)</option><option value="binom" selected>Binomial(n, p)</option><option value="pois">Poisson(λ)</option><option value="geom">Geometric(p)</option>
+    <option value="unif">Uniform(a, b)</option><option value="exp">Exponential(λ)</option><option value="gauss">Gaussian(μ, σ²)</option></select></label>
+  <label class="ctl"><span id="p1Name">n</span> <input type="range" id="dP1" min="1" max="40" value="12" step="1"> <span id="p1Val"></span></label>
+  <label class="ctl"><span id="p2Name">p</span> <input type="range" id="dP2" min="1" max="99" value="35" step="1"> <span id="p2Val"></span></label>
+</div>
+<canvas id="distViz" class="viz" width="900" height="300"></canvas>
+<div class="kpi">
+  <div class="box"><div class="v" id="dMean">–</div><div class="l">mean</div></div>
+  <div class="box"><div class="v" id="dVar">–</div><div class="l">variance</div></div>
+  <div class="box"><div class="v" id="dStory" style="font-size:.95rem">–</div><div class="l">the story</div></div>
+</div>
+<table class="cmp" id="storyTable">
+<tr><th>Question</th><th>Distribution</th><th>PMF / PDF</th><th>E, Var</th></tr>
+<tr data-d="bern"><td>One trial, success or not?</td><td>Bernoulli(p)</td><td>pˣ(1−p)¹⁻ˣ</td><td>p, p(1−p)</td></tr>
+<tr data-d="binom"><td>How many successes in n trials?</td><td>Binomial(n,p)</td><td>C(n,k) pᵏ(1−p)ⁿ⁻ᵏ</td><td>np, np(1−p)</td></tr>
+<tr data-d="pois"><td>How many events in a fixed window?</td><td>Poisson(λ)</td><td>λᵏe⁻λ / k!</td><td>λ, λ</td></tr>
+<tr data-d="geom"><td>How many trials until the first success?</td><td>Geometric(p)</td><td>(1−p)ᵏ⁻¹ p</td><td>1/p, (1−p)/p²</td></tr>
+<tr data-d="unif"><td>Equally likely anywhere on [a,b]?</td><td>Uniform(a,b)</td><td>1/(b−a)</td><td>(a+b)/2, (b−a)²/12</td></tr>
+<tr data-d="exp"><td>How long until the next event?</td><td>Exponential(λ)</td><td>λe⁻λˣ</td><td>1/λ, 1/λ²</td></tr>
+<tr data-d="gauss"><td>Sum/average of many small effects?</td><td>Gaussian(μ,σ²)</td><td>e^{−(x−μ)²/2σ²}/√(2πσ²)</td><td>μ, σ²</td></tr>
+</table>
+<p class="caption">Drag the parameters and watch the shape, mean and variance move together. Note how Binomial(n, λ/n) turns into Poisson(λ) as n grows, how Geometric's tail is a pure power of (1−p), and how the Gaussian is the only one whose shape never changes — only its location and scale.</p>
+</div>
+
+<h3>Bernoulli and Binomial</h3>
+<p>A Bernoulli(p) variable is one trial: P(X=1)=p, P(X=0)=1−p, written compactly as P(X=x)=pˣ(1−p)¹⁻ˣ. Its mean is E[X]=1·p+0·(1−p)=p. For the variance, use the trick that saves you in half of all indicator problems: a 0/1 variable satisfies X²=X, so E[X²]=E[X]=p and Var(X)=E[X²]−E[X]²=p−p²=p(1−p). The categorical distribution generalizes this to k outcomes with probabilities pᵢ; each indicator "X=i" is itself Bernoulli(pᵢ).</p>
+<p>A Binomial(n,p) variable is the sum of n independent Bernoulli(p) trials. Every particular sequence with k successes has probability pᵏ(1−p)ⁿ⁻ᵏ and there are C(n,k) such sequences, giving P(X=k)=C(n,k)pᵏ(1−p)ⁿ⁻ᵏ. The binomial theorem confirms the PMF sums to one: Σₖ C(n,k)pᵏ(1−p)ⁿ⁻ᵏ=(p+1−p)ⁿ=1. Never compute the mean from the PMF — decompose: E[X]=ΣE[Xᵢ]=np, and because the trials are independent, Var(X)=ΣVar(Xᵢ)=np(1−p). The decomposition trick extends to second moments: X²=(ΣXᵢ)²=ΣXᵢ²+Σᵢ≠ⱼXᵢXⱼ, and since Xᵢ²=Xᵢ, E[X²]=nE[Xᵢ]+n(n−1)E[XᵢXⱼ] — a formula you will reuse for dependent indicators where the cross terms are the whole story.</p>
+
+<h3>Poisson</h3>
+<p>Poisson(λ) counts events in a fixed interval when they occur independently at average rate λ: P(X=k)=λᵏe⁻λ/k!. Derive it as a binomial limit: slice the interval into n tiny pieces each containing at most one event with probability p=λ/n, so the count is Binomial(n, λ/n). Then P(X=k)=C(n,k)(λ/n)ᵏ(1−λ/n)ⁿ⁻ᵏ = (λᵏ/k!) · [n!/((n−k)!nᵏ)] · (1−λ/n)ⁿ · (1−λ/n)⁻ᵏ, and as n→∞ the three bracketed factors go to 1, e⁻λ and 1 respectively. Mean and variance are both λ (the mean is essentially the definition of the rate). Sums of independent Poissons are Poisson with rates adding — provable by moment generating functions, and intuitive: merging two independent event streams gives a stream with the combined rate. For an interval of length t the count is Poisson(λt).</p>
+
+<h3>Geometric</h3>
+<p>Geometric(p) is the number of trials up to and including the first success: P(X=k)=(1−p)ᵏ⁻¹p, with tail P(X&gt;k)=(1−p)ᵏ. The tail form gives you memorylessness for free: P(X&gt;m+n | X&gt;m)=(1−p)ᵐ⁺ⁿ/(1−p)ᵐ=(1−p)ⁿ=P(X&gt;n) — having failed m times is irrelevant, and the geometric is the <em>only</em> memoryless distribution on the positive integers. The PMF sums to one by the geometric series Σ_{i≥0} rⁱ=1/(1−r) for |r|&lt;1 (sanity check it with r=½: 1+½+¼+… = 2): Σ_{k≥1}(1−p)ᵏ⁻¹p = p·1/(1−(1−p)) = 1.</p>
+<p>The mean E[X]=1/p is where first-step analysis makes its debut. Condition on the first trial: with probability p we are done after 1 trial; with probability 1−p we have used one trial and are back where we started, so the remaining expectation is again E[X]. Hence E[X]=p·1+(1−p)(1+E[X]), which solves to E[X]=1/p. Intuition: each trial has a p chance of ending things, so you need about 1/p of them. The variance is (1−p)/p², so rare successes (p→0) have wildly variable waiting times — both mean and variance blow up.</p>
+
+<h3>Uniform</h3>
+<p>Uniform(a,b) has density 1/(b−a) on [a,b] and CDF (x−a)/(b−a) in between. E[X]=∫ₐᵇ x/(b−a) dx = (b²−a²)/(2(b−a)) = (a+b)/2, and Var(X)=(b−a)²/12 (compute E[X²]=(a²+ab+b²)/3 and subtract the squared mean). Two facts interviewers love: the difference of two independent uniforms is triangular, and the n+1 gaps created by n uniform points on [0,1] are identically distributed — which is the slick way to get expected maxima later.</p>
+
+<h3>Exponential</h3>
+<p>Exponential(λ) is the continuous waiting time with density f(x)=λe⁻λˣ for x≥0 and survival function P(X&gt;x)=e⁻λˣ. It is memoryless — P(X&gt;s+t | X&gt;s)=P(X&gt;t) — and is the only memoryless continuous distribution on [0,∞); it is exactly the continuous analogue of the geometric. E[X]=1/λ and Var(X)=1/λ²: if events arrive at rate λ, you wait 1/λ between them on average. The Poisson–Exponential duality is a single fact stated two ways: the number of events in a unit interval is Poisson(λ) ⟺ inter-event times are Exponential(λ). "How many events in the next hour?" is Poisson; "how long until the next one?" is Exponential.</p>
+<p>The minimum of independent exponentials is exponential with the rates added: P(min(X₁,X₂)&gt;t)=P(X₁&gt;t)P(X₂&gt;t)=e⁻λ₁ᵗe⁻λ₂ᵗ=e⁻⁽λ₁⁺λ₂⁾ᵗ, the survival function of Exp(λ₁+λ₂). If emails arrive at rate λ₁ and texts at λ₂, the wait for "either" is Exp(λ₁+λ₂) — and by the same calculation the probability that the email arrives first is λ₁/(λ₁+λ₂).</p>
+
+<h3>Gaussian</h3>
+<p>N(μ,σ²) is the limit shape of averages (Section 6). Everything reduces to the standard normal through Z=(X−μ)/σ ∼ N(0,1): if heights are N(70, 9) inches, then P(X&gt;76)=P(Z&gt;2)≈2.3%. The percentile z_α satisfies P(Z≤z_α)=α; symmetry gives z₁₋α=−z_α; a two-sided (1−α) interval is P(|Z|≤z₁₋α/2)=1−α, so the 95% interval uses z₀.₉₇₅≈1.96. Memorize the 68–95–99.7 rule for one, two and three standard deviations.</p>
+
+<h2 id="expectation">3. Expectation, variance, and the zoo of functions</h2>
+<p>E[X]=Σₓ x P(X=x) or ∫x f(x) dx, and for any function, E[g(X)]=Σ g(x)P(X=x) — you do not need the distribution of g(X). The <strong>tail formula</strong> for non-negative variables, E[X]=∫₀^∞ P(X&gt;x) dx = ∫₀^∞ (1−F(x)) dx, is the fastest route to many expectations (it is how we will get the expected minimum of exponentials in one line). Variance is Var(X)=E[(X−E[X])²]=E[X²]−E[X]².</p>
+<p>Three rules, and exactly when they need independence: <strong>linearity</strong> E[aX+bY+c]=aE[X]+bE[Y]+c holds <em>always</em> — dependence is irrelevant, which is why indicator tricks work on wildly dependent events; E[XY]=E[X]E[Y] and Var(X+Y)=Var(X)+Var(Y) need independence (more precisely, zero covariance).</p>
+<p>The zoo: a PMF p(k)=P(X=k) is non-negative and sums to one; a PDF f(x) is the thing you integrate, P(a≤X≤b)=∫ₐᵇf, and can exceed one; the CDF F(x)=P(X≤x) exists for both, with F′=f in the continuous case and P(a≤X≤b)=F(b)−F(a). The standard three-step recipe for the distribution of a transformed variable is CDF → differentiate → PDF → integrate for moments.</p>
+
+<h2 id="inequalities">4. Inequalities</h2>
+<p><strong>Markov:</strong> for non-negative X and a&gt;0, P(X≥a) ≤ E[X]/a. Proof: E[X] ≥ Σ_{x≥a} x P(X=x) ≥ a Σ_{x≥a} P(X=x) = a P(X≥a). The intuition is that the mean cannot be smaller than the contribution of the values above a.</p>
+<p><strong>Chebyshev:</strong> P(|X−μ|≥kσ) ≤ 1/k², i.e. at least 1−1/k² of the mass lies within k standard deviations (75% within two). Proof: apply Markov to the non-negative variable (X−μ)²: P((X−μ)²≥k²σ²) ≤ E[(X−μ)²]/(k²σ²) = 1/k². With ε=kσ: P(|X−μ|≥ε) ≤ σ²/ε². It is loose for Gaussians (the true two-sigma tail is 5%, not 25%) but it needs nothing beyond the variance.</p>
+<p><strong>Jensen:</strong> for convex φ, φ(E[X]) ≤ E[φ(X)]; for concave φ the inequality flips. Remember the direction with φ(x)=x² and X∈{−1,+1}: φ(E[X])=0 but E[φ(X)]=1. Convex (φ″≥0): x², even powers, |x|, aˣ for a&gt;1, 1/x for x&gt;0, max. Concave: √x, log x, xᵖ for 0&lt;p&lt;1, min. Linear functions are both. Worth memorizing: log E[X] ≥ E[log X] — the reason the log of an average beats the average of logs, which underlies the ELBO, importance sampling bias, and why training on log-likelihood is well-behaved. <strong>AM–GM</strong> follows directly: take logs of (a₁⋯aₙ)^{1/n} ≤ (a₁+⋯+aₙ)/n and apply Jensen to the concave log.</p>
+<p><strong>Cauchy–Schwarz:</strong> E[XY]² ≤ E[X²]E[Y²], equivalently (Σxᵢyᵢ)² ≤ (Σxᵢ²)(Σyᵢ²); it is why correlation lives in [−1,1]. <strong>Union bound:</strong> P(A₁∪⋯∪Aₙ) ≤ ΣP(Aᵢ) — crude but independence-free, the workhorse of "probability that <em>any</em> of n bad things happens" arguments.</p>
+
+<h2 id="bayes">5. Conditional probability and Bayes</h2>
+<p>With a joint P(X=x, Y=y), the marginal is P(X=x)=Σ_y P(X=x,Y=y) and the conditional is P(X=x|Y=y)=P(X=x,Y=y)/P(Y=y). <strong>Bayes' rule</strong> P(A|B)=P(B|A)P(A)/P(B) turns a prior P(A) into a posterior P(A|B) after evidence B; compute the denominator with the <strong>law of total probability</strong> P(B)=Σ_y P(B|Y=y)P(Y=y). The <strong>law of total expectation</strong> (tower property) E[X]=E_Y[E[X|Y]] is the conditioning version of the same idea — note that E[X|Y] is itself a random variable, a function of Y. Conditioning on "the first step" is the entire first-step method of Section 7.</p>
+<p>The classic trap is a rare-disease test: prevalence 1%, sensitivity 99%, false-positive rate 5%. P(disease | positive) = 0.99·0.01 / (0.99·0.01 + 0.05·0.99) ≈ 0.167. The base rate dominates; interviewers use it to see whether you reach for Bayes or for intuition.</p>
+
+<h2 id="limits">6. Limit theorems: LLN, CLT, and "how many samples?"</h2>
+<p>For iid X₁,…,Xₙ with mean μ and variance σ², the sample mean X̄ₙ has Var(X̄ₙ)=Var(ΣXᵢ)/n²=nσ²/n²=σ²/n, so its standard deviation — the <strong>standard error</strong> — is σ/√n. The <strong>law of large numbers</strong> says X̄ₙ→μ; prove the weak form from Chebyshev: P(|X̄ₙ−μ|&gt;ε) ≤ σ²/(nε²) → 0. The <strong>central limit theorem</strong> says more: X̄ₙ ≈ N(μ, σ²/n) regardless of the shape of the Xᵢ, giving the confidence interval X̄ₙ ± z₁₋α/2·σ/√n.</p>
+<p>The operational consequence to say out loud in interviews: <em>error shrinks like 1/√n, so cutting it tenfold costs a hundredfold more samples</em>. This is why benchmark deltas of a point or two need thousands of eval items (see the sample-size calculator in <a href="customization.html">Customization &amp; Evals</a>), and why Monte Carlo estimates of pass@k are noisy at small n.</p>
+<div class="card">
+<h3>Interactive: watch the CLT happen</h3>
+<div class="controls">
+  <label class="ctl">Per-sample n <input type="range" id="cltN" min="1" max="60" value="1" step="1"> <span id="cltNVal">1</span></label>
+  <button class="btn" id="cltRun">Draw 2,000 sample means</button>
+</div>
+<canvas id="cltViz" class="viz" width="900" height="240"></canvas>
+<p class="caption">Each sample averages n draws from a very skewed Exponential(1); the histogram is of 2,000 such averages. At n=1 it is the exponential itself; by n≈30 it is a bell with mean 1 and standard deviation 1/√n (dashed Gaussian overlay).</p>
+</div>
+
+<h2 id="problems">7. Problem types you can learn as moves</h2>
+<h3>7.1 First-step analysis</h3>
+<p><em>Expected number of fair-coin flips to see two heads in a row?</em> Define E₀ as the expected remaining flips when the last flip was tails (or you just started) and E₁ when the last flip was heads. Condition on the next flip: E₀ = ½(1+E₀) + ½(1+E₁) (tails: no progress; heads: progress), and E₁ = ½(1+E₀) + ½·0 (tails: start over; heads: done). Solving, E₁ = 1 + E₀/2 and E₀ = 2 + E₁ = 3 + E₀/2, so E₀ = 6. The move: fix attention on the first step, express the unknown expectations in terms of themselves, and solve the linear system. Follow-ups: HTH instead of HH (answer 10 — patterns with self-overlap finish faster than patterns without), a biased coin, or "expected flips until k heads in a row" (2ᵏ⁺¹−2).</p>
+<h3>7.2 Counting in expectation</h3>
+<p><em>How many things satisfy a property, on average?</em> Define Xᵢ = 1[item i has the property], set N = ΣXᵢ, compute E[Xᵢ]=P(item i has the property) using symmetry, and apply linearity: E[N]=ΣP(Xᵢ=1). Dependence between the indicators does not matter. Example: the expected number of fixed points of a random permutation of n items is n·(1/n)=1 — each position is equally likely to hold any item. Follow-ups: expected number of pairs with the same birthday among n people is C(n,2)/365; expected number of empty bins when m balls go into m bins is m(1−1/m)ᵐ ≈ m/e.</p>
+<h3>7.3 Max and min of n random variables</h3>
+<p>If X₁…Xₙ are iid with CDF F, then for the maximum M, F_M(x)=P(all Xᵢ≤x)=F(x)ⁿ, and for the minimum m, P(m&gt;x)=(1−F(x))ⁿ. Two routes to the expectation: CDF → PDF → integrate, or the tail formula directly. For Uniform[0,1]: F_M(x)=xⁿ, f_M=nxⁿ⁻¹, E[M]=∫₀¹ x·nxⁿ⁻¹dx = n/(n+1); via the tail formula, E[M]=∫₀¹(1−xⁿ)dx = 1 − 1/(n+1). The slick intuition: n uniform points split [0,1] into n+1 exchangeable gaps, so each has mean 1/(n+1), and the max is 1 minus the last gap. By the same symmetry E[min]=1/(n+1). For exponentials the minimum is clean — P(m&gt;x)=e^{−nλx}, so E[m]=1/(nλ) — while the maximum of n Exp(1) is Hₙ ≈ ln n (it is a sum of independent waits: 1/n for the first to fire, 1/(n−1) for the next…). For n standard Gaussians, E[max] ≈ √(2 ln n): the maximum grows, but only logarithmically — the fact behind "the best of a thousand random seeds is only about 3.7σ above average".</p>
+<h3>7.4 Combinatorics</h3>
+<table class="cmp">
+<tr><th>Order matters?</th><th>Replacement?</th><th>Count</th><th>Name</th></tr>
+<tr><td>yes</td><td>no</td><td>n!/(n−k)!</td><td>permutations P(n,k)</td></tr>
+<tr><td>no</td><td>no</td><td>C(n,k) = n!/(k!(n−k)!)</td><td>combinations</td></tr>
+<tr><td>yes</td><td>yes</td><td>nᵏ</td><td>sequences</td></tr>
+<tr><td>no</td><td>yes</td><td>C(n+k−1, k)</td><td>stars and bars</td></tr>
+</table>
+<p>Combinations are permutations with the k! orderings collapsed: C(n,k)=P(n,k)/k!. Arranging n objects of which n₁ are type 1, n₂ type 2, … gives the multinomial n!/(n₁!⋯nₘ!) (permute everything, divide out within-type rearrangements). <strong>Stars and bars:</strong> choosing k items from n types with replacement — or writing k as a sum of n non-negative integers — is placing k stars among n−1 bars, C(n+k−1, k). A <strong>derangement</strong> is a permutation with no fixed points; about 1/e of all permutations are derangements. <strong>Inclusion–exclusion:</strong> P(A∪B)=P(A)+P(B)−P(A∩B), and for three sets add the singles, subtract the pairs, add back the triple; it is how you count "at least one" exactly when the union bound is too loose.</p>
+<h3>7.5 Markov chains</h3>
+<p>A Markov chain X₀, X₁, … on states S has the Markov property: the future depends only on the present. For finite S it is a transition matrix P with Pᵢⱼ=P(X_{t+1}=j | X_t=i), rows summing to one; distributions evolve as π_{t+1}=π_t P, and a stationary distribution satisfies π=πP. Under mild conditions (irreducible, aperiodic) it is unique and π_t→π from any start. Two facts do most interview work: the <strong>expected return time</strong> to state i is 1/πᵢ, and <strong>absorption</strong> quantities come from first-step analysis — expected time to absorption h satisfies h_A=0 at the target and hᵢ=1+Σⱼ Pᵢⱼhⱼ elsewhere; absorption probability q satisfies q_A=1, q_B=0 at the other absorbing states, and qᵢ=Σⱼ Pᵢⱼ qⱼ. For small chains solve the linear system; for structured chains guess a closed form from small cases and verify it against the recurrence and boundary conditions.</p>
+<p>Symmetry shortcuts: on a graph where every node looks the same (a cycle, a complete graph), π is uniform (1/n), so the expected return time to any node is n; and since a return is one step to a neighbor plus the hitting time h back, n = 1 + h, giving h = n−1 for adjacent vertices. For walks on a circle, reparameterize hitting times by distance rather than by state.</p>
+
+<h2 id="puzzles">8. The puzzle canon</h2>
+<p>Each puzzle below gets the clean derivation, the follow-up an interviewer is likely to pivot to, and the one-line intuition you should be able to say without paper. The simulators exist so you can <em>see</em> the closed form — and so you remember that a Monte Carlo check is a legitimate answer when you blank on algebra.</p>
+
+<h3>8.1 Birthday problem</h3>
+<p>With d days and n people, P(no collision) = (d/d)·((d−1)/d)⋯((d−n+1)/d) = d!/((d−n)! dⁿ), so P(collision)=1 minus that. Using 1−x≈e⁻ˣ, the product is ≈ exp(−Σᵢ₌₁ⁿ⁻¹ i/d) = exp(−n(n−1)/2d) ≈ e^{−n²/2d}; setting this to ½ gives n ≈ √(2d ln 2) ≈ 1.18√d, which is 22.5 for d=365 — hence 23. <strong>Intuition:</strong> collisions scale with the number of <em>pairs</em>, C(n,2), not with n. <strong>Follow-up:</strong> how many people until someone shares <em>your</em> birthday? That is 1−(1−1/d)ⁿ ≥ ½ ⟹ n ≈ 253 — pairs versus singles is the whole lesson. The same square-root scaling is why hash collisions appear after ~√(2ᵇ) items for a b-bit hash (the birthday attack).</p>
+<div class="card">
+<h3>Interactive: the collision curve</h3>
+<div class="controls"><label class="ctl">Days / buckets d <input type="range" id="bdD" min="30" max="1000" value="365" step="5"> <span id="bdDVal">365</span></label></div>
+<canvas id="bdViz" class="viz" width="900" height="260"></canvas>
+<p class="caption">Solid: exact P(collision) for n people. Dashed: the e^{−n²/2d} approximation. The marker is the first n crossing 50% (23 for d=365). Slide d to see n* ≈ 1.18√d.</p>
+</div>
+
+<h3>8.2 Gambler's ruin and the random walk</h3>
+<p>Start with $a, win $1 with probability p and lose $1 with probability q=1−p, stop at $N (win) or $0 (ruin). Let qᵢ be the probability of reaching N from i, with q₀=0 and q_N=1; first-step analysis gives qᵢ = p·qᵢ₊₁ + q·qᵢ₋₁, a second-order linear recurrence. <strong>Fair game (p=½):</strong> qᵢ = ½qᵢ₋₁ + ½qᵢ₊₁ means consecutive differences are equal, so qᵢ is linear in i; the boundary conditions force qᵢ = i/N. The martingale route is shorter: wealth has no drift, so E[W_T]=a; but W_T is 0 or N, so E[W_T]=q_a·N, giving q_a=a/N. The expected duration from i is i(N−i) — hard to derive, trivial to verify against hᵢ = 1 + ½hᵢ₋₁ + ½hᵢ₊₁ with h₀=h_N=0. <strong>Biased game:</strong> with r=q/p, qᵢ = (1−rⁱ)/(1−rᴺ); for p&lt;½ and large N this decays like (p/q)^{N−a}, which is why the casino always wins — even a 1% edge makes long sessions nearly certain ruin. <strong>Intuition:</strong> in a fair game your win probability is just the fraction of the way you already are to the goal.</p>
+<p>The underlying object is the simple random walk Sₙ=X₁+⋯+Xₙ with Xᵢ=±1. E[Sₙ]=0 and, since each Xᵢ has variance E[Xᵢ²]−0=1, Var(Sₙ)=n: typical distance from the origin grows like √n, the scaling behind diffusion, Brownian motion, and the √n in standard errors. In the biased case E[Sₙ]=n(2p−1), so drift is linear while spread is √n — drift wins eventually, which is the biased gambler's doom restated.</p>
+<div class="card">
+<h3>Interactive: gambler's ruin simulator</h3>
+<div class="controls">
+  <label class="ctl">start a <input type="range" id="grA" min="1" max="29" value="10"> <span id="grAVal">10</span></label>
+  <label class="ctl">target N <input type="range" id="grN" min="5" max="30" value="20"> <span id="grNVal">20</span></label>
+  <label class="ctl">p(win) <input type="range" id="grP" min="30" max="70" value="50"> <span id="grPVal">0.50</span></label>
+  <button class="btn" id="grRun">Run 2,000 games</button>
+</div>
+<canvas id="grViz" class="viz" width="900" height="280"></canvas>
+<div class="kpi">
+  <div class="box"><div class="v" id="grEmp">–</div><div class="l">empirical P(reach N)</div></div>
+  <div class="box"><div class="v" id="grTheory">–</div><div class="l">closed form</div></div>
+  <div class="box"><div class="v" id="grDur">–</div><div class="l">mean duration (emp / theory)</div></div>
+</div>
+<p class="caption">Twelve sample paths are drawn; the KPIs come from all 2,000. At p=0.5 the win probability is a/N and the duration a(N−a); nudge p to 0.45 and watch the win probability collapse far faster than the odds suggest.</p>
+</div>
+
+<h3>8.3 Coupon collector</h3>
+<p>n coupon types, one uniformly random coupon per box; how many boxes to collect them all? Split into phases: in phase k you hold k distinct types and each box is new with probability (n−k)/n, so the phase length is Geometric((n−k)/n) with mean n/(n−k). Summing, E[T] = Σ_{k=0}^{n−1} n/(n−k) = n Σ_{j=1}^{n} 1/j = n·Hₙ ≈ n ln n + 0.577n. <strong>Intuition:</strong> the last coupon alone costs n boxes in expectation — the tail of the collection is where the time goes. <strong>Follow-ups:</strong> expected number of distinct coupons after m boxes is n(1−(1−1/n)ᵐ) (indicators again); how many boxes until you have <em>half</em> the coupons (≈ n ln 2, much cheaper); the variance is about (π²/6)n², so the standard deviation is ≈1.28n.</p>
+<div class="card">
+<h3>Interactive: coupon collector</h3>
+<div class="controls"><label class="ctl">coupons n <input type="range" id="ccN" min="2" max="60" value="12"> <span id="ccNVal">12</span></label><button class="btn" id="ccRun">Collect 3,000 times</button></div>
+<canvas id="ccViz" class="viz" width="900" height="240"></canvas>
+<div class="kpi"><div class="box"><div class="v" id="ccEmp">–</div><div class="l">empirical mean</div></div><div class="box"><div class="v" id="ccTheory">–</div><div class="l">n·Hₙ</div></div></div>
+<p class="caption">Histogram of completion times with the mean marked; notice the long right tail — the expectation sits well to the right of the mode because of unlucky final coupons.</p>
+</div>
+
+<h3>8.4 Information-theoretic puzzles</h3>
+<p>Count the information. To distinguish k possibilities with tests that each have m outcomes you need at least ⌈log_m k⌉ tests — a lower bound; whether a strategy achieves it depends on the problem's constraints. <em>Nine coins, one heavier, a balance scale:</em> each weighing has three outcomes and there are nine possibilities, so log₃ 9 = 2 weighings suffice: split into three groups of three (the heavy side, or the left-out group if balanced, contains the counterfeit), then weigh two of the remaining three. <strong>Follow-up:</strong> twelve coins with one counterfeit of <em>unknown</em> direction is 24 possibilities, so three weighings (3³=27) are necessary — and, famously, sufficient. The same counting argument lower-bounds comparison sorting at log₂(n!) ≈ n log₂ n comparisons and explains why twenty yes/no questions identify one of a million things.</p>
+
+<h3>8.5 Reservoir sampling</h3>
+<p>Items x₁, x₂, … stream past; return one uniformly at random from all items seen, without knowing the length in advance. Algorithm: keep x₁; for n=2,3,…, replace the stored item with xₙ with probability 1/n. Proof by induction that after n items each is stored with probability 1/n: the base case is trivial; for the step, xₙ is stored with probability 1/n by construction, while an earlier xₖ survives if it was stored after n−1 items (probability 1/(n−1) by induction) <em>and</em> xₙ was rejected (probability (n−1)/n), giving 1/(n−1)·(n−1)/n = 1/n. <strong>Follow-up (k items):</strong> fill the first k slots, then accept item i with probability k/i and evict a uniformly random slot; the same induction gives each item probability k/n. <strong>Intuition:</strong> each newcomer takes exactly the share it deserves, and dilutes everyone before it by the same factor.</p>
+<div class="card">
+<h3>Interactive: reservoir sampling</h3>
+<div class="controls">
+  <label class="ctl">slots k <input type="range" id="rsK" min="1" max="5" value="2"> <span id="rsKVal">2</span></label>
+  <button class="btn" id="rsStep">Next item</button>
+  <button class="btn secondary" id="rsRuns">Run 5,000 streams</button>
+  <button class="btn secondary" id="rsReset">Reset</button>
+</div>
+<canvas id="rsViz" class="viz" width="900" height="300"></canvas>
+<p class="caption">Top: a 12-item stream arriving one at a time; the newcomer is accepted with probability k/i (shown), evicting a random slot. Bottom: after thousands of streams, how often each of the 12 items ended up selected — flat at k/12, which is the whole point.</p>
+</div>
+
+<h3>8.6 Secretary problem</h3>
+<p>n candidates in random order; after each you must hire or reject irrevocably; maximize the probability of hiring the best. Strategy: reject the first k, then hire the first candidate better than all of those k (or the last one). Let b be the position of the best candidate. The strategy succeeds iff b&gt;k and the best of positions 1…b−1 lies in the first k (otherwise you hire someone earlier). So P(k) = Σ_{b=k+1}^{n} (1/n)·(k/(b−1)) = (k/n)(H_{n−1}−H_{k−1}) ≈ (k/n) ln(n/k). With r=k/n this is −r ln r; differentiating, −ln r − 1 = 0 ⟹ r = 1/e. <strong>Result:</strong> skip the first n/e ≈ 37% of candidates, then take the first record; you hire the best with probability ≈1/e ≈ 37%, independent of n. <strong>Follow-up:</strong> if you only need a top-few candidate, or can go back with some probability, the threshold drops; and if candidates have known value distributions (not just ranks) you threshold on value instead.</p>
+
+<h3>8.7 Monty Hall, in general</h3>
+<p>Let A ∈ {1…n} be the car's door, you pick door c, and Monty — who knows where the car is — opens a set B of goat doors. By Bayes, P(A=j | B) ∝ P(B | A=j) because the prior 1/n is uniform. <strong>Case 1, Monty opens n−2 doors leaving one other door r:</strong> if the car is behind your door t, Monty had n−1 ways to choose which door to leave closed, so P(B|A=t)=1/(n−1); if the car is behind r he was forced, P(B|A=r)=1; opened doors have likelihood 0. Normalizing, P(stay wins)=1/n and P(switch wins)=(n−1)/n — 1/3 vs 2/3 for three doors. <strong>Case 2, Monty opens only one door:</strong> P(B|A=t)=1/(n−1) but P(B|A=r)=1/(n−2) for each remaining door, so every unopened door is only slightly more likely than yours. <strong>The general principle:</strong> the k/n probability mass of the opened doors is redistributed onto the n−k−1 unopened, unchosen doors; your door keeps exactly 1/n because Monty's choice was constrained never to touch it. The puzzle flips if Monty opens a door at <em>random</em> and it happens to be a goat — then switching gives no advantage; interviewers love that variant.</p>
+<div class="card">
+<h3>Interactive: Monty Hall</h3>
+<div class="controls"><button class="btn" id="mhRun">Play 100 games</button><button class="btn" id="mhRun1k">Play 2,000 games</button><button class="btn secondary" id="mhReset">Reset</button><span class="dim" id="mhStats"></span></div>
+<canvas id="mhViz" class="viz" width="900" height="240"></canvas>
+<p class="caption">Running win rates for always-switch (green) and always-stay (blue) against the 2/3 and 1/3 reference lines. The early wobble is exactly the 1/√n convergence of Section 6.</p>
+</div>
+
+<h3>8.8 Longest run of heads, and balls into bins</h3>
+<p>Flip a fair coin n times; the longest run of heads Lₙ has no clean closed form but E[Lₙ] ≈ log₂ n (more precisely log₂ n − 0.667 for large n), with fluctuations of only O(1) around it — a hundred flips give a longest run of about six, a million give about nineteen. <strong>Intuition:</strong> a run of length r at a given position has probability 2⁻ʳ and there are ~n positions, so the longest run is where n·2⁻ʳ ≈ 1. The same reasoning gives the load-balancing classic: throw m balls into m bins uniformly; each bin's count is ≈Poisson(1), so about 37% (e⁻¹) of bins are empty, 37% hold one ball, and 26% hold two or more; the fullest bin holds about ln m / ln ln m balls, which is why hash tables see collisions long before they are "full" and why the "power of two choices" (put each ball in the emptier of two random bins) drops the max load to about ln ln m.</p>
+<div class="card">
+<h3>Interactive: longest run and max load</h3>
+<div class="controls"><label class="ctl">n flips / balls <input type="range" id="lrN" min="16" max="4096" value="256" step="16"> <span id="lrNVal">256</span></label><button class="btn" id="lrRun">Simulate 1,000 times</button></div>
+<canvas id="lrViz" class="viz" width="900" height="240"></canvas>
+<p class="caption">Left: histogram of the longest heads run in n flips with log₂ n marked. Right: fraction of bins with 0, 1, 2+ balls when n balls land in n bins, against 1/e, 1/e, 1−2/e.</p>
+</div>
+
+<h3>8.9 Path counting</h3>
+<p>Lattice paths from (0,0) to (m,n) by unit right or up steps: every path is a sequence of m rights and n ups, uniquely specified by which of the m+n steps go right, so there are C(m+n, m). Paths through a waypoint (a,b) multiply: C(a+b, a)·C((m−a)+(n−b), m−a). <strong>Follow-ups:</strong> paths that never cross the diagonal are Catalan numbers C(2n,n)/(n+1) (the reflection principle); and the probability a simple random walk returns to the origin at step 2n is C(2n,n)/4ⁿ ≈ 1/√(πn) — which summed over n diverges, the reason the one-dimensional walk is recurrent.</p>
+
+<h2 id="stats">9. Statistics: MLE, bias and variance</h2>
+<p><strong>Maximum likelihood:</strong> given data x₁…xₙ from a model with unknown θ, choose the θ that makes the data most probable: L(θ)=Πp(xᵢ;θ), θ̂=argmax L. Take logs to turn the product into a sum, ℓ(θ)=Σ log p(xᵢ;θ), differentiate, set to zero, solve, and check it is a maximum (second derivative or the endpoints). Three worked cases, in the order interviewers ask them:</p>
+<ul>
+<li><strong>Bernoulli(p)</strong>: ℓ(p)=k log p+(n−k)log(1−p) with k ones; ℓ′=k/p−(n−k)/(1−p)=0 gives p̂=k/n — the sample frequency.</li>
+<li><strong>Exponential(λ)</strong>: ℓ(λ)=Σ(log λ−λxᵢ)=n log λ−λΣxᵢ; ℓ′=n/λ−Σxᵢ=0 gives λ̂=n/Σxᵢ, the reciprocal of the sample mean — consistent with E[X]=1/λ.</li>
+<li><strong>Uniform(0,θ)</strong>: L(θ)=θ⁻ⁿ if max xᵢ ≤ θ, else 0; there is no stationary point — the likelihood is maximized by the <em>smallest</em> feasible θ, so θ̂=max xᵢ. A reminder that calculus is a tool, not the definition.</li>
+</ul>
+<p>Language models are MLE: minimizing cross-entropy −(1/N)Σ log p(xᵢ) is maximizing the log-likelihood Σ log p(xᵢ) of the observed tokens — training makes the data as probable as possible (<a href="transformers.html">Transformers</a>, <a href="math.html">Math</a>).</p>
+<p><strong>Bias and variance:</strong> an estimator θ̂ is a function of random data, so it is itself a random variable. Bias[θ̂]=E[θ̂]−θ (how far off on average), Var(θ̂)=E[(θ̂−E[θ̂])²] (how much it depends on the particular sample), and the mean squared error decomposes exactly: MSE(θ̂)=E[(θ̂−θ)²]=Bias² + Var. The uniform MLE max xᵢ is biased low (E[max]=nθ/(n+1)); (n+1)/n·max xᵢ is unbiased with the same variance order — a classic "fix the bias" follow-up. The sample variance with 1/(n−1) rather than 1/n is unbiased for the same reason (one degree of freedom is spent estimating the mean).</p>
+
+<h2 id="mathy">10. Math things: Taylor, derivatives, handy identities</h2>
+<p><strong>Taylor series</strong> approximate f near a point using only derivatives there: f(x)=Σₙ f⁽ⁿ⁾(a)(x−a)ⁿ/n!, Maclaurin when a=0. The zeroth order is a horizontal line f(0); first order f(0)+f′(0)x is the tangent (value and slope match); second order adds f″(0)x²/2, a parabola matching curvature too — each term adds one derivative of information, and the second-order expansion of the loss is exactly what Newton's method, natural gradients, and the "sharpness" story in <a href="deep-learning.html">Deep Learning</a> are built on. eˣ=1+x+x²/2!+x³/3!+⋯ converges everywhere; log(1+x)≈x−x²/2 and 1−x≈e⁻ˣ for small x are the two approximations behind the birthday problem and every "n large, p small" limit.</p>
+<p><strong>Derivatives to know cold:</strong> d/dx xⁿ=nxⁿ⁻¹, (eˣ)′=eˣ, (log x)′=1/x, (sin x)′=cos x, (cos x)′=−sin x; chain rule (f∘g)′=f′(g)g′; product rule (fg)′=f′g+fg′; quotient rule (f/g)′=(f′g−fg′)/g². The chain rule is backpropagation (<a href="math.html">Math</a>).</p>
+<p><strong>Handy equations:</strong> Hₙ=Σ1/k ≈ ln n + 0.577; √(xy) ≤ (x+y)/2; e = lim(1+1/n)ⁿ, 1/e = lim(1−1/n)ⁿ, eˣ = lim(1+x/n)ⁿ; e = Σ1/k!, e⁻¹ = 1−1/1!+1/2!−1/3!+⋯ (the derangement fraction); Σᵢ₌₁ⁿ i = n(n+1)/2, Σ i² = n(n+1)(2n+1)/6; Σ_{k≥0} k rᵏ = r/(1−r)² (differentiate the geometric series — it is how the geometric mean 1/p falls out directly).</p>
+
+<h2 id="la">11. Linear algebra and calculus quick sheet (what ML interviews actually ask)</h2>
+<table class="cmp">
+<tr><th>Fact</th><th>Why they ask it</th></tr>
+<tr><td>Eigendecomposition A=QΛQᵀ for symmetric A; eigenvalues real, eigenvectors orthogonal; PSD ⟺ all λ≥0</td><td>Covariance matrices, PCA, Hessians (curvature = eigenvalues), stability of optimizers</td></tr>
+<tr><td>SVD A=UΣVᵀ for any matrix; singular values = √eigenvalues of AᵀA; rank-k truncation is the best rank-k approximation (Eckart–Young)</td><td>LoRA's low-rank hypothesis, embeddings compression, conditioning (κ=σmax/σmin)</td></tr>
+<tr><td>∇ₓ(aᵀx)=a; ∇ₓ(xᵀAx)=(A+Aᵀ)x; ∇_W ‖Wx−y‖² = 2(Wx−y)xᵀ</td><td>Deriving gradients of linear layers and least squares by hand</td></tr>
+<tr><td>Softmax Jacobian ∂sᵢ/∂zⱼ = sᵢ(δᵢⱼ−sⱼ); cross-entropy-with-softmax gradient = s − y</td><td>The single most asked backward-pass derivation</td></tr>
+<tr><td>log-sum-exp(z)=m+log Σ e^{zᵢ−m} with m=max z; its gradient is softmax</td><td>Numerical stability (<a href="math.html">Math</a>, <a href="kernels.html">Kernels</a>' online softmax)</td></tr>
+<tr><td>Second-order Taylor: f(x+δ)≈f+∇fᵀδ+½δᵀHδ; Newton step −H⁻¹∇f</td><td>Why learning rates must respect curvature; sharp vs flat minima</td></tr>
+<tr><td>Jensen: log E ≥ E log</td><td>ELBO, why maximizing log-likelihood of a mixture is hard, importance-sampling bias</td></tr>
+<tr><td>Trace tricks: tr(AB)=tr(BA), E[xᵀAx]=tr(AΣ)+μᵀAμ</td><td>Expected losses under Gaussian noise, variance of quadratic forms</td></tr>
+<tr><td>Matrix multiply cost 2mnk FLOPs; a (n×n) inverse is O(n³) — never invert, solve</td><td>Bridges to the roofline arithmetic in <a href="gpu.html">GPU</a></td></tr>
+</table>
+
+<h2 id="drill">12. Rapid-fire drill (click to reveal)</h2>
+<p class="dim">Twenty questions spanning the chapter; answer out loud before revealing. Aim for the first sentence to name the tool (Section 1), the second to give the number.</p>
+<details class="drill"><summary>1. Expected number of fair-coin flips to see two heads in a row?</summary><p>First-step analysis: E₀=½(1+E₀)+½(1+E₁), E₁=½(1+E₀); E₀=6.</p></details>
+<details class="drill"><summary>2. You wait for a bus that arrives as a Poisson process at rate 4/hour; you have waited 10 minutes. Expected remaining wait?</summary><p>Memorylessness: still 1/λ = 15 minutes.</p></details>
+<details class="drill"><summary>3. P(at least one 6 in four dice rolls)?</summary><p>1−(5/6)⁴ ≈ 0.518. (Complement, not union bound.)</p></details>
+<details class="drill"><summary>4. Expected number of fixed points in a random permutation of 100 items?</summary><p>Indicators: 100·(1/100)=1, regardless of n.</p></details>
+<details class="drill"><summary>5. E[max of 10 Uniform(0,1)]?</summary><p>n/(n+1)=10/11. Gaps argument or ∫(1−x¹⁰)dx.</p></details>
+<details class="drill"><summary>6. A test is 99% sensitive, 5% false-positive; prevalence 1%. P(disease | positive)?</summary><p>0.0099/(0.0099+0.0495)≈16.7%. Bayes with total probability.</p></details>
+<details class="drill"><summary>7. Fair gambler with $30 aiming for $100. P(success)? Expected duration?</summary><p>30/100 = 0.3; duration a(N−a)=30·70=2,100 rounds.</p></details>
+<details class="drill"><summary>8. How many people until a shared birthday is more likely than not? Until someone shares <em>your</em> birthday?</summary><p>23 (pairs, ~1.18√365); 253 (singles, 1−(364/365)ⁿ≥½).</p></details>
+<details class="drill"><summary>9. Expected boxes to collect all 50 coupons?</summary><p>50·H₅₀ ≈ 50·4.499 ≈ 225.</p></details>
+<details class="drill"><summary>10. Bound P(X ≥ 3μ) for non-negative X knowing only the mean.</summary><p>Markov: ≤ μ/(3μ) = 1/3.</p></details>
+<details class="drill"><summary>11. Minimum of Exp(2) and Exp(3): distribution and P(the Exp(2) one is smaller)?</summary><p>Exp(5); 2/5.</p></details>
+<details class="drill"><summary>12. MLE of λ for Exponential data with sample mean 4?</summary><p>λ̂ = 1/4 (reciprocal of the sample mean).</p></details>
+<details class="drill"><summary>13. Standard error of a mean from 400 samples with σ=10; how many samples to halve it?</summary><p>0.5; 1,600 samples (4×).</p></details>
+<details class="drill"><summary>14. Secretary problem: how many of 100 candidates to skip, and the success probability?</summary><p>Skip ≈37 (n/e); hire the best with probability ≈37%.</p></details>
+<details class="drill"><summary>15. Monty Hall with 10 doors, Monty opens 8 goats: P(switch wins)?</summary><p>9/10 (the 8/10 of opened doors concentrates on the one remaining door).</p></details>
+<details class="drill"><summary>16. Stationary distribution of a random walk on a cycle of 7 nodes; expected return time to a node; hitting time to a neighbor?</summary><p>Uniform 1/7; return time 7; neighbor hitting time n−1=6.</p></details>
+<details class="drill"><summary>17. Ways to distribute 10 identical balls into 4 boxes?</summary><p>Stars and bars: C(13,3)=286.</p></details>
+<details class="drill"><summary>18. Is E[1/X] ≥ 1/E[X] for positive X?</summary><p>Yes — 1/x is convex, Jensen.</p></details>
+<details class="drill"><summary>19. Lattice paths from (0,0) to (5,4)? Through (2,2)?</summary><p>C(9,5)=126; C(4,2)·C(5,3)=6·10=60.</p></details>
+<details class="drill"><summary>20. Longest heads run in 1,024 fair flips, roughly? Fraction of empty bins with n balls in n bins?</summary><p>≈ log₂1024 = 10 (about 9–10); ≈1/e ≈ 37%.</p></details>
+
+<h2 id="reading">13. Where to go deeper</h2>
+<ul>
+<li><a href="https://alisawuffles.notion.site/math-notes">Alisa Liu's math notes</a> — the source and spine of this chapter; written for one specific interview, which is exactly the right scope. Mirrored (text and print PDF) in <a href="https://github.com/kedardg/job-prep">kedardg/job-prep</a> under <code>raw/resources/</code>.</li>
+<li>Blitzstein &amp; Hwang, <em>Introduction to Probability</em> (free online with Stat 110 lectures) — the best single textbook for story-based probability; its "story proofs" are the lookup table of Section 1 at book length.</li>
+<li>MIT 6.041 / 18.600 lecture notes — rigorous and short; the Markov chain and limit theorem chapters are especially good.</li>
+<li>Mosteller, <em>Fifty Challenging Problems in Probability</em>, and Crack, <em>Heard on the Street</em> — the puzzle canon in interview form.</li>
+<li>In this notebook: <a href="math.html">Math Foundations</a> for the calculus/linear-algebra side, <a href="customization.html">Customization &amp; Evals</a> for sample sizes and bootstrap confidence intervals in practice, and the <a href="flashcards.html">Interview Math flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="math.html">← Math</a><a href="deep-learning.html">Deep Learning →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function onTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+const $=id=>document.getElementById(id);
+function rand(){return Math.random();}
+function randn(){let u=0,v=0;while(u===0)u=rand();while(v===0)v=rand();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+function fact(n){let r=1;for(let i=2;i<=n;i++)r*=i;return r;}
+function choose(n,k){if(k<0||k>n)return 0;let r=1;for(let i=1;i<=k;i++)r=r*(n-k+i)/i;return r;}
+function axes(ctx,x0,y0,w,h){ctx.strokeStyle=css('--border');ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x0,y0-h);ctx.moveTo(x0,y0);ctx.lineTo(x0+w,y0);ctx.stroke();}
+function hist(ctx,data,x0,y0,w,h,bins,color,label){const mn=Math.min(...data),mx=Math.max(...data);const nb=bins||Math.min(40,Math.max(5,mx-mn+1));const step=(mx-mn+1e-9)/nb;const counts=new Array(nb).fill(0);data.forEach(d=>{counts[Math.min(nb-1,Math.floor((d-mn)/step))]++;});const cm=Math.max(...counts);axes(ctx,x0,y0,w,h);ctx.fillStyle=color;counts.forEach((c,i)=>{const bh=h*c/cm;ctx.fillRect(x0+i*(w/nb)+1,y0-bh,Math.max(1,w/nb-2),bh);});ctx.fillStyle=css('--text-dim');ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText(mn.toFixed(0),x0,y0+14);ctx.textAlign='right';ctx.fillText(mx.toFixed(0),x0+w,y0+14);if(label){ctx.textAlign='left';ctx.fillText(label,x0,y0-h-6);}return {mn,mx,step,nb,counts,cm};}
+
+// ---------- 2. distribution explorer ----------
+(function(){
+const cv=$('distViz'),ctx=cv.getContext('2d');
+const CFG={
+ bern:{p1:['p',1,99,50,v=>v/100],p2:null,story:'one trial'},
+ binom:{p1:['n',1,40,12,v=>v],p2:['p',1,99,35,v=>v/100],story:'successes in n trials'},
+ pois:{p1:['λ',1,200,40,v=>v/10],p2:null,story:'events in a window'},
+ geom:{p1:['p',1,95,30,v=>v/100],p2:null,story:'trials until first success'},
+ unif:{p1:['a',0,50,10,v=>v/10],p2:['b−a',1,80,40,v=>v/10],story:'anywhere on [a,b]'},
+ exp:{p1:['λ',1,50,10,v=>v/10],p2:null,story:'time until next event'},
+ gauss:{p1:['μ',-30,30,0,v=>v/10],p2:['σ',1,30,10,v=>v/10],story:'sum of many small effects'}};
+let cur='binom';
+function setup(){const c=CFG[cur];const s1=$('dP1');s1.min=c.p1[1];s1.max=c.p1[2];s1.value=c.p1[3];$('p1Name').textContent=c.p1[0];
+ const s2=$('dP2');if(c.p2){s2.style.display='';$('p2Name').textContent=c.p2[0];s2.min=c.p2[1];s2.max=c.p2[2];s2.value=c.p2[3];}else{s2.style.display='none';$('p2Name').textContent='';}
+ document.querySelectorAll('#storyTable tr').forEach(tr=>tr.classList.toggle('hl',tr.dataset.d===cur));draw();}
+function draw(){
+ const c=CFG[cur];const a=c.p1[4](+$('dP1').value);const b=c.p2?c.p2[4](+$('dP2').value):null;
+ $('p1Val').textContent=a;$('p2Val').textContent=c.p2?b:'';$('dStory').textContent=c.story;
+ const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const x0=50,y0=H-30,w=W-80,h=H-60;axes(ctx,x0,y0,w,h);
+ const acc=css('--accent'),dim=css('--text-dim');ctx.font='11px sans-serif';
+ let mean,vr,pts=[],discrete=true,xs=[];
+ if(cur==='bern'){pts=[1-a,a];xs=[0,1];mean=a;vr=a*(1-a);}
+ else if(cur==='binom'){const n=a,p=b;for(let k=0;k<=n;k++){xs.push(k);pts.push(choose(n,k)*Math.pow(p,k)*Math.pow(1-p,n-k));}mean=n*p;vr=n*p*(1-p);}
+ else if(cur==='pois'){const l=a;const K=Math.max(10,Math.ceil(l+4*Math.sqrt(l)+2));for(let k=0;k<=K;k++){xs.push(k);pts.push(Math.exp(-l+k*Math.log(l)-Math.log(fact(Math.min(k,170)))));}mean=l;vr=l;}
+ else if(cur==='geom'){const p=a;const K=Math.min(60,Math.ceil(6/p));for(let k=1;k<=K;k++){xs.push(k);pts.push(Math.pow(1-p,k-1)*p);}mean=1/p;vr=(1-p)/(p*p);}
+ else{discrete=false;const N=200;let lo,hi,f;
+  if(cur==='unif'){const A=a,B=a+b;lo=A-0.5;hi=B+0.5;f=x=>(x>=A&&x<=B)?1/(B-A):0;mean=(A+B)/2;vr=(B-A)*(B-A)/12;}
+  else if(cur==='exp'){const l=a;lo=0;hi=6/l;f=x=>l*Math.exp(-l*x);mean=1/l;vr=1/(l*l);}
+  else{const m=a,s=b;lo=m-4*s;hi=m+4*s;f=x=>Math.exp(-(x-m)*(x-m)/(2*s*s))/Math.sqrt(2*Math.PI*s*s);mean=m;vr=s*s;}
+  for(let i=0;i<=N;i++){const x=lo+(hi-lo)*i/N;xs.push(x);pts.push(f(x));}}
+ const pm=Math.max(...pts)||1;
+ if(discrete){const bw=w/xs.length;ctx.fillStyle=acc;pts.forEach((p,i)=>{const bh=h*p/pm;ctx.fillRect(x0+i*bw+2,y0-bh,Math.max(2,bw-4),bh);});ctx.fillStyle=dim;ctx.textAlign='center';xs.forEach((x,i)=>{if(xs.length<=25||i%Math.ceil(xs.length/25)===0)ctx.fillText(x,x0+i*bw+bw/2,y0+14);});ctx.textAlign='left';ctx.fillText('P(X=k)',x0,y0-h-6);}
+ else{ctx.strokeStyle=acc;ctx.lineWidth=2.5;ctx.beginPath();pts.forEach((p,i)=>{const X=x0+w*i/(pts.length-1),Y=y0-h*p/pm;i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText(xs[0].toFixed(1),x0,y0+14);ctx.textAlign='right';ctx.fillText(xs[xs.length-1].toFixed(1),x0+w,y0+14);ctx.textAlign='left';ctx.fillText('density f(x)',x0,y0-h-6);
+  // mean marker
+  const mx=x0+w*(mean-xs[0])/(xs[xs.length-1]-xs[0]);ctx.strokeStyle=css('--accent2');ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(mx,y0);ctx.lineTo(mx,y0-h);ctx.stroke();ctx.setLineDash([]);}
+ if(discrete){const i=xs.findIndex(x=>x>=mean);const bw=w/xs.length;const mx=x0+(mean-xs[0])/(xs.length>1?(xs[1]-xs[0]):1)*bw+bw/2;ctx.strokeStyle=css('--accent2');ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(mx,y0);ctx.lineTo(mx,y0-h);ctx.stroke();ctx.setLineDash([]);}
+ $('dMean').textContent=mean.toFixed(2);$('dVar').textContent=vr.toFixed(2);
+}
+$('dSel').onchange=()=>{cur=$('dSel').value;setup();};$('dP1').oninput=draw;$('dP2').oninput=draw;setup();onTheme(draw);
+})();
+
+// ---------- 6. CLT ----------
+(function(){
+const cv=$('cltViz'),ctx=cv.getContext('2d');let data=[];
+function run(){const n=+$('cltN').value;data=[];for(let t=0;t<2000;t++){let s=0;for(let i=0;i<n;i++)s+=-Math.log(rand());data.push(s/n);}draw();}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const n=+$('cltN').value;$('cltNVal').textContent=n;if(!data.length){ctx.fillStyle=css('--text-dim');ctx.font='13px sans-serif';ctx.fillText('Press the button to sample.',30,40);return;}
+ const x0=50,y0=H-30,w=W-80,h=H-60;const lo=0,hi=Math.max(3,1+5/Math.sqrt(n));const nb=60;const counts=new Array(nb).fill(0);data.forEach(d=>{const i=Math.floor((d-lo)/(hi-lo)*nb);if(i>=0&&i<nb)counts[i]++;});const cm=Math.max(...counts);axes(ctx,x0,y0,w,h);ctx.fillStyle=css('--accent');counts.forEach((c,i)=>{ctx.fillRect(x0+i*w/nb+1,y0-h*c/cm,w/nb-2,h*c/cm);});
+ // gaussian overlay with mean 1, sd 1/sqrt(n), scaled to histogram
+ const sd=1/Math.sqrt(n);ctx.strokeStyle=css('--accent2');ctx.setLineDash([5,4]);ctx.lineWidth=2;ctx.beginPath();for(let i=0;i<=200;i++){const x=lo+(hi-lo)*i/200;const g=Math.exp(-(x-1)*(x-1)/(2*sd*sd))/Math.sqrt(2*Math.PI*sd*sd);const y=y0-h*(g*2000*(hi-lo)/nb)/cm;const X=x0+w*i/200;i?ctx.lineTo(X,Math.max(y0-h,y)):ctx.moveTo(X,Math.max(y0-h,y));}ctx.stroke();ctx.setLineDash([]);
+ ctx.fillStyle=css('--text-dim');ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('0',x0,y0+14);ctx.textAlign='right';ctx.fillText(hi.toFixed(1),x0+w,y0+14);ctx.textAlign='left';const m=data.reduce((a,b)=>a+b,0)/data.length;const v=data.reduce((a,b)=>a+(b-m)*(b-m),0)/data.length;ctx.fillText(`sample means: mean ${m.toFixed(3)}, sd ${Math.sqrt(v).toFixed(3)} (theory 1, ${sd.toFixed(3)})`,x0,y0-h-6);}
+$('cltRun').onclick=run;$('cltN').oninput=run;draw();onTheme(draw);
+})();
+
+// ---------- 8.1 birthday ----------
+(function(){
+const cv=$('bdViz'),ctx=cv.getContext('2d');
+function draw(){const d=+$('bdD').value;$('bdDVal').textContent=d;const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const x0=50,y0=H-30,w=W-80,h=H-60;axes(ctx,x0,y0,w,h);
+ const nmax=Math.min(d,Math.ceil(4*Math.sqrt(d))+5);let pu=1,first=null;const ex=[],ap=[];for(let n=1;n<=nmax;n++){if(n>1)pu*=(d-n+1)/d;const pc=1-pu;ex.push(pc);ap.push(1-Math.exp(-n*n/(2*d)));if(first===null&&pc>=0.5)first=n;}
+ const X=n=>x0+w*(n-1)/(nmax-1),Y=p=>y0-h*p;
+ ctx.strokeStyle=css('--border');ctx.setLineDash([3,4]);ctx.beginPath();ctx.moveTo(x0,Y(0.5));ctx.lineTo(x0+w,Y(0.5));ctx.stroke();ctx.setLineDash([]);
+ ctx.strokeStyle=css('--accent');ctx.lineWidth=2.5;ctx.beginPath();ex.forEach((p,i)=>i?ctx.lineTo(X(i+1),Y(p)):ctx.moveTo(X(i+1),Y(p)));ctx.stroke();
+ ctx.strokeStyle=css('--accent2');ctx.setLineDash([5,4]);ctx.lineWidth=2;ctx.beginPath();ap.forEach((p,i)=>i?ctx.lineTo(X(i+1),Y(p)):ctx.moveTo(X(i+1),Y(p)));ctx.stroke();ctx.setLineDash([]);
+ if(first){ctx.fillStyle=css('--warn');ctx.beginPath();ctx.arc(X(first),Y(ex[first-1]),6,0,7);ctx.fill();ctx.fillStyle=css('--text');ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText(`n* = ${first}  (1.18√d ≈ ${(1.18*Math.sqrt(d)).toFixed(1)})`,X(first)+10,Y(ex[first-1])+4);}
+ ctx.fillStyle=css('--text-dim');ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('1',x0,y0+14);ctx.textAlign='right';ctx.fillText(nmax+' people',x0+w,y0+14);ctx.textAlign='left';ctx.fillText('P(some shared birthday)   solid exact · dashed e^(−n²/2d)',x0,y0-h-6);}
+$('bdD').oninput=draw;draw();onTheme(draw);
+})();
+
+// ---------- 8.2 gambler's ruin ----------
+(function(){
+const cv=$('grViz'),ctx=cv.getContext('2d');let paths=[],emp=null,dur=null;
+function sync(){const N=+$('grN').value;$('grA').max=N-1;if(+$('grA').value>=N)$('grA').value=N-1;$('grAVal').textContent=$('grA').value;$('grNVal').textContent=N;$('grPVal').textContent=(+$('grP').value/100).toFixed(2);}
+function run(){sync();const a=+$('grA').value,N=+$('grN').value,p=+$('grP').value/100;paths=[];let wins=0,tot=0;for(let t=0;t<2000;t++){let x=a,steps=0;const path=t<12?[x]:null;while(x>0&&x<N&&steps<20000){x+=rand()<p?1:-1;steps++;if(path)path.push(x);}if(x>=N)wins++;tot+=steps;if(path)paths.push(path);}emp=wins/2000;dur=tot/2000;draw();}
+function draw(){sync();const a=+$('grA').value,N=+$('grN').value,p=+$('grP').value/100,q=1-p;const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const x0=50,y0=H-30,w=W-80,h=H-60;axes(ctx,x0,y0,w,h);
+ const r=q/p;const theory=Math.abs(p-0.5)<1e-9?a/N:(1-Math.pow(r,a))/(1-Math.pow(r,N));const durT=Math.abs(p-0.5)<1e-9?a*(N-a):(a/(q-p))-(N/(q-p))*(1-Math.pow(r,a))/(1-Math.pow(r,N));
+ ctx.strokeStyle=css('--border');ctx.setLineDash([3,4]);[0,N].forEach(v=>{ctx.beginPath();ctx.moveTo(x0,y0-h*v/N);ctx.lineTo(x0+w,y0-h*v/N);ctx.stroke();});ctx.setLineDash([]);
+ const maxLen=Math.max(20,...paths.map(pp=>pp.length));const cols=['#5b8cff','#38c6a0','#f2a65a','#e5604c','#b07cff','#4cc3e5','#e5a0c3','#9ad24c','#ff8c66','#66c7ff','#d2b84c','#8fe0b8'];
+ paths.forEach((pp,i)=>{ctx.strokeStyle=cols[i%cols.length];ctx.globalAlpha=0.85;ctx.lineWidth=1.5;ctx.beginPath();pp.forEach((v,j)=>{const X=x0+w*j/(maxLen-1),Y=y0-h*v/N;j?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();});ctx.globalAlpha=1;
+ ctx.fillStyle=css('--text-dim');ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('$0 (ruin)',x0+4,y0-4);ctx.fillText('$'+N+' (win)',x0+4,y0-h+12);ctx.fillText(paths.length?'time → (longest shown path: '+(maxLen-1)+' rounds)':'press Run',x0,y0+16);
+ $('grTheory').textContent=theory.toFixed(3);$('grEmp').textContent=emp===null?'–':emp.toFixed(3);$('grDur').textContent=dur===null?'–':dur.toFixed(0)+' / '+durT.toFixed(0);}
+['grA','grN','grP'].forEach(id=>$(id).oninput=()=>{paths=[];emp=null;dur=null;draw();});$('grRun').onclick=run;draw();onTheme(draw);
+})();
+
+// ---------- 8.3 coupon collector ----------
+(function(){
+const cv=$('ccViz'),ctx=cv.getContext('2d');let data=[];
+function run(){const n=+$('ccN').value;data=[];for(let t=0;t<3000;t++){const seen=new Set();let c=0;while(seen.size<n){seen.add(Math.floor(rand()*n));c++;}data.push(c);}draw();}
+function draw(){const n=+$('ccN').value;$('ccNVal').textContent=n;let Hn=0;for(let j=1;j<=n;j++)Hn+=1/j;$('ccTheory').textContent=(n*Hn).toFixed(1);const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+ if(!data.length){$('ccEmp').textContent='–';ctx.fillStyle=css('--text-dim');ctx.font='13px sans-serif';ctx.fillText('Press the button to simulate.',30,40);return;}
+ const m=data.reduce((a,b)=>a+b,0)/data.length;$('ccEmp').textContent=m.toFixed(1);const info=hist(ctx,data,50,H-30,W-80,H-60,45,css('--accent'),'boxes needed to complete the set');
+ const X=v=>50+(W-80)*((v-info.mn)/(info.mx-info.mn+1e-9));ctx.strokeStyle=css('--accent2');ctx.lineWidth=2;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(X(m),H-30);ctx.lineTo(X(m),30);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=css('--text');ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText('mean '+m.toFixed(1),X(m)+6,42);}
+$('ccRun').onclick=run;$('ccN').oninput=()=>{data=[];draw();};draw();onTheme(draw);
+})();
+
+// ---------- 8.5 reservoir sampling ----------
+(function(){
+const cv=$('rsViz'),ctx=cv.getContext('2d');const N=12;let i=0,slots=[],last='',counts=new Array(N).fill(0),runs=0;
+function reset(){i=0;slots=[];last='';draw();}
+function step(){const k=+$('rsK').value;if(i>=N){last='stream ended — press Reset';draw();return;}i++;if(slots.length<k){slots.push(i);last=`item ${i}: slot free → kept (prob 1)`;}else{const pr=k/i;if(rand()<pr){const e=Math.floor(rand()*k);last=`item ${i}: accepted with prob k/i = ${k}/${i} = ${pr.toFixed(2)} → evicts item ${slots[e]}`;slots[e]=i;}else last=`item ${i}: rejected (accept prob ${pr.toFixed(2)})`;}draw();}
+function runs5k(){const k=+$('rsK').value;counts=new Array(N).fill(0);runs=5000;for(let t=0;t<runs;t++){const s=[];for(let j=1;j<=N;j++){if(s.length<k)s.push(j);else if(rand()<k/j)s[Math.floor(rand()*k)]=j;}s.forEach(v=>counts[v-1]++);}draw();}
+function draw(){const k=+$('rsK').value;$('rsKVal').textContent=k;const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');ctx.font='12px sans-serif';
+ ctx.fillStyle=txt;ctx.textAlign='left';ctx.fillText('stream',20,24);for(let j=1;j<=N;j++){const x=80+(j-1)*62;const seen=j<=i,inres=slots.includes(j);ctx.fillStyle=inres?acc2:(seen?css('--bg-inset'):'transparent');ctx.strokeStyle=j===i?acc:css('--border');ctx.lineWidth=j===i?2.5:1;ctx.fillRect(x,10,50,30);ctx.strokeRect(x,10,50,30);ctx.fillStyle=inres?'#fff':(seen?txt:dim);ctx.textAlign='center';ctx.fillText('x'+j,x+25,30);}
+ ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('reservoir: ['+slots.map(v=>'x'+v).join(', ')+']   '+last,20,66);
+ // histogram
+ const x0=80,y0=H-28,w=W-110,h=H-130;axes(ctx,x0,y0,w,h);if(runs){const target=k/N;const cm=Math.max(...counts)/runs;for(let j=0;j<N;j++){const f=counts[j]/runs;const bw=w/N;ctx.fillStyle=acc;ctx.fillRect(x0+j*bw+6,y0-h*f/(cm*1.15),bw-12,h*f/(cm*1.15));ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText((f*100).toFixed(1)+'%',x0+j*bw+bw/2,y0-h*f/(cm*1.15)-4);}
+  ctx.strokeStyle=acc2;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,y0-h*target/(cm*1.15));ctx.lineTo(x0+w,y0-h*target/(cm*1.15));ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText(`selection frequency per item over ${runs} streams — dashed = k/N = ${(target*100).toFixed(1)}%`,x0,y0-h-6);}
+ else{ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('Run 5,000 streams to see each item selected with probability k/N.',x0,y0-h/2);}}
+$('rsStep').onclick=step;$('rsRuns').onclick=runs5k;$('rsReset').onclick=reset;$('rsK').oninput=()=>{reset();runs=0;counts=new Array(N).fill(0);draw();};draw();onTheme(draw);
+})();
+
+// ---------- 8.7 Monty Hall ----------
+(function(){
+const cv=$('mhViz'),ctx=cv.getContext('2d');let sw=[],st=[],ws=0,wt=0;
+function play(n){for(let t=0;t<n;t++){const car=Math.floor(rand()*3),pick=Math.floor(rand()*3);const stayWin=car===pick;const switchWin=!stayWin;ws+=switchWin?1:0;wt+=stayWin?1:0;const g=sw.length+1;sw.push(ws/g);st.push(wt/g);}draw();}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const x0=50,y0=H-30,w=W-80,h=H-60;axes(ctx,x0,y0,w,h);const dim=css('--text-dim');
+ ctx.strokeStyle=css('--border');ctx.setLineDash([3,4]);[1/3,2/3].forEach(v=>{ctx.beginPath();ctx.moveTo(x0,y0-h*v);ctx.lineTo(x0+w,y0-h*v);ctx.stroke();});ctx.setLineDash([]);
+ ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('2/3',x0+4,y0-h*2/3-4);ctx.fillText('1/3',x0+4,y0-h/3-4);
+ const n=sw.length;if(n){[[sw,css('--accent2')],[st,css('--accent')]].forEach(([arr,c])=>{ctx.strokeStyle=c;ctx.lineWidth=2;ctx.beginPath();arr.forEach((v,i)=>{const X=x0+w*i/Math.max(1,n-1),Y=y0-h*v;i?ctx.lineTo(X,Y):ctx.moveTo(X,Y);});ctx.stroke();});
+  $('mhStats').textContent=`${n} games — switch wins ${(100*ws/n).toFixed(1)}%, stay wins ${(100*wt/n).toFixed(1)}%`;}else $('mhStats').textContent='';
+ ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('games played →',x0,y0+16);}
+$('mhRun').onclick=()=>play(100);$('mhRun1k').onclick=()=>play(2000);$('mhReset').onclick=()=>{sw=[];st=[];ws=0;wt=0;draw();};draw();onTheme(draw);
+})();
+
+// ---------- 8.8 longest run + balls into bins ----------
+(function(){
+const cv=$('lrViz'),ctx=cv.getContext('2d');let runsData=[],bins=null;
+function run(){const n=+$('lrN').value;runsData=[];let e=0,o=0,m=0;for(let t=0;t<1000;t++){let best=0,c=0;for(let i=0;i<n;i++){if(rand()<0.5){c++;if(c>best)best=c;}else c=0;}runsData.push(best);}
+ for(let t=0;t<50;t++){const cnt=new Array(n).fill(0);for(let i=0;i<n;i++)cnt[Math.floor(rand()*n)]++;cnt.forEach(v=>{if(v===0)e++;else if(v===1)o++;else m++;});}const tot=e+o+m;bins=[e/tot,o/tot,m/tot];draw();}
+function draw(){const n=+$('lrN').value;$('lrNVal').textContent=n;const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim');ctx.font='11px sans-serif';
+ if(!runsData.length){ctx.fillStyle=dim;ctx.fillText('Press Simulate.',30,40);return;}
+ const info=hist(ctx,runsData,50,H-30,W/2-80,H-60,null,css('--accent'),'longest run of heads in '+n+' flips');const m=runsData.reduce((a,b)=>a+b,0)/runsData.length;const lg=Math.log2(n);
+ ctx.fillStyle=css('--text');ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText(`mean ${m.toFixed(2)} · log₂ n = ${lg.toFixed(2)}`,60,46);
+ // bins bars
+ const x0=W/2+40,y0=H-30,w=W/2-80,h=H-60;axes(ctx,x0,y0,w,h);const labels=['empty','one ball','2+ balls'],theory=[1/Math.E,1/Math.E,1-2/Math.E];const bw=w/3;
+ bins.forEach((f,i)=>{ctx.fillStyle=css('--accent');ctx.fillRect(x0+i*bw+14,y0-h*f/0.5,bw-28,h*f/0.5);ctx.strokeStyle=css('--accent2');ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0+i*bw+8,y0-h*theory[i]/0.5);ctx.lineTo(x0+(i+1)*bw-8,y0-h*theory[i]/0.5);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';ctx.fillText(labels[i]+' '+(100*f).toFixed(1)+'%',x0+i*bw+bw/2,y0+14);});
+ ctx.textAlign='left';ctx.fillText(`${n} balls into ${n} bins — dashed = 1/e, 1/e, 1−2/e`,x0,y0-h-6);}
+$('lrRun').onclick=run;$('lrN').oninput=()=>{runsData=[];draw();};draw();onTheme(draw);
+})();
+</script>
+</body>
+</html>
