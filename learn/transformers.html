@@ -142,6 +142,7 @@
   <label class="ctl">KV heads K <input type="number" id="acK" value="8" style="width:70px"></label>
   <label class="ctl">F <input type="number" id="acF" value="14336" step="256" style="width:90px"></label>
   <label class="ctl">V <input type="number" id="acV" value="128256" step="1024" style="width:100px"></label>
+  <label class="ctl">FFN <select id="acFFN"><option value="3" selected>SwiGLU (3 matrices)</option><option value="2">GeLU (2 matrices)</option></select></label>
 </div>
 <div class="controls">
   <label class="ctl">S <input type="number" id="acS" value="8192" step="1024" style="width:90px"></label>
@@ -164,7 +165,7 @@
   <div class="box"><div class="v" id="acAct">–</div><div class="l">activations, all layers (B×S)</div></div>
   <div class="box"><div class="v" id="acTrainMem">–</div><div class="l">training memory (18 B/param + activations)</div></div>
 </div>
-<p class="caption">Defaults are Llama-3-8B; the parameter box should read 8.03B. Try GPT-2 small (D=768, L=12, N=K=12, F=3072, V=50257, tied) to see tied embeddings at work, untick FlashAttention at S=8192 to watch the <code>B·N·S²</code> term explode, and toggle checkpointing to see activations drop toward <code>L·B·S·D</code>.</p>
+<p class="caption">Defaults are Llama-3-8B; the parameter box should read 8.03B. Try GPT-2 small (D=768, L=12, N=K=12, F=3072, V=50257, tied, two-matrix GeLU FFN → 124M) to see tied embeddings and the FFN convention at work, untick FlashAttention at S=8192 to watch the <code>B·N·S²</code> term explode, and toggle checkpointing to see activations drop toward <code>L·B·S·D</code>.</p>
 </div>
 
 <h3 id="impl">Implementation notes (the muscle-memory details)</h3>
@@ -370,19 +371,19 @@ const fmtF=f=>f>=1e12?(f/1e12).toFixed(2)+' TFLOP':f>=1e9?(f/1e9).toFixed(2)+' G
 function upd(){
   const D=+$('acD').value,L=+$('acL').value,N=+$('acN').value,K=+$('acK').value,F=+$('acF').value,V=+$('acV').value,S=+$('acS').value,B=+$('acB').value;
   const H=D/N,tied=$('acTied').checked,flash=$('acFlash').checked,ckpt=$('acCkpt').checked;
-  const attn=2*D*D+2*D*K*H,ffn=3*D*F,norms=2*D;const perLayer=attn+ffn+norms;
+  const nF=+$('acFFN').value;const attn=2*D*D+2*D*K*H,ffn=nF*D*F,norms=2*D;const perLayer=attn+ffn+norms;
   const emb=(tied?1:2)*V*D;const params=L*perLayer+emb+D;const nonEmb=L*perLayer+D;
   const fwd=2*nonEmb+2*D*V+4*L*S*D;const train=6*params;
   const kvTok=2*L*K*H*2;
-  const actLayer=ckpt?(B*S*D):(14*B*S*D+(flash?B*N*S:B*N*S*S));const act=actLayer*L*2;
+  const actLayer=ckpt?(B*S*D):((nF===3?14:12)*B*S*D+(flash?B*N*S:B*N*S*S));const act=actLayer*L*2;
   const inf=params*2+kvTok*S*B;const trainMem=params*18+act;
   $('acParams').textContent=fmtN(params);$('acNonEmb').textContent=fmtN(nonEmb);
   $('acFwd').textContent=fmtF(fwd);$('acTrain').textContent=fmtF(train);
   $('acKV').textContent=fmtB(kvTok);$('acInf').textContent=fmtB(inf);$('acAct').textContent=fmtB(act);$('acTrainMem').textContent=fmtB(trainMem);
 }
-['acD','acL','acN','acK','acF','acV','acS','acB','acTied','acFlash','acCkpt'].forEach(id=>$(id).oninput=upd);
-$('acLlama').onclick=()=>{[['acD',4096],['acL',32],['acN',32],['acK',8],['acF',14336],['acV',128256]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=false;upd();};
-$('acGpt2').onclick=()=>{[['acD',768],['acL',12],['acN',12],['acK',12],['acF',3072],['acV',50257]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=true;upd();};
+['acD','acL','acN','acK','acF','acV','acFFN','acS','acB','acTied','acFlash','acCkpt'].forEach(id=>$(id).oninput=upd);
+$('acLlama').onclick=()=>{[['acD',4096],['acL',32],['acN',32],['acK',8],['acF',14336],['acV',128256]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=false;$('acFFN').value='3';upd();};
+$('acGpt2').onclick=()=>{[['acD',768],['acL',12],['acN',12],['acK',12],['acF',3072],['acV',50257]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=true;$('acFFN').value='2';upd();};
 upd();
 })();
 </script>
