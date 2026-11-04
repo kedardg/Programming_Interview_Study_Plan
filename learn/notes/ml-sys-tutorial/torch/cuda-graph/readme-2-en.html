@@ -1,0 +1,413 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisiting CUDA Graph: Core Mechanisms, Multi-Graph Memory Sharing, and Unified Coverage for Dual AR Models</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › torch/cuda-graph/readme-2-en.md</div>
+<article class="note"><h1 id="revisiting-cuda-graph-core-mechanisms-multi-graph-memory-sharing-and-unified-coverage-for-dual-ar-models">Revisiting CUDA Graph: Core Mechanisms, Multi-Graph Memory Sharing, and Unified Coverage for Dual AR Models</h1>
+<p>Last August, I wrote a brief article on understanding CUDA Graph from a virtual address protection perspective, <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/torch/cuda-graph/readme.md">A Brief Analysis of CUDA Graph Based on torch-memory-saver</a> (Part 1 of this series): it covered CUDA Graph fundamentals, why it's commonly used in inference but rarely in training, and how torch-memory-saver uses <code>cuMemMap</code> to protect virtual address stability. Unfortunately, my understanding of CUDA Graph was still shallow at the time. Recently, while adding CUDA Graph support for Fish Audio's S2-Pro TTS model in the SGLang-Omni framework (<a href="https://github.com/sgl-project/sglang-omni/pull/153">PR #153</a>), I discovered the true depth of CUDA Graph. S2-Pro has two asymmetric autoregressive processes (Slow AR + Fast AR), and we unified their forward into a single CUDA Graph for capture and replay, boosting TPS from 55.6 to 88. In discussions around <a href="https://github.com/sgl-project/sglang-omni/pull/153">PR #153</a>, we further tested the performance of combining <code>torch.compile</code> with CUDA Graph:</p>
+<table>
+<thead>
+<tr>
+<th>Configuration</th>
+<th>Steady-state throughput</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Eager (no CUDA graph, no compile)</td>
+<td>55.6 tok/s</td>
+</tr>
+<tr>
+<td>CUDA graph only</td>
+<td>88 tok/s</td>
+</tr>
+<tr>
+<td>Partial compile (fast head only)</td>
+<td>121 tok/s</td>
+</tr>
+<tr>
+<td>Full-model compile</td>
+<td>126 tok/s</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Note: TPS here measures the speed at which the TTS model's LLM backbone produces speech codec tokens, excluding the vocoder stage. The specific architecture of this model will be elaborated later in the article.</p>
+</blockquote>
+<p>The results were extremely satisfying. Motivated by this, this article will dive deep into PR #153 to discuss:</p>
+<ol>
+<li>Progressive derivation of CUDA Graph core mechanisms and constraints</li>
+<li>Unified CUDA Graph coverage for the S2-Pro Dual AR model</li>
+<li>Engineering implementation of deferred graph capture, persistent buffers, etc.</li>
+</ol>
+<p>The discussion of torch.compile's four modes and their coexistence strategy with CUDA Graph, as well as the conflict between inductor CUDAGraph Trees and SGLang CudaGraphRunner, will be deferred to a follow-up article.</p>
+<p>acknowledgement:</p>
+<p>Jingwen Gu, Yitong Guan, Ratish P, Shidong Li, Yue Leng, Shuai Shi, Junrong Lin, Shenggui Li, and yours truly</p>
+<h2 id="cuda-graph-core-mechanisms">CUDA Graph Core Mechanisms</h2>
+<p>In <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/torch/cuda-graph/readme.md">A Brief Analysis of CUDA Graph</a>, we already discussed the basic concepts. In short, CUDA Graph records a sequence of GPU kernels as a static DAG, then replays the entire computation flow with a single CPU launch, eliminating the CPU overhead of launching kernels one by one. Building on that foundation, let's develop a deeper understanding of CUDA Graph's core mechanisms.</p>
+<h3 id="construction-process">Construction Process</h3>
+<ol>
+<li>
+<p><strong>Capture</strong>: Capturing or recording a CUDA Graph. After calling <code>cudaStreamBeginCapture()</code>, the CUDA runtime enters recording mode — all subsequent operations submitted to that stream (kernel launches, memcpy, memset, etc.) are not actually executed, but instead recorded as nodes in the DAG. Each node stores: which kernel to call, grid/block dimensions, and all parameter values (for tensors, this means their GPU virtual addresses). Edges between nodes are automatically inferred from the submission order on the stream and cross-stream event synchronization. When recording ends, calling <code>cudaStreamEndCapture()</code> returns a <code>cudaGraph_t</code> as a pure topological description that cannot be directly executed.</p>
+</li>
+<li>
+<p><strong>Instantiate</strong>: Instantiating a CUDA Graph. After obtaining <code>cudaGraph_t</code>, a further call to <code>cudaGraphInstantiate()</code> compiles it into <code>cudaGraphExec_t</code>. Capture is analogous to recording a script, while instantiate is compiling that script into an executable binary — the former is a declarative description, the latter an imperative execution plan:
+   - Dependency analysis and scheduling: traverse the DAG topology, determine which kernels have true data dependencies and which can execute concurrently, and generate an optimal execution plan.
+   - Parameter binding and solidification: all kernel parameters recorded during capture, such as GPU pointers for tensors, are baked into the executable object. From this we can see that tensor addresses must remain unchanged for every subsequent CUDA Graph replay, because virtual addresses have been welded into the <code>cudaGraphExec_t</code>.
+   - Legality validation: checks whether the graph contains unsupported operations (e.g., host-device sync); if invalid, instantiate returns failure.</p>
+</li>
+<li>
+<p><strong>Replay</strong>: CUDA Graph replay. Calling <code>cudaGraphLaunch(exec, stream)</code> submits the entire <code>cudaGraphExec_t</code> to the specified stream in one shot. The CPU issues a single launch instruction, and the GPU scheduler executes all kernels sequentially (or concurrently) according to the execution plan generated during instantiate, eliminating the CPU overhead of per-kernel launches. Since replay bypasses the Python/PyTorch dispatcher and has no per-operation CPU-side scheduling, CPU overhead drops to nearly zero.</p>
+</li>
+</ol>
+<p>For inference — a highly repetitive, fixed computation flow where each decode step executes the same kernel sequence — capture once, instantiate once, replay endlessly, saving massive CPU launch overhead. This is the core value of CUDA Graph.</p>
+<h3 id="constraints">Constraints</h3>
+<p>The operations performed during the construction stages allow us to derive CUDA Graph's constraints — i.e., under what conditions CUDA Graph will break:</p>
+<table>
+<thead>
+<tr>
+<th>Constraint</th>
+<th>Meaning</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Pointer stability</strong></td>
+<td>GPU virtual addresses must remain unchanged during replay</td>
+<td>Capture records addresses; changed addresses mean kernels read/write wrong memory</td>
+</tr>
+<tr>
+<td><strong>No dynamic memory allocation</strong></td>
+<td>All tensors must be pre-allocated during capture</td>
+<td>Dynamic <code>torch.zeros(...)</code> triggers the allocator with unpredictable addresses</td>
+</tr>
+<tr>
+<td><strong>No host-device sync</strong></td>
+<td>Cannot call <code>.item()</code>, <code>torch.multinomial</code>, etc.</td>
+<td>Sync interrupts stream capture, causing capture failure</td>
+</tr>
+<tr>
+<td><strong>Static control flow</strong></td>
+<td>Loop counts and branch conditions are fixed at capture time</td>
+<td>Graph is a static DAG and doesn't support runtime conditional branches</td>
+</tr>
+<tr>
+<td><strong>Graph doesn't auto-update after recording</strong></td>
+<td>Code path changes require re-capture</td>
+<td>The recorded kernel sequence is fixed and won't change due to Python code modifications</td>
+</tr>
+</tbody>
+</table>
+<p>Overall, CUDA Graph is a rather fragile static graph operation that requires careful protection.</p>
+<p>The above constraints lead to a direct corollary: a single graph can only serve one batch size. Specifically, since kernel parameters recorded during capture (grid dimensions, tensor shapes/addresses) are baked into the <code>cudaGraphExec_t</code>, changing the batch size invalidates all of them. In SGLang's decode stage, each request produces one token per step, so <code>bs=4</code> means the input tensor's first dimension is 4 — the corresponding kernel grid sizes, intermediate tensor shapes, and memory layouts are all based on 4, completely different from those for <code>bs=8</code>. In other words, a single graph can only serve one batch size. SGLang captures a separate graph for a discrete set of decode batch sizes (e.g., <code>bs ∈ {1, 2, 4, 8, ...}</code>). When the actual number of requests matches a pre-recorded bs, graph replay is used; otherwise it falls back to eager mode — PyTorch's default per-op execution where each kernel is launched individually by the CPU, without graph's one-shot submission optimization, but with the advantage of correctly handling any dynamic shape.</p>
+<h3 id="pytorch-wrapper-and-memory-pool">PyTorch Wrapper and Memory Pool</h3>
+<p>PyTorch further wraps the CUDA runtime's graph API into Python-friendly interfaces:</p>
+<table>
+<thead>
+<tr>
+<th>PyTorch API</th>
+<th>CUDA Runtime API</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>torch.cuda.CUDAGraph()</code></td>
+<td><code>cudaGraph_t</code> + <code>cudaGraphExec_t</code></td>
+</tr>
+<tr>
+<td><code>graph.capture_begin()</code></td>
+<td><code>cudaStreamBeginCapture()</code></td>
+</tr>
+<tr>
+<td><code>graph.capture_end()</code></td>
+<td><code>cudaStreamEndCapture()</code></td>
+</tr>
+<tr>
+<td><code>graph.replay()</code></td>
+<td><code>cudaGraphLaunch()</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="cuda-graph-memory-overhead-and-sharing-mechanism">CUDA Graph Memory Overhead and Sharing Mechanism</h3>
+<p>At this point, I must mention a definition that <a href="https://www.linkedin.com/in/lanking/">Lanqing</a> once shared with me — CUDA Graph is essentially a cache. And since it's a cache, it's a space-for-time trade-off. All intermediate computations during a graph's capture stage produce intermediate tensors (attention scores, FFN intermediate activations, residual addition outputs, etc.). These intermediate tensors' addresses are written into the <code>cudaGraphExec_t</code>, and during replay, kernels directly read from and write to these fixed addresses. Therefore, the memory region allocated from the memory pool during capture gets locked down by the CUDA Graph as a whole, and is never returned to PyTorch's general allocator.</p>
+<p>Furthermore, note that the memory held by a CUDA Graph is not the sum of all intermediate tensor sizes. We can think of the CUDA Graph's memory pool as an enclosed, independent memory region: tensors inside the graph can only use memory within the pool, external tensors cannot occupy pool space — inside and outside are isolated. But within this fenced-off region, PyTorch's caching allocator still functions normally: intermediate tensors produced earlier can have their addresses reused by later tensors once they're no longer referenced. Therefore, the memory held by a single graph roughly equals the peak memory usage during capture (high-water mark), not the simple sum of all tensors that ever existed. For example, the forward pass of a 32-layer Transformer — each layer's intermediate activations can be reused after the next layer starts, so the high-water mark might only equal a few layers' worth of intermediate tensors, far less than the sum of all 32 layers.</p>
+<p>Even so, if 12 graphs for different batch sizes each independently hold their own high-water mark of memory, the total usage is still 12x — which remains unacceptable for large model inference. This naturally leads to the memory sharing mechanism between different graphs. The inside-outside isolation mentioned earlier refers to isolation between the graph pool and ordinary non-graph PyTorch code, but multiple graphs don't need to be isolated from each other. PyTorch allows multiple graphs to share the same pool via <code>torch.cuda.graph(pool=...)</code>, with their intermediate tensors all allocated from the same memory region. This is safe because during the decode stage, only one graph corresponding to one batch size is replayed per step — intermediate tensors from different graphs are never alive simultaneously and can take turns reusing memory. This way, regardless of how many graphs exist, the memory overhead equals just one copy of the largest graph's high-water mark. These concepts will be further elaborated in the subsequent SGLang CudaGraphRunner source code walkthrough.</p>
+<h2 id="s2-pro-model-and-unified-cuda-graph-optimization">S2-Pro Model and Unified CUDA Graph Optimization</h2>
+<p>We've established the core conceptual framework of CUDA Graph — the five constraints and memory sharing mechanism form our analytical toolkit. The question now is: when a model has two asymmetric autoregressive processes, how do these constraints concretely shape the CUDA Graph design? S2-Pro is exactly such a model.</p>
+<h3 id="s2-pro-model-architecture">S2-Pro Model Architecture</h3>
+<p><a href="https://huggingface.co/fishaudio/s2-pro">S2 Pro</a> is a 5B-parameter speech generation model (TTS) from Fish Audio that generates speech matching a reference voice's timbre given reference audio + target text. The model has two Autoregressive decoders, known as Dual-Autoregressive/Dual-AR.</p>
+<p>Setting aside the architectural design, each Dual-AR inference step needs to produce 10 codebook tokens, accomplished through two asymmetric autoregressive processes:</p>
+<ol>
+<li>Slow AR (text model, 4B parameters): based on a pretrained Qwen3-4B, autoregresses along the time axis. The input sequence interleaves text tokens and audio tokens, predicting the semantic token for the 1st RVQ codebook at each time step t. Although only one codebook token is produced, Qwen3-4B is much larger than the audio decoder, hence the name Slow AR. Each step is computationally heavy, with single forward latency at ms-scale.</li>
+<li>Fast AR (audio decoder, approximately 400M parameters): a 4-layer Transformer that receives Slow AR's hidden state as a conditioning prefix, autoregressing 9 steps along the codebook depth dimension to generate the remaining 9 codebook tokens. All codebooks share a single embedding table, with RoPE positional encoding distinguishing codebook layers. Although computation per step is tiny — few layers, small dimensions, single forward latency at μs-scale — the accumulated kernel launch overhead from 9 autoregressive steps is non-negligible.</li>
+</ol>
+<p>After Fast AR completes 9 codebook tokens, Multi-Codebook Fusion (MCF) aggregates all 10 codebook tokens (Slow AR's semantic token + Fast AR's 9 acoustic tokens) into a single continuous vector, serving as Slow AR's input embedding for the next time step. This highly asymmetric design — a 4B large model on the time axis + a 4-layer small network on the depth axis — makes the Dual-AR architecture structurally isomorphic to standard autoregressive LLMs, and thus it can inherit most of SGLang's LLM-native serving optimizations, including continuous batching, paged KV cache, CUDA Graph replay, and RadixAttention-based prefix caching.</p>
+<h3 id="computation-characteristics-of-slow-head-and-fast-head">Computation Characteristics of Slow Head and Fast Head</h3>
+<p>S2-Pro's slow head is implemented as <code>S2ProSGLangTextModel</code> in <a href="https://github.com/sgl-project/sglang-omni/blob/cd9aaf3/sglang_omni/models/fishaudio_s2_pro/sglang_model.py"><code>sglang_model.py</code></a>, with a total of 36 layers (<code>num_layers: int = 36</code>), each containing 4 large GEMMs — <code>qkv_proj, o_proj, gate_up_proj, down_proj</code>. These large matrix multiplications are highly optimized in cuBLAS, with individual kernel latency at ms-scale and relatively small kernel launch overhead proportion.</p>
+<p>Fast head is an independent small transformer — <a href="https://github.com/sgl-project/sglang-omni/blob/cd9aaf3/sglang_omni/models/fishaudio_s2_pro/fish_speech/models/text2semantic/modeling.py#L919"><code>FishQwen3AudioDecoder</code></a>, with far fewer <code>TransformerBlock</code> layers than the slow head. Each step involves only one small GEMM (<code>[bs, 1, fast_dim]</code> scale), with extremely small computation (μs-scale), but requires the complete sequence of embedding lookup → linear projection → forward kvcached → argmax → embedding lookup, with 9 iterations generating a large number of small kernel launches.</p>
+<p>Given the Fast Head's computation characteristics, we pre-allocate independent KV Cache for each fast head layer, completely isolated from SGLang's paged KV cache. Specifically, the core value of paged KV cache lies in: when multiple requests have varying sequence lengths that grow dynamically, it efficiently shares memory and reduces fragmentation through page-granularity allocation/deallocation. But fast head's usage pattern neatly sidesteps all these scenarios: the codebook loop's sequence length is fixed (<code>num_codebooks + 1</code>, i.e., 10 steps), all requests within the batch advance synchronously, and the KV cache is cleared with <code>zero_()</code> for reuse after each time step — there's no cross-timestep dynamic growth or inter-request misalignment. In this pattern of fixed length, synchronous advancement, and use-then-discard, statically pre-allocated KV Cache is both simple and efficient, and naturally satisfies CUDA Graph's pointer stability constraint since addresses don't change after allocation.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>SGLang Paged KV Cache (slow head)</th>
+<th>Static KV Cache (fast head)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Management</td>
+<td><code>token_to_kv_pool_allocator</code> dynamic allocation</td>
+<td><code>setup_caches()</code> one-time pre-allocation</td>
+</tr>
+<tr>
+<td>Sequence length</td>
+<td>Dynamic growth</td>
+<td>Fixed (<code>num_codebooks + 1</code>)</td>
+</tr>
+<tr>
+<td>Memory reclamation</td>
+<td>Return to pool via <code>release_kv_cache()</code></td>
+<td><code>reset_caches()</code> clears with <code>zero_()</code></td>
+</tr>
+<tr>
+<td>CUDA Graph compatibility</td>
+<td>Pointer stability via SGLang's <code>req_to_token_pool</code> indirect addressing</td>
+<td><strong>Inherently safe</strong> — addresses don't change after allocation</td>
+</tr>
+</tbody>
+</table>
+<p>Both satisfy CUDA Graph's pointer stability constraint, but through different mechanisms: paged cache achieves it through framework-level pre-allocated buffers + indirect addressing, while static cache achieves it directly through one-time allocation. From this we can also see that the two KV cache types can in fact safely coexist within the same CUDA Graph — each independently manages its state, but all kernels are recorded into the same DAG. This will be the factual basis for covering both Auto Regressive forwards with a single CUDA Graph later.</p>
+<h3 id="how-to-design-cuda-graph-for-a-dual-ar-model">How to Design CUDA Graph for a Dual AR Model?</h3>
+<p>S2-Pro's decode stage is naturally suited for CUDA Graph:</p>
+<ol>
+<li>Highly repetitive fixed kernel sequence: each step executes the same 36-layer transformer + 9-step codebook loop, with completely static control flow; this is the ideal scenario for the static control flow requirement among the five constraints.</li>
+<li>TTS inference is latency-sensitive (requiring real-time speech generation), and eliminating CPU-side launch overhead directly helps end-to-end latency.</li>
+</ol>
+<p>Given this, how should such a CUDA Graph be designed? This is, in fact, the driving question of the entire article.</p>
+<p>Before <a href="https://github.com/sgl-project/sglang-omni/pull/153">PR #153</a>, SGLang's CUDA Graph only covered the slow head (standard LLM transformer forward). The fast head (codebook loop) ran outside the graph as per-request post-processing. But predictably, CUDA Graph optimization would be even more meaningful for the fast head with its heavier launch overhead on small operations. Specifically:</p>
+<ol>
+<li>Slow head gains limited benefit from CUDA Graph: the core of slow head is large GEMMs like <code>mm(8×2560, 2560×6144)</code>, with individual kernel computation at ms-scale. The relative benefit of eliminating launch overhead is small — large kernel execution time far exceeds launch overhead.</li>
+<li>Fast head without CUDA Graph is the real bottleneck: each step in the codebook loop is a μs-scale small operator, with 9 iterations generating massive kernel launches. Launch overhead dominates execution time — this is exactly the problem CUDA Graph excels at solving.</li>
+</ol>
+<p>A natural idea is to capture an independent CUDA Graph for each AR process, and indeed this was Fish Audio's team internal early approach. However, this would still leave CPU scheduling overhead between the two AR processes. If two AR processes each independently build CUDA Graphs, after the slow head's graph replay ends, the CPU needs to retrieve results, launch the fast head's graph replay, and then write back to CPU for the next decode step — the scheduling between two CUDA Graphs itself introduces CPU overhead. PR #153 proposed a further approach: unifying slow head and fast head into a single <code>forward()</code>, with one CUDA Graph simultaneously capturing all kernels from both AR processes. In fact, as long as it's a complete DAG, it can be captured by a single unified CUDA Graph, containing any number and any size of kernel nodes; large GEMMs and small GEMMs in the same graph is perfectly legal. Through this approach, decode-stage TPS jumped from 55.6 to 88, fast head's launch overhead was eliminated, and the CPU scheduling overhead between the two ARs was also mitigated.</p>
+<table>
+<thead>
+<tr>
+<th>Dimension</th>
+<th>Unified Single CUDA Graph</th>
+<th>Dual CUDA Graph</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Graph count</strong></td>
+<td>One graph per bs, covering all slow + fast kernels</td>
+<td>Two graphs per bs: LLM graph + Fastlayer graph</td>
+</tr>
+<tr>
+<td><strong>CPU scheduling</strong></td>
+<td>One <code>cudaGraphLaunch()</code> completes entire decode step</td>
+<td>Two <code>cudaGraphLaunch()</code> calls with CPU scheduling in between</td>
+</tr>
+<tr>
+<td><strong>Engineering complexity</strong></td>
+<td>High — two KV cache types, persistent buffers, deferred capture</td>
+<td>Lower — two independent graphs with clear boundaries</td>
+</tr>
+<tr>
+<td><strong>Memory Pool</strong></td>
+<td>Both ARs' intermediate tensors sequentially reused within same graph</td>
+<td>Two graphs can share same <code>global_graph_memory_pool</code> (since they never replay simultaneously)</td>
+</tr>
+<tr>
+<td><strong>Flexibility</strong></td>
+<td>Two ARs coupled in one graph; modifying either requires re-capture</td>
+<td>Two independent graphs that can be replaced or optimized individually</td>
+</tr>
+</tbody>
+</table>
+<p>It's important to emphasize that although the two AR processes share a single CUDA Graph, their respective KV Caches remain completely independently managed — slow head uses SGLang's paged KV cache, fast head uses statically pre-allocated KV cache. Unified graph only means their kernels are recorded into the same DAG; it does not imply any coupling in their state management. What changes is only the kernel organization, not the state management.</p>
+<p>Of course, the unified large CUDA Graph introduces greater engineering complexity:</p>
+<ol>
+<li>All inputs (previous step's codebook values) must be passed through persistent buffers</li>
+<li>Initialization order must ensure the graph captures the complete path (deferred capture)</li>
+<li>Codebook loop iterations and sampling must satisfy CUDA Graph's static constraints</li>
+</ol>
+<p>Before PR #153, CUDA Graph only covered Slow AR, with Fast AR executing per-request outside the graph:</p>
+<pre><code class="language-mermaid">graph LR
+    subgraph &quot;CUDA Graph&quot;
+        A[&quot;Slow AR: 36-layer Transformer&quot;] --&gt; B[&quot;Logits&quot;]
+    end
+    B --&gt; C[&quot;CPU: retrieve results, per-request scheduling&quot;]
+    C --&gt; D[&quot;Fast AR: _codebook_loop_impl()&lt;br/&gt;per-request, eager execution&quot;]
+    D --&gt; E[&quot;Codebook codes&quot;]
+</code></pre>
+<p>After PR #153, a single CUDA Graph covers the complete Slow AR + Fast AR forward:</p>
+<pre><code class="language-mermaid">graph LR
+    W[&quot;CPU: _update_vq_buffers()&lt;br/&gt;write to persistent buffers&quot;] --&gt; G
+    subgraph G[&quot;Single CUDA Graph — one cudaGraphLaunch()&quot;]
+        direction LR
+        A[&quot;VQ embedding&lt;br/&gt;combination&quot;] --&gt; B[&quot;Slow AR:&lt;br/&gt;36-layer Transformer&quot;]
+        B --&gt; C[&quot;Logits +&lt;br/&gt;constrained sampling&quot;]
+        C --&gt; D[&quot;Fast AR:&lt;br/&gt;9-step codebook loop&quot;]
+    end
+    G --&gt; R[&quot;CPU: _build_outputs()&lt;br/&gt;read output codes&quot;]
+</code></pre>
+<p><code>_decode_codebooks()</code> transformed from an external per-request post-processing step into an internal step of <code>forward()</code>. A single CUDA Graph records Slow AR + sampling + Fast AR in one shot, eliminating all kernel launch overhead for the entire decode step.</p>
+<h2 id="implementation-details-of-the-s2-pro-unified-cuda-graph-coverage">Implementation Details of the S2-Pro Unified CUDA Graph Coverage</h2>
+<p>The previous chapter established the core decision of "unifying slow head and fast head into a single graph" and listed the engineering complexities it introduced. From this chapter onward, we address these engineering challenges one by one.</p>
+<h3 id="deferred-graph-capture-why-initialization-order-matters-so-much">Deferred Graph Capture: Why Initialization Order Matters So Much</h3>
+<p>The first engineering challenge is deferred graph capture, which directly corresponds to the last of the five constraints: graph doesn't auto-update after recording. Specifically, let's examine the initialization sequence in <a href="https://github.com/sgl-project/sglang-omni/blob/cd9aaf3/sglang_omni/models/fishaudio_s2_pro/factory.py"><code>create_s2pro_sglang_engine()</code></a> in <code>factory.py</code>:</p>
+<pre><code class="language-python"># Step 1: 暂时禁用 CUDA Graph
+want_cuda_graph = not server_args.disable_cuda_graph
+server_args.disable_cuda_graph = True
+
+# Step 2: 初始化 ModelWorker（此时不 capture graph）
+model_worker = ModelWorker(config=ModelWorkerConfig(), server_args=server_args, gpu_id=gpu_id)
+
+# Step 3: BF16 精度修正
+_truncate_rope_to_bf16(model_worker.model_runner.model)
+
+# Step 4: 预分配 fast head 的 static KV cache
+audio_decoder.setup_caches(max_batch_size=max_bs, dtype=torch.bfloat16)
+
+# Step 5: 分配 persistent buffers + 挂载 audio decoder
+text_model.setup_vq_decode(audio_decoder, ...)
+
+# Step 6: 此时 capture graph——包含完整的 forward + _decode_codebooks
+if want_cuda_graph:
+    model_worker.model_runner.init_device_graphs()
+</code></pre>
+<p>Notice that step 1 explicitly disables CUDA Graph to prevent graph capture during step 2. If CUDA Graph weren't disabled in step 1, <code>ModelWorker.__init__()</code> would internally call <code>init_cuda_graphs()</code>. At that point, <code>text_model._vq_ready = False</code>, because <code>setup_vq_decode()</code> isn't called until step 5. In step 2, the <code>if self._vq_ready:</code> branch in <code>forward()</code> wouldn't execute, so the graph wouldn't include VQ embedding combination or <code>_decode_codebooks()</code>. Only after step 5 executes and <code>text_model._vq_ready = True</code> can the complete graph be captured. Otherwise, since CUDA Graph is a static graph captured once, even if <code>text_model._vq_ready = True</code> is set later, the already-recorded graph won't auto-update — replay would still execute the kernel sequence from recording time: an incomplete forward without codebook decode.</p>
+<h3 id="setup_vq_decode-buffer-allocation-avoiding-dynamic-memory-allocation"><code>setup_vq_decode()</code> Buffer Allocation: Avoiding Dynamic Memory Allocation</h3>
+<p><a href="https://github.com/sgl-project/sglang-omni/blob/cd9aaf3/sglang_omni/models/fishaudio_s2_pro/sglang_model.py#L196"><code>setup_vq_decode()</code></a> pre-allocates all persistent buffers. These buffers directly correspond to the second constraint from the first chapter: no dynamic memory allocation.</p>
+<ol>
+<li>Input buffers (written by ModelRunner before forward):</li>
+</ol>
+<ul>
+<li><code>_vq_codes</code>: <code>torch.zeros(max_bs, num_codebooks, dtype=torch.long)</code> — codebook codes generated in the previous step</li>
+<li><code>_vq_mask</code>: <code>torch.zeros(max_bs, dtype=torch.bool)</code> — marks which batch positions need VQ embedding combination</li>
+</ul>
+<ol start="2">
+<li>Output buffers (written by <code>_decode_codebooks()</code>, read by ModelRunner after forward):</li>
+</ol>
+<ul>
+<li><code>_output_codes</code>: <code>torch.zeros(max_bs, num_codebooks+1, dtype=torch.long)</code> — all codes generated in the current step</li>
+<li><code>_output_semantic_ids</code>: <code>torch.zeros(max_bs, dtype=torch.long)</code> — semantic token id for the current step</li>
+</ul>
+<ol start="3">
+<li>Auxiliary tensors:</li>
+</ol>
+<ul>
+<li><code>_semantic_bias</code>: <code>torch.full((vocab_size,), -inf, dtype=torch.bfloat16)</code> — implements constrained decoding</li>
+<li><code>_vq_codebook_embeddings</code>: directly references <code>audio_decoder.codebook_embeddings</code> (shared weights, no extra allocation)</li>
+</ul>
+<p>All buffers are allocated once via <code>torch.zeros(...)</code> during <code>setup_vq_decode()</code>, and subsequently only modified through in-place operations — this is precisely a manifestation of the "pointer stability" constraint from the first chapter.</p>
+<h3 id="persistent-buffer-in-place-writes-for-cuda-graph-data-dependencies">Persistent Buffer: In-Place Writes for CUDA Graph Data Dependencies</h3>
+<p>The previous section addressed "when to allocate buffers" and "which buffers to allocate." But buffer allocation is only half the story — at runtime, each decode step needs to write new dynamic data into these buffers (previous step's codebook values, semantic mask, etc.), then let graph replay read from them. This raises the next question: why do in-place operations (<code>copy_()</code>, <code>fill_()</code>, <code>zero_()</code>) guarantee CUDA Graph safety? The answer again traces back to the "pointer stability" constraint from the first chapter.</p>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Usage scenario</th>
+<th>Why it satisfies pointer stability</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tensor.copy_(source)</code></td>
+<td><code>_update_vq_buffers()</code> writes VQ codes</td>
+<td>Modifies values, not addresses</td>
+</tr>
+<tr>
+<td><code>tensor[:bs] = value</code></td>
+<td><code>_decode_codebooks()</code> writes output codes</td>
+<td>Index assignment is an in-place operation</td>
+</tr>
+<tr>
+<td><code>tensor.fill_(scalar)</code></td>
+<td>audio decoder's <code>input_pos.fill_(codebook_idx)</code></td>
+<td>In-place fill</td>
+</tr>
+<tr>
+<td><code>tensor.zero_()</code></td>
+<td><code>reset_caches()</code> clears KV cache</td>
+<td>In-place zeroing</td>
+</tr>
+</tbody>
+</table>
+<p>With these in-place operation protocols, <a href="https://github.com/sgl-project/sglang-omni/blob/cd9aaf3/sglang_omni/models/fishaudio_s2_pro/runtime/s2pro_sglang_ar.py"><code>S2ProSGLangModelRunner</code></a> can implement a carefully designed buffer read/write scheme:</p>
+<table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Function</th>
+<th>Location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>_update_vq_buffers()</code> — writes <code>_vq_codes</code> / <code>_vq_mask</code></td>
+<td><strong>Outside graph</strong> (before forward)</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>model_worker.forward()</code> — CUDA Graph replay</td>
+<td><strong>Inside graph</strong></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>_build_outputs()</code> — reads <code>_output_codes</code></td>
+<td><strong>Outside graph</strong> (after forward)</td>
+</tr>
+</tbody>
+</table>
+<p>Buffer reads and writes occur outside the CUDA Graph boundary (<code>_update_vq_buffers</code> before forward, <code>_build_outputs</code> after forward), but the buffers themselves are referenced by kernels inside the graph. This "write values externally, read addresses inside graph" pattern is the standard approach for CUDA Graph compatibility with dynamic inputs.</p>
+<p>Let's look at the concrete implementation of <code>_update_vq_buffers()</code>:</p>
+<pre><code class="language-python">def _update_vq_buffers(self, model_worker_batch, scheduler_output):
+    text_model = self.model_worker.model_runner.model
+    input_ids = model_worker_batch.input_ids
+    bs = input_ids.shape[0]
+
+    # 计算 semantic mask
+    is_semantic = (input_ids &gt;= self._semantic_begin_id) &amp; (input_ids &lt;= self._semantic_end_id)
+    text_model._vq_mask[:bs].copy_(is_semantic)
+
+    # 写入每个 request 的 codebook values
+    for i, sched_req in enumerate(scheduler_output.requests):
+        data = sched_req.data
+        if data._last_codebook_values is not None and is_semantic[i]:
+            text_model._vq_codes[i].copy_(data._last_codebook_values)
+</code></pre>
+<p><code>.copy_()</code> modifies the values of <code>_vq_mask</code> and <code>_vq_codes</code>, but these tensors' GPU virtual addresses remain unchanged. During graph replay, the kernels in <code>forward()</code> still read from the same addresses — only the values have been updated to the current step's data.</p>
+<p>Similarly, <code>forward_kvcached()</code> uses a carefully designed CUDA Graph-compatible <code>fill_()</code> pattern:</p>
+<pre><code class="language-python">def forward_kvcached(self, x, codebook_idx):
+    self.input_pos.fill_(codebook_idx)
+    freqs_cis = self.freqs_cis[self.input_pos]
+    cache_seqlens = self.input_pos.expand(bsz).to(torch.int32)
+    ...
+</code></pre>
+<p><code>input_pos</code> is a persistent tensor registered via <code>register_buffer</code>. <code>fill_()</code> is an in-place operation. <code>codebook_idx</code>, after the codebook loop is unrolled, becomes a Python constant that's fixed as part of the graph at capture time — corresponding to the "static control flow" among the five constraints. Compared to <code>torch.tensor([codebook_idx])</code>, the fill approach avoids creating a new tensor, which would break address stability.</p>
+<h3 id="greedy-decoding-avoiding-host-device-sync">Greedy Decoding: Avoiding Host-Device Sync</h3>
+<p>PR #153 switched the codebook sampling strategy from <code>_sample_with_topk</code> (temperature + top_k + top_p + repetition_penalty) to <code>torch.argmax(biased_logits, dim=-1)</code>. This isn't merely simplification — it directly corresponds to the "no host-device sync" constraint among the five:</p>
+<ul>
+<li><code>torch.argmax</code> is deterministic, stateless, and requires no random number generator → can be fully captured by CUDA Graph</li>
+<li>top_k/top_p sampling involves <code>torch.multinomial</code>, which may require random state management and dynamic shape operations → graph-incompatible</li>
+<li>In TTS scenarios, the quality loss from greedy decoding is acceptable — this is an intentional trade-off</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/torch/cuda-graph/readme-2-en.md">torch/cuda-graph/readme-2-en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transformers &amp; LLMs</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html" class="here">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Transformers &amp; LLMs</h1>
+<p class="dim">From raw text to next-token prediction: tokenization, embeddings, the transformer block stage by stage, why deep stacks train at all, the objective, sampling, and how architectures evolved from GPT-2 to DeepSeek-V3. This is the model-side companion to the <a href="attention.html">Attention</a> and <a href="inference.html">Inference</a> chapters.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (13:00)</h3><audio controls preload="none" src="audio/transformers.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/transformers.txt">Read the transcript</a>.</p></div>
+<h2 id="tokenization">1. Tokenization: text becomes integers</h2>
+<p>A language model never sees letters. It sees a sequence of integers, each naming an entry in a fixed <em>vocabulary</em> of strings called tokens. The dominant algorithm, <strong>byte-pair encoding (BPE)</strong>, builds that vocabulary by brute statistics: start with single bytes, find the most frequent adjacent pair in a training corpus, merge it into a new token, repeat tens of thousands of times. Frequent words ("the", "ing", " and") end up as single tokens; rare words split into familiar pieces. The learned <em>merge list</em> is the tokenizer: to encode new text, apply the merges greedily in the order they were learned.</p>
+<p>The design trade-off is vocabulary size. A bigger vocabulary (Llama-3 uses 128K tokens, GPT-2 used 50K) means fewer tokens per sentence — which means less compute and less KV cache per request, since every cost in the <a href="inference.html">inference chapter</a> scales with token count — but a bigger embedding table and a bigger final projection. English averages roughly 3.5–4.5 characters per token with modern tokenizers.</p>
+
+<div class="card">
+<h3>Interactive: watch BPE merge</h3>
+<div class="controls">
+  <input type="text" id="bpeInput" value="the learning transformer is interesting" style="flex:1;min-width:220px;background:var(--bg-inset);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:0.95rem">
+</div>
+<div class="controls">
+  <label class="ctl">Merges applied <input type="range" id="bpeSlider" min="0" max="30" value="30" step="1"> <span id="bpeCount"></span></label>
+</div>
+<div id="bpeOut" style="line-height:2.4;margin:8px 0"></div>
+<div class="kpi">
+  <div class="box"><div class="v" id="bpeChars">–</div><div class="l">characters</div></div>
+  <div class="box"><div class="v" id="bpeToks">–</div><div class="l">tokens</div></div>
+  <div class="box"><div class="v" id="bpeRatio">–</div><div class="l">chars / token</div></div>
+</div>
+<p class="caption">Type your own text. At 0 merges every character is its own token; drag right and watch frequent pairs fuse (a tiny 30-merge table trained on common English pairs — real tokenizers learn 50K–128K merges the same way). The ▁ marks a word boundary, as in SentencePiece.</p>
+</div>
+
+<p>Tokenization explains several famous LLM quirks. Models struggle to count the r's in "strawberry" because they never see letters — "strawberry" may be one or two tokens, and the model must have <em>memorized</em> facts about its spelling rather than reading it. Arithmetic suffers when digit sequences split inconsistently ("1234" as <code>12|34</code> but "1235" as <code>1|235</code>), which is why modern tokenizers special-case digits. And trailing whitespace can change everything, because <code>" the"</code> and <code>"the"</code> are different tokens with different statistics.</p>
+
+<h2 id="embeddings">2. Embeddings: integers become vectors</h2>
+<p>Each token id indexes a row of an <strong>embedding matrix</strong> E ∈ ℝ<sup>V×d</sup> (vocabulary × model width). That row — say d = 4096 numbers for Llama-3-8B — is the token's initial representation, and it is <em>learned</em> like every other weight: tokens that behave similarly in training end up with nearby vectors, which is why directions in embedding space encode meaning (the classic king − man + woman ≈ queen). From here on, the entire transformer is a machine that repeatedly <em>refines</em> these d-dimensional vectors: the vector at position i gradually stops meaning "the token at position i" and starts meaning "everything the context implies at position i".</p>
+<p>One problem: attention, the only operation that mixes positions, is <em>permutation-invariant</em> — shuffle the input vectors and you shuffle the outputs identically. The model cannot know word order unless positions are injected explicitly. GPT-2 added a learned vector per absolute position; modern models rotate queries and keys by position-dependent angles (<strong>RoPE</strong>), which encodes <em>relative</em> position and is covered with an animation in the <a href="attention.html#rope">attention chapter</a>.</p>
+
+<h2 id="block">3. The transformer block, stage by stage</h2>
+<p>A decoder-only LLM is an embedding layer, N identical blocks (32 for an 8B model, 126 for DeepSeek-V3), and a final projection back to vocabulary logits. Each block does two things: <strong>attention</strong> (positions exchange information) and an <strong>MLP</strong> (each position processes what it gathered, independently). Both are wrapped in residual connections and preceded by normalization. That's the whole trick, repeated N times.</p>
+
+<div class="card">
+<h3>Animation: one block, end to end</h3>
+<canvas id="blockViz" class="viz" width="900" height="380"></canvas>
+<div class="controls">
+  <button class="btn" id="blockStep">Step</button>
+  <button class="btn" id="blockPlay">▶ Play</button>
+  <button class="btn secondary" id="blockReset">Reset</button>
+</div>
+<p class="caption">Five tokens flow through one block. Watch the attention stage build the 5×5 score matrix — the greyed upper triangle is the <strong>causal mask</strong>: position i may only attend to positions ≤ i, which is what makes the model autoregressive (and what makes the KV cache possible). Softmax turns each surviving row into weights; the weighted sum of value vectors is what each token "learns" from its past.</p>
+</div>
+
+<p>Reading the stages precisely, with x ∈ ℝ<sup>n×d</sup> the block input:</p>
+<div class="formula">h = x + Attention(RMSNorm(x))        # positions talk<br>out = h + MLP(RMSNorm(h))            # positions think<br><br>Attention(x) = softmax(QKᵀ/√d_head + causal_mask) · V,  Q = xW_Q, K = xW_K, V = xW_V<br>MLP(x) = (SiLU(xW_gate) ⊙ xW_up) W_down   # SwiGLU; hidden dim ≈ 2.7–4× d</div>
+<p>The MLP holds most of the parameters (~⅔ in a dense model) and is where factual knowledge appears to be stored; attention is the routing system that moves information to where the MLP can use it. Scaling by 1/√d_head keeps dot products in a range where softmax has useful gradients.</p>
+
+<h2 id="residuals">4. Why 100-layer stacks train: residuals and norms</h2>
+<p>Without residual connections, stacking 100 layers multiplies 100 Jacobians, and gradients vanish or explode (the <a href="deep-learning.html">deep learning chapter</a> shows this happening). The residual form <code>x + f(x)</code> changes the geometry: there is an identity path from the loss to every layer, so gradients flow undiminished, and each block only has to learn a <em>correction</em> to a running "residual stream" rather than a full transformation. A productive mental model: the residual stream is a shared communication bus of width d; attention heads and MLPs read from it, compute, and write their contribution back by addition.</p>
+<p>Normalization keeps the stream's scale stable so corrections from layer 90 are commensurate with those from layer 2. Modern LLMs use <strong>RMSNorm</strong> (rescale by the root-mean-square, learned gain, no mean subtraction — cheaper than LayerNorm, works as well) and place it <em>before</em> each sublayer (<strong>pre-norm</strong>). Pre-norm leaves the residual path completely clean — the identity is never normalized away — which is why GPT-2-era post-norm needed careful warmup while pre-norm models train stably at much greater depth. You already met RMSNorm as a kernel-fusion target in the study plan's Liger notebook: norm + projection fuse into one memory pass (see <a href="kernels.html">Kernels</a>).</p>
+
+<h2 id="objective">5. The objective: predict the next token</h2>
+<p>Training is self-supervised: every position in every text is a labeled example whose label is simply the next token. The model outputs logits over the vocabulary at every position <em>simultaneously</em>, and the loss is the average cross-entropy between each position's prediction and the actual next token:</p>
+<div class="formula">L = −(1/n) Σᵢ log p(xᵢ₊₁ | x₁..xᵢ)      # one forward pass scores all n positions at once</div>
+<p>This parallel scoring is called <strong>teacher forcing</strong>: position i is conditioned on the <em>true</em> prefix, not on the model's own earlier predictions, so the whole sequence trains in one pass — the same parallelism that makes <a href="inference.html#two-phases">prefill</a> fast. The causal mask is what makes it legitimate, guaranteeing no position peeks at its own answer.</p>
+<p><strong>Perplexity</strong> is the exponential of this loss: PPL = e<sup>L</sup>, interpretable as "the model is as uncertain as if it were choosing uniformly among PPL options." A loss of 2.0 nats is PPL ≈ 7.4; frontier models reach low single digits on held-out web text. Pretraining at scale is governed by scaling laws — Chinchilla's ~20 tokens per parameter compute-optimal rule, now routinely exceeded (Llama-3-8B saw 15T tokens, ~1900 per parameter) because <em>inference</em> cost rewards over-training small models. The full pipeline from pretraining through SFT and preference tuning lives in the <a href="training.html">Training chapter</a>.</p>
+
+<h2 id="sampling">6. Sampling: logits become text</h2>
+<p>At inference the model gives you a distribution; <em>you</em> decide how to pick from it. Greedy (argmax) is deterministic but repetitive and bland. <strong>Temperature</strong> T divides the logits before softmax: T &lt; 1 sharpens toward the top tokens, T &gt; 1 flattens toward uniform. <strong>Top-k</strong> keeps only the k most likely tokens; <strong>top-p</strong> (nucleus) keeps the smallest set whose probabilities sum to p — adaptive, keeping few tokens when the model is confident and many when it isn't. Production samplers compose these: temperature, then truncation, then renormalize and sample.</p>
+
+<div class="card">
+<h3>Interactive: temperature, top-k, top-p</h3>
+<canvas id="sampViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <label class="ctl">Temperature <input type="range" id="sampT" min="0.1" max="2.5" value="1.0" step="0.05"> <span id="sampTL">1.00</span></label>
+  <label class="ctl">Top-k <input type="range" id="sampK" min="1" max="10" value="10" step="1"> <span id="sampKL">10</span></label>
+  <label class="ctl">Top-p <input type="range" id="sampP" min="0.05" max="1" value="1" step="0.05"> <span id="sampPL">1.00</span></label>
+  <button class="btn" id="sampDraw">Sample a token</button>
+  <button class="btn secondary" id="sampClear">Clear</button>
+</div>
+<p class="caption">The model's next-token distribution after "The capital of France is". Solid bars are in the sampling set; greyed bars were truncated by top-k/top-p. Lower the temperature and watch mass collapse onto "Paris"; raise it and watch tails grow. Sampled text: <strong id="sampOut"></strong></p>
+</div>
+
+<p>Two practical notes. First, repetition penalties and frequency penalties exist because pure sampling can loop — they are heuristics applied to logits, not part of the model. Second, constrained generation (forcing valid JSON) is sampling with a mask that evolves with a grammar — see <a href="inference.html#structured">structured decoding</a>.</p>
+
+<h2 id="architectures">7. Architecture tour: GPT-2 → Llama-3 → DeepSeek-V3</h2>
+<p>The block diagram has been stable since 2017; the deltas that matter are below. Each change is small, but together they roughly halve the compute needed to reach a given quality, and several exist specifically to make <em>serving</em> cheaper.</p>
+<table class="cmp">
+<tr><th></th><th>GPT-2 (2019)</th><th>Llama-3 (2024)</th><th>DeepSeek-V3 (2024)</th></tr>
+<tr><td>Norm</td><td>LayerNorm, post-norm</td><td>RMSNorm, pre-norm</td><td>RMSNorm, pre-norm</td></tr>
+<tr><td>Activation</td><td>GELU</td><td>SwiGLU</td><td>SwiGLU</td></tr>
+<tr><td>Positions</td><td>Learned absolute</td><td>RoPE</td><td>RoPE (decoupled for MLA)</td></tr>
+<tr><td>Attention</td><td>MHA</td><td>GQA (8 KV heads)</td><td>MLA (compressed latent KV)</td></tr>
+<tr><td>FFN</td><td>Dense</td><td>Dense</td><td>MoE: 256 routed + 1 shared expert, 8 active per token</td></tr>
+<tr><td>Params (largest)</td><td>1.5B</td><td>405B</td><td>671B total, <strong>37B active</strong></td></tr>
+<tr><td>Context</td><td>1K</td><td>128K</td><td>128K</td></tr>
+<tr><td>Vocab</td><td>50K</td><td>128K</td><td>129K</td></tr>
+</table>
+<p><strong>Mixture of experts</strong> deserves a sentence of intuition: replace the one big MLP with many smaller "expert" MLPs and a learned <em>router</em> that sends each token to its top-k experts. Parameters (knowledge) scale with the number of experts, while per-token FLOPs scale only with the k active ones — DeepSeek-V3 carries 671B parameters but each token touches 37B. The shared expert handles common patterns so routed experts can specialize; auxiliary losses (or V3's bias-adjustment trick) keep load balanced. The price is systems complexity — routing, all-to-all communication, expert placement — which is exactly the <a href="parallelism.html">parallelism chapter's</a> problem.</p>
+
+<h2 id="context">8. What a context window costs</h2>
+<p>"128K context" is a systems claim, not just a model claim. Attention FLOPs grow quadratically with context during prefill; the KV cache grows linearly and must survive for the whole generation — at 128K tokens, a Llama-3-70B conversation holds <em>gigabytes</em> of cache per user (compute it with the <a href="inference.html#kv-cache">KV calculator</a>). Everything in the serving stack — GQA/MLA above, paged allocation, cache quantization, prefix sharing — exists to pay this bill. When you read a model card, translate the context window into bytes-per-user before believing the concurrency numbers.</p>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li><a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a> — the original; read it after this page and it will feel short.</li>
+<li><a href="https://jax-ml.github.io/scaling-book/inference/">How to Scale Your Model</a> — the arithmetic of transformers at scale (Step 6 of the plan).</li>
+<li><a href="https://arxiv.org/html/2412.19437">DeepSeek-V3 report</a> — the current best single document on model–system co-design (Step 15).</li>
+<li><a href="https://poloclub.github.io/transformer-explainer/">Transformer Explainer</a> — a live GPT-2 running in your browser; excellent after the block animation above.</li>
+<li>Next: <a href="attention.html">Attention</a> for the mechanism in full depth, then the <a href="flashcards.html">Transformers deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="deep-learning.html">← Deep Learning</a><a href="attention.html">Attention →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------- 1. BPE demo ----------
+(function(){
+// merge table, ordered as "learned" (most frequent pairs first)
+const MERGE_LIST=[["t","h"],["th","e"],["i","n"],["in","g"],["e","r"],["a","n"],["r","e"],["o","n"],["e","n"],["a","t"],["o","r"],["e","s"],["s","t"],["a","r"],["l","e"],["an","d"],["▁","the"],["▁","is"],["▁","a"],["er","s"],["es","t"],["at","e"],["en","t"],["or","m"],["le","ar"],["lear","n"],["learn","ing"],["▁","learning"],["s","form"],["ing","s"]];
+const input=document.getElementById('bpeInput'),slider=document.getElementById('bpeSlider'),out=document.getElementById('bpeOut');
+slider.max=MERGE_LIST.length;slider.value=MERGE_LIST.length;
+const COLORS=['#5b8cff','#38c6a0','#f2a65a','#e5604c','#b07cff','#4cc3e5','#9ad24c','#e5a0c3'];
+function tokenize(text,nMerges){
+  // sentencepiece-style: prepend ▁ to each word, split to chars
+  let toks=[];
+  text.toLowerCase().split(/\s+/).filter(Boolean).forEach(w=>{toks.push('▁');toks.push(...w.split(''));});
+  for(let m=0;m<nMerges;m++){
+    const[a,b]=MERGE_LIST[m];let i=0;
+    while(i<toks.length-1){if(toks[i]===a&&toks[i+1]===b){toks.splice(i,2,a+b);}else i++;}
+  }
+  return toks;
+}
+function render(){
+  const n=parseInt(slider.value);document.getElementById('bpeCount').textContent=n+' / '+MERGE_LIST.length;
+  const toks=tokenize(input.value,n);
+  out.innerHTML=toks.map((t,i)=>'<span style="background:'+COLORS[i%COLORS.length]+'22;border:1px solid '+COLORS[i%COLORS.length]+';border-radius:6px;padding:3px 7px;margin:2px;font-family:var(--mono);font-size:0.85rem;display:inline-block">'+t.replace('▁','▁')+'</span>').join('');
+  const chars=input.value.replace(/\s+/g,'').length;
+  document.getElementById('bpeChars').textContent=chars;
+  document.getElementById('bpeToks').textContent=toks.length;
+  document.getElementById('bpeRatio').textContent=toks.length?(chars/toks.length).toFixed(2):'–';
+}
+input.oninput=render;slider.oninput=render;render();
+})();
+
+// ---------- 3. block walkthrough ----------
+(function(){
+const cv=document.getElementById('blockViz'),ctx=cv.getContext('2d');
+const TOKENS=['The','cat','sat','on','mats'];const n=TOKENS.length;
+const STAGES=[
+ {id:'in',label:'Input: 5 token vectors x ∈ ℝ⁵ˣᵈ enter the block (d=4096 in an 8B model). Each column is one position.'},
+ {id:'norm1',label:'RMSNorm rescales each vector to unit RMS × learned gain — stabilizes scale before attention.'},
+ {id:'qkv',label:'Three learned projections make Q (what I seek), K (what I offer), V (what I carry) from every position.'},
+ {id:'scores',label:'Scores = QKᵀ/√d: every query dotted with every key → the 5×5 matrix. The causal mask sets the upper triangle to −∞: no peeking at the future.'},
+ {id:'softmax',label:'Softmax per row → attention weights. Row i is a probability distribution over positions ≤ i.'},
+ {id:'wv',label:'Each output = weights · V: a mixture of past value vectors. Information has now MOVED between positions.'},
+ {id:'res1',label:'Residual add: h = x + attention output. The original signal survives; attention only wrote a correction.'},
+ {id:'mlp',label:'RMSNorm, then SwiGLU MLP per position (no mixing): expand to ~4d, gate, project back. ~⅔ of all parameters live here.'},
+ {id:'res2',label:'Second residual add. One block done — repeat ×32 (8B) or ×126 (V3), then project to 128K vocab logits.'}];
+let stage=0,timer=null;
+// deterministic pseudo-scores for the heatmap
+function score(i,j){return (Math.sin(i*2.9+j*1.7)+1)/2;}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const s=STAGES[stage];
+  // pipeline boxes
+  const names=['x','Norm','QKV','QKᵀ','softmax','·V','+x','MLP','+h'];
+  const bw=76,bh=34,x0=30,y0=26;
+  names.forEach((nm,i)=>{
+    const x=x0+i*(bw+16);
+    ctx.fillStyle=i===stage?acc:css('--bg-card');ctx.strokeStyle=i<=stage?acc:bd;ctx.lineWidth=i===stage?2.5:1.5;
+    ctx.beginPath();ctx.roundRect(x,y0,bw,bh,8);ctx.fill();ctx.stroke();
+    ctx.fillStyle=i===stage?'#fff':(i<stage?txt:dim);ctx.font='bold 12px sans-serif';ctx.textAlign='center';
+    ctx.fillText(nm,x+bw/2,y0+22);
+    if(i<names.length-1){ctx.strokeStyle=i<stage?acc:bd;ctx.beginPath();ctx.moveTo(x+bw,y0+bh/2);ctx.lineTo(x+bw+16,y0+bh/2);ctx.stroke();}
+  });
+  // explanation
+  ctx.fillStyle=txt;ctx.font='13px sans-serif';ctx.textAlign='left';
+  wrap(ctx,s.label,30,92,W-60,18);
+  // token lane
+  const ty=150;
+  TOKENS.forEach((t,i)=>{
+    const x=40+i*86;
+    ctx.fillStyle=stage>=6?acc2:acc;ctx.globalAlpha=stage===0?0.9:0.55;
+    ctx.beginPath();ctx.roundRect(x,ty,74,30,8);ctx.fill();ctx.globalAlpha=1;
+    ctx.fillStyle='#fff';ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText(t,x+37,ty+20);
+  });
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('5 positions × d dims',40,ty+48);
+  // score matrix (visible from stage 3)
+  if(stage>=3){
+    const mx=560,my=130,cell=34;
+    ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='left';
+    ctx.fillText(stage===3?'scores (−∞ masked)':'attention weights',mx,my-10);
+    for(let i=0;i<n;i++)for(let j=0;j<n;j++){
+      const x=mx+j*cell,y=my+i*cell;
+      if(j>i){ctx.fillStyle='rgba(128,128,128,0.15)';ctx.fillRect(x,y,cell-2,cell-2);
+        ctx.fillStyle=dim;ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText('−∞',x+cell/2-1,y+cell/2+3);}
+      else{
+        let v=score(i,j);
+        if(stage>=4){// softmax row
+          let Z=0;for(let k=0;k<=i;k++)Z+=Math.exp(score(i,k)*4);v=Math.exp(score(i,j)*4)/Z;}
+        const a=stage>=4?v:v*0.8;
+        ctx.fillStyle=stage>=4?acc2:acc;ctx.globalAlpha=0.15+a*0.85;ctx.fillRect(x,y,cell-2,cell-2);ctx.globalAlpha=1;
+        if(stage>=4){ctx.fillStyle='#fff';ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText(v.toFixed(2).slice(1),x+cell/2-1,y+cell/2+3);}
+      }
+    }
+    for(let i=0;i<n;i++){ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.textAlign='right';ctx.fillText(TOKENS[i],mx-6,my+i*cell+20);
+      ctx.save();ctx.translate(mx+i*cell+16,my-18);ctx.textAlign='left';ctx.fillText(TOKENS[i].slice(0,3),0,0);ctx.restore();}
+  }
+  // residual stream note
+  if(stage>=6){ctx.fillStyle=warn;ctx.font='12px sans-serif';ctx.textAlign='left';
+    ctx.fillText('residual stream: x flows around every sublayer untouched →',40,ty+78);}
+  function wrap(c,text,x,y,maxw,lh){const words=text.split(' ');let line='',yy=y;
+    for(const w of words){const t=line+w+' ';if(c.measureText(t).width>maxw){c.fillText(line,x,yy);line=w+' ';yy+=lh;}else line=t;}c.fillText(line,x,yy);}
+}
+function advance(){if(stage<STAGES.length-1){stage++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('blockPlay').textContent='▶ Play';}}
+document.getElementById('blockStep').onclick=()=>{stop();if(stage<STAGES.length-1)stage++;else stage=0;draw();};
+document.getElementById('blockPlay').onclick=function(){if(timer){stop();return;}if(stage>=STAGES.length-1)stage=0;this.textContent='⏸ Pause';timer=setInterval(advance,2200);};
+document.getElementById('blockReset').onclick=()=>{stop();stage=0;draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 6. sampling ----------
+(function(){
+const cv=document.getElementById('sampViz'),ctx=cv.getContext('2d');
+const CAND=[['Paris',8.1],['the',5.9],['located',5.2],['a',4.9],['known',4.6],['France',4.2],['beautiful',3.9],['home',3.6],['famous',3.3],['Lyon',2.8]];
+const $=id=>document.getElementById(id);let outText=[];
+function dist(){
+  const T=parseFloat($('sampT').value),k=parseInt($('sampK').value),p=parseFloat($('sampP').value);
+  let probs=CAND.map(([w,l])=>({w,e:Math.exp(l/T)}));
+  const Z=probs.reduce((s,x)=>s+x.e,0);probs.forEach(x=>x.p=x.e/Z);
+  probs.sort((a,b)=>b.p-a.p);
+  // top-k
+  probs.forEach((x,i)=>x.in=i<k);
+  // top-p over the k-survivors
+  let cum=0;probs.forEach(x=>{if(x.in){if(cum>=p)x.in=false;else cum+=x.p;}});
+  const Z2=probs.filter(x=>x.in).reduce((s,x)=>s+x.p,0);
+  probs.forEach(x=>x.q=x.in?x.p/Z2:0);
+  return probs;
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),dim=css('--text-dim'),txt=css('--text');
+  $('sampTL').textContent=parseFloat($('sampT').value).toFixed(2);
+  $('sampKL').textContent=$('sampK').value;$('sampPL').textContent=parseFloat($('sampP').value).toFixed(2);
+  const probs=dist();const bw=74,x0=40,base=H-60;
+  const maxp=Math.max(...probs.map(x=>x.p),0.01);
+  probs.forEach((x,i)=>{
+    const h=(x.p/maxp)*(H-130),xx=x0+i*(bw+12);
+    ctx.fillStyle=x.in?acc:'rgba(128,128,128,0.3)';
+    ctx.fillRect(xx,base-h,bw,h);
+    ctx.fillStyle=x.in?txt:dim;ctx.font='11px sans-serif';ctx.textAlign='center';
+    ctx.save();ctx.translate(xx+bw/2,base+14);ctx.rotate(0.35);ctx.fillText(x.w,0,0);ctx.restore();
+    ctx.fillStyle=x.in?txt:dim;ctx.font='10px monospace';
+    ctx.fillText((x.p*100).toFixed(1)+'%',xx+bw/2,base-h-6);
+    if(x.in){ctx.fillStyle=css('--accent2');ctx.font='10px monospace';ctx.fillText('→'+(x.q*100).toFixed(0)+'%',xx+bw/2,base-h-20);}
+  });
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText('grey % = after temperature; green → % = renormalized sampling probability',x0,24);
+}
+$('sampDraw').onclick=()=>{
+  const probs=dist().filter(x=>x.in);let r=Math.random(),pick=probs[probs.length-1];
+  for(const x of probs){if(r<x.q){pick=x;break;}r-=x.q;}
+  outText.push(pick.w);if(outText.length>12)outText.shift();
+  document.getElementById('sampOut').textContent=outText.join(' ');
+};
+$('sampClear').onclick=()=>{outText=[];document.getElementById('sampOut').textContent='';};
+['sampT','sampK','sampP'].forEach(id=>$(id).oninput=draw);
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

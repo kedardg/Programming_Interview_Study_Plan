@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multi-GPU &amp; Distributed</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html" class="here">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Multi-GPU &amp; Distributed Inference/Training</h1>
+<p class="dim">One GPU is never enough: models outgrow its memory and latency targets outgrow its bandwidth. This chapter covers the collective operations everything is built on, then the four axes of parallelism — tensor, pipeline, data/FSDP, expert — plus sequence parallelism, and how they compose for training and for serving. It is the systems counterpart of Step 15 in the study plan.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (9:37)</h3><audio controls preload="none" src="audio/parallelism.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/parallelism.txt">Read the transcript</a>.</p></div>
+<h2 id="why">1. Why one GPU isn't enough</h2>
+<p>Two separate walls force distribution:</p>
+<ul>
+<li><strong>The memory wall.</strong> Llama-3-70B in BF16 is ~140 GB of weights before a single token of KV cache — an H100 has 80 GB. Even in FP8 (70 GB) one GPU leaves almost nothing for the <a href="inference.html#kv-cache">cache that batching needs</a>. Training is worse: Adam keeps FP32 master weights plus two moments, ~16 bytes/parameter — 1.1 TB for 70B before activations.</li>
+<li><strong>The latency wall.</strong> Decode speed at batch 1 is bounded by one sweep of the weights through HBM (<a href="inference.html#two-phases">inference chapter</a>). If 70 GB over 3.35 TB/s ≈ 21 ms/token is too slow, the only fix is to give the token <em>more aggregate bandwidth</em> — i.e., shard the weights across GPUs that read their slices in parallel.</li>
+</ul>
+<p>Every technique below is a different answer to "what do we split, and what do we pay in communication?"</p>
+
+<h2 id="collectives">2. The collectives everything is built on</h2>
+<p>Distributed ML is written in a vocabulary of five <strong>collective operations</strong>, implemented by NCCL on NVIDIA hardware (RCCL on AMD, Gloo on CPU). Know what each moves:</p>
+<table class="cmp">
+<tr><th>Collective</th><th>Effect</th><th>Bytes on the wire per GPU (data size D, N GPUs)</th><th>Shows up in</th></tr>
+<tr><td><strong>all-reduce</strong></td><td>every GPU ends with the elementwise sum of all inputs</td><td>2·D·(N−1)/N (ring)</td><td>TP activations, DP gradients</td></tr>
+<tr><td><strong>reduce-scatter</strong></td><td>sum, but each GPU keeps only its 1/N shard</td><td>D·(N−1)/N</td><td>FSDP/ZeRO gradients</td></tr>
+<tr><td><strong>all-gather</strong></td><td>every GPU ends with the concatenation of all shards</td><td>D·(N−1)/N</td><td>FSDP params, sequence parallel</td></tr>
+<tr><td><strong>all-to-all</strong></td><td>GPU i sends its j-th chunk to GPU j (a transpose across devices)</td><td>D·(N−1)/N</td><td>MoE token routing, Ulysses</td></tr>
+<tr><td><strong>broadcast</strong></td><td>one GPU's data to all</td><td>D</td><td>weight init, checkpoint load</td></tr>
+</table>
+<p>The famous identity: <strong>all-reduce = reduce-scatter + all-gather</strong>, and the ring algorithm achieves it with each GPU sending only to its neighbor — bandwidth-optimal regardless of N. Watch it happen:</p>
+
+<div class="card">
+<h3>Animation: ring all-reduce on 4 GPUs</h3>
+<canvas id="ringViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="ringPlay">▶ Play</button>
+  <button class="btn secondary" id="ringStep">Step</button>
+  <button class="btn secondary" id="ringReset">Reset</button>
+  <span class="dim" id="ringLabel"></span>
+</div>
+<p class="caption">Each GPU's vector is split into 4 chunks (columns). <strong>Phase 1, reduce-scatter</strong> (3 steps): chunks travel clockwise, accumulating partial sums — after step 3, each GPU owns one fully-summed chunk (bright). <strong>Phase 2, all-gather</strong> (3 steps): the finished chunks travel the ring, replacing stale ones, until everyone has all four sums. Total traffic per GPU: 2·(N−1)/N ≈ 1.5× the data — and only neighbor-to-neighbor links are used, which is why rings love NVLink.</p>
+</div>
+
+<p>Bandwidth is hierarchical: ~900 GB/s NVLink inside a node (an "NVLink island" of 8 GPUs, or 72 in GB200 NVL72), ~50–100 GB/s InfiniBand/Ethernet between nodes — an order of magnitude cliff. The art of placement is keeping chatty collectives inside the island and only quiet ones crossing it.</p>
+
+<h2 id="tp">3. Tensor parallelism: shard the matrices</h2>
+<p>Tensor parallelism (Megatron-LM) splits individual weight matrices across GPUs so that every GPU computes a slice of every layer, every token. For a transformer MLP (<code>Z = GeLU(X·A)·B</code>), split <strong>A by columns</strong> and <strong>B by rows</strong>:</p>
+<div class="formula">GPU i:  Y_i = GeLU(X · A_i)      # column shard: no communication needed, GeLU applies per-shard
+GPU i:  Z_i = Y_i · B_i          # row shard: partial sums of the final output
+all-reduce(Z_1 … Z_N)            # one sum makes Z exact on every GPU</div>
+<p>The column-then-row pairing is the trick: it defers all communication to a <em>single all-reduce per MLP</em> (and one per attention block — attention is even more natural, since heads are independent and simply dealt out across GPUs, each attending over its own <a href="inference.html#kv-cache">KV shard</a>).</p>
+
+<div class="card">
+<h3>Animation: Megatron MLP on 2 GPUs</h3>
+<canvas id="tpViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="tpStep">Step</button>
+  <button class="btn secondary" id="tpReset">Reset</button>
+  <span class="dim" id="tpLabel"></span>
+</div>
+<p class="caption">X is replicated; A is split by columns (top/bottom halves on GPU 0/1), B by rows. Step through: each GPU computes its half independently until the final partial outputs Z₀ + Z₁ must be all-reduced. Two giant matmuls, one communication. In attention the same picture holds with heads instead of columns.</p>
+</div>
+
+<p><strong>Costs and limits:</strong> TP communicates activations (batch × seq × hidden) twice per layer, every microbatch — the chattiest parallelism there is. That is why TP degree stays within the NVLink island (TP = 8 is the classic choice) and why TP is the tool for the <em>latency</em> wall: TP=4 gives a decode token 4× the aggregate HBM bandwidth, directly cutting TPOT. Beyond the island, the all-reduce over slow links erases the gain.</p>
+
+<h2 id="pp">4. Pipeline parallelism: shard the layers</h2>
+<p>Pipeline parallelism cuts the model into <strong>stages</strong> of consecutive layers — GPU 0 holds layers 1–20, GPU 1 holds 21–40, and so on. Communication is tiny (one activation tensor handed to the next stage, point-to-point), so PP crosses nodes happily. The price is the <strong>bubble</strong>: stages idle while the pipeline fills and drains. Splitting the batch into m microbatches and scheduling <em>one-forward-one-backward</em> (1F1B) keeps memory flat and shrinks the idle fraction to:</p>
+<div class="formula">bubble fraction = (p − 1) / (m + p − 1)        # p stages, m microbatches</div>
+
+<div class="card">
+<h3>Animation: 1F1B pipeline schedule</h3>
+<canvas id="ppViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="ppPlay">▶ Play</button>
+  <button class="btn secondary" id="ppReset">Reset</button>
+  <label class="ctl">Microbatches <input type="range" id="ppM" min="4" max="16" value="8" step="1"> <span id="ppML">8</span></label>
+  <span class="dim" id="ppStats"></span>
+</div>
+<p class="caption">4 stages (rows) × time (columns). Blue = forward of a microbatch, orange = its backward (2× long), grey = bubble. Drag the slider: more microbatches amortize the same fill/drain cost, and the bubble fraction follows the formula. Interleaved "virtual stages" (each GPU holds several non-contiguous layer chunks) shrink the bubble further by making p effectively smaller per pass — that is Megatron's interleaved schedule.</p>
+</div>
+
+<h2 id="dp">5. Data parallelism, ZeRO and FSDP: shard the states</h2>
+<p>Classic data parallelism replicates the whole model on every GPU, feeds each a different slice of the batch, and all-reduces gradients once per step. Compute scales beautifully; memory doesn't — every replica carries the full 16 bytes/parameter of training state. ZeRO's observation: that state is <em>redundant</em>, so shard it and fetch on demand:</p>
+<table class="cmp">
+<tr><th>Stage</th><th>What is sharded</th><th>Memory per GPU (vs DP)</th><th>Extra communication</th></tr>
+<tr><td>ZeRO-1</td><td>optimizer states (FP32 master + moments)</td><td>~4× less state</td><td>none beyond DP</td></tr>
+<tr><td>ZeRO-2</td><td>+ gradients</td><td>~8× less</td><td>reduce-scatter instead of all-reduce</td></tr>
+<tr><td>ZeRO-3 / <strong>FSDP</strong></td><td>+ parameters themselves</td><td>~N× less</td><td>all-gather each layer's params just-in-time, free after use</td></tr>
+</table>
+
+<div class="card">
+<h3>Animation: FSDP's gather-compute-free rhythm</h3>
+<canvas id="fsdpViz" class="viz" width="900" height="240"></canvas>
+<div class="controls">
+  <button class="btn" id="fsdpPlay">▶ Play</button>
+  <button class="btn secondary" id="fsdpReset">Reset</button>
+  <span class="dim" id="fsdpLabel"></span>
+</div>
+<p class="caption">4 layers, 4 GPUs, each GPU permanently owns a quarter-shard of every layer (dim bars). To compute layer k, the shards are all-gathered into a full layer (bright), used, and immediately freed — only one full layer lives in memory at a time. Prefetching overlaps the next gather with the current compute. HSDP is the two-level version: FSDP inside each node, plain DP replication across nodes, keeping the heavy gathers on NVLink.</p>
+</div>
+
+<h2 id="ep">6. Expert parallelism: shard the experts</h2>
+<p>Mixture-of-Experts layers replace one big MLP with many smaller ones, of which a router activates the top-k per token (DeepSeek-V3: 256 routed experts, 8 active). Since only a fraction of experts fire per token, the natural distribution is one (or a few) experts per GPU — and tokens must physically <em>travel to their experts</em>:</p>
+<div class="formula">dispatch:  all-to-all   # each GPU sends each token to the GPU(s) hosting its routed experts
+compute:   every expert runs a dense MLP on the tokens it received
+combine:   all-to-all   # results return to the token's home GPU, weighted-summed</div>
+
+<div class="card">
+<h3>Animation: MoE token routing</h3>
+<canvas id="moeViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="moeStep">Step</button>
+  <button class="btn secondary" id="moeReset">Reset</button>
+  <span class="dim" id="moeLabel"></span>
+</div>
+<p class="caption">4 GPUs, one expert each, 4 tokens per GPU colored by which expert the router chose. Step through dispatch (all-to-all scatter), expert compute, and combine (all-to-all gather). Notice the hazard: if the router loves expert 2, GPU 2 drowns while others idle — <em>load balancing</em> is the central MoE systems problem, attacked with auxiliary losses at training time and with <a href="https://github.com/deepseek-ai/EPLB">EPLB</a>-style expert replication/placement from measured load at serving time. <a href="https://github.com/deepseek-ai/DeepEP">DeepEP</a> is the purpose-built kernel library for these all-to-alls.</p>
+</div>
+
+<h2 id="sp">7. Sequence and context parallelism</h2>
+<p>Long contexts blow up activations and KV along the <em>sequence</em> axis, so shard that: each GPU holds a contiguous chunk of the sequence. The problem is attention — every query must see every key. Two solutions:</p>
+<p><strong>Ulysses</strong> re-shards with all-to-alls: before attention, flip from sequence-sharded to <em>head</em>-sharded (each GPU gets full sequence for a subset of heads, attention is exact and local), then flip back. Cheap while heads ≥ GPUs. <strong>Ring attention</strong> keeps sequence shards and circulates K/V blocks around a ring, each GPU accumulating partial attention with online-softmax merging as blocks pass by — communication overlaps compute, and context length becomes effectively unbounded (see the ring animation in the <a href="attention.html">attention chapter</a>). Axolotl exposes both (and their combination, USP) for long-context fine-tuning.</p>
+
+<h2 id="compose">8. Composing it all</h2>
+<p><strong>Training</strong> composes all four axes into an N-D grid — e.g. 4096 GPUs = TP 8 (inside nodes) × PP 16 × DP 32, with EP folded into the MoE layers and ZeRO sharding the DP axis. The placement rule of thumb, in order of communication appetite: <em>TP inside the NVLink island, EP and FSDP next, PP and plain DP across nodes.</em></p>
+<p><strong>Inference</strong> composes differently, because there is no backward pass and latency bounds everything:</p>
+<ul>
+<li><strong>TP for latency</strong> — shard the weights to multiply decode bandwidth (TPOT ↓).</li>
+<li><strong>Replicas for throughput</strong> — once a TP group meets the latency SLO, scale out with independent copies behind a router; never widen TP further than the SLO requires.</li>
+<li><strong>EP for MoE</strong> — DeepSeek-style wide-EP serving puts experts on many GPUs and feeds them with giant batches.</li>
+<li><strong>Disaggregation</strong> — prefill pools and decode pools with different TP degrees, shipping KV between them (<a href="inference.html#metrics">inference chapter §5</a>).</li>
+</ul>
+<p><strong>Worked example — Llama-70B, FP8, 4×H100 (TP=4):</strong></p>
+<div class="formula">weights:            70 GB FP8 / 4 GPUs            = 17.5 GB per GPU
+workspace + misc:   ~5 GB per GPU                   → ~57 GB left for KV cache
+KV per token (FP8): 2 × 80 layers × 8 kv-heads × 128 dim × 1 B = 160 KB  → 40 KB per GPU at TP=4
+cache capacity:     57 GB / 40 KB ≈ 1.4 M tokens    → ~175 concurrent 8K-context sequences</div>
+<p class="caption">This is the arithmetic you should be able to do in an interview without notes: weights ÷ TP, subtract workspace, divide what's left by per-token-per-GPU KV. Every term came from this chapter or the <a href="inference.html#kv-cache">KV cache formula</a>.</p>
+
+<h2 id="multinode">9. Multi-node reality</h2>
+<p>Across nodes, topology is destiny: NCCL builds rings and trees out of whatever NVLink, PCIe, and NIC paths exist, and a bad mapping (a TP group spanning two nodes, a ring crossing a slow switch) silently halves throughput — the Multi-node NVLink Tuning Guide in Step 15 is about exactly this. The interconnects themselves are standardizing: <strong>UALink</strong> as an open NVLink-class scale-up fabric, <strong>Ultra Ethernet</strong> as the RDMA-style scale-out transport — read both specs as "what has to be true of a network for collectives to be fast."</p>
+
+<h2 id="reading">10. Where to go deeper</h2>
+<ul>
+<li><a href="https://arxiv.org/abs/1909.08053">Megatron-LM</a> — tensor + pipeline parallelism from the source.</li>
+<li><a href="https://jax-ml.github.io/scaling-book/inference/">How to Scale Your Model</a> — the roofline view of every parallelism.</li>
+<li><a href="https://arxiv.org/html/2412.19437">DeepSeek-V3</a> + <a href="https://github.com/deepseek-ai/DeepEP">DeepEP</a> — MoE model/system co-design.</li>
+<li>GPU MODE Lectures 17 (NCCL) and 67 (NCCL &amp; NVSHMEM), <a href="https://arxiv.org/html/2401.09670">DistServe</a>, and the full Step 15 list in the <a href="../index.html">study plan</a>; then the <a href="flashcards.html">Parallelism flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="inference.html">← Inference</a><a href="training.html">Training →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function onTheme(f){new MutationObserver(f).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+// ---------- 2. ring all-reduce ----------
+(function(){
+const cv=document.getElementById('ringViz'),ctx=cv.getContext('2d');
+const N=4;let step=0,timer=null; // steps 0..6: 0 initial, 1-3 reduce-scatter, 4-6 all-gather
+// chunk state: counts[g][c] = how many inputs summed into gpu g's chunk c (1..4); own[g][c] = present
+function state(){
+  // simulate
+  let cnt=Array.from({length:N},()=>Array(N).fill(1));
+  for(let s=0;s<Math.min(step,3);s++){ // reduce-scatter step s: gpu g sends chunk (g-s) to g+1
+    const snap=cnt.map(r=>r.slice());
+    for(let g=0;g<N;g++){const c=((g-s)%N+N)%N,to=(g+1)%N;cnt[to][c]=snap[to][c]+snap[g][c];}
+  }
+  let full=Array.from({length:N},()=>Array(N).fill(false));
+  for(let g=0;g<N;g++)full[g][((g+1)%N+N)%N]=step>=3; // after RS, gpu g owns chunk g+1 complete
+  for(let s=0;s<Math.max(0,step-3);s++){const snap=full.map(r=>r.slice());
+    for(let g=0;g<N;g++){const c=((g+1-s)%N+N)%N,to=(g+1)%N;if(snap[g][c])full[to][c]=true;}}
+  return{cnt,full};
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),acc=css('--accent'),acc2=css('--accent2'),bd=css('--border'),txt=css('--text');
+  const pos=[[200,70],[560,70],[560,230],[200,230]]; // clockwise
+  const{cnt,full}=state();
+  // ring arrows
+  ctx.strokeStyle=bd;ctx.lineWidth=2;
+  for(let g=0;g<N;g++){const[x1,y1]=pos[g],[x2,y2]=pos[(g+1)%N];
+    ctx.beginPath();ctx.moveTo(x1+70,y1+30);ctx.lineTo(x2+70,y2+30);ctx.stroke();}
+  for(let g=0;g<N;g++){
+    const[x,y]=pos[g];
+    ctx.fillStyle=css('--bg-card');ctx.strokeStyle=bd;rr(ctx,x,y,140,60,10);ctx.fill();ctx.stroke();
+    ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText('GPU '+g,x+6,y-6);
+    for(let c=0;c<N;c++){
+      const cx=x+8+c*32;
+      const complete=step>=3?(full[g][c]||(((g+1)%N)===c&&step>=3)):cnt[g][c]===N;
+      const n=cnt[g][c];
+      ctx.fillStyle=complete||n===N?acc2:n>1?acc:'rgba(128,128,128,0.3)';
+      rr(ctx,cx,y+10,26,40,5);ctx.fill();
+      ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.textAlign='center';
+      ctx.fillText(step<3?('Σ'+n):(complete?'Σ4':'Σ'+n),cx+13,y+34);
+    }
+  }
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText('clockwise ring →',380,36);
+  const lbl=step===0?'initial: every GPU has its own 4 chunks (Σ1 = one contribution each)':
+    step<=3?('reduce-scatter step '+step+'/3: each GPU adds the chunk arriving from its left neighbor'):
+    step<6?('all-gather step '+(step-3)+'/3: completed chunks (Σ4) circulate and replace stale ones'):
+    'done: every GPU holds all 4 fully-summed chunks. Sent per GPU: 6 chunks = 2·(N−1)/N × data.';
+  document.getElementById('ringLabel').textContent=lbl;
+}
+function adv(){if(step<6){step++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('ringPlay').textContent='▶ Play';}}
+document.getElementById('ringPlay').onclick=function(){if(timer){stop();return;}if(step>=6)step=0;this.textContent='⏸';timer=setInterval(adv,1000);};
+document.getElementById('ringStep').onclick=()=>{stop();adv();};
+document.getElementById('ringReset').onclick=()=>{stop();step=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 3. tensor parallel MLP ----------
+(function(){
+const cv=document.getElementById('tpViz'),ctx=cv.getContext('2d');
+let step=0;const STEPS=['X replicated on both GPUs','each GPU multiplies X by its column shard A_i','GeLU applies elementwise — still no communication','each GPU multiplies by its row shard B_i → partial Z_i','all-reduce: Z = Z₀ + Z₁ on both GPUs. One collective for the whole MLP.'];
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),bd=css('--border'),txt=css('--text');
+  ctx.font='12px sans-serif';
+  [0,1].forEach(g=>{
+    const y=40+g*130;
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('GPU '+g,16,y+40);
+    // X
+    ctx.fillStyle=step>=0?acc:'transparent';ctx.strokeStyle=bd;
+    rr(ctx,70,y,70,80,8);ctx.fill();ctx.stroke();ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText('X',105,y+44);
+    // A_i (tall half)
+    ctx.fillStyle=step>=1?acc2:'rgba(128,128,128,0.25)';
+    rr(ctx,190,y+(g?40:0),90,40,8);ctx.fill();ctx.fillStyle=step>=1?'#fff':dim;ctx.fillText('A'+g+' (cols)',235,y+(g?65:25));
+    // Y_i
+    if(step>=1){ctx.fillStyle=step>=2?warn:acc2;rr(ctx,330,y+20,70,40,8);ctx.fill();ctx.fillStyle='#fff';ctx.fillText(step>=2?'GeLU(Y'+g+')':'Y'+g,365,y+44);}
+    // B_i
+    ctx.fillStyle=step>=3?acc2:'rgba(128,128,128,0.25)';
+    rr(ctx,450,y+(g?40:0),90,40,8);ctx.fill();ctx.fillStyle=step>=3?'#fff':dim;ctx.fillText('B'+g+' (rows)',495,y+(g?65:25));
+    // Z_i
+    if(step>=3){ctx.fillStyle='#b07cff';rr(ctx,590,y+20,70,40,8);ctx.fill();ctx.fillStyle='#fff';ctx.fillText('Z'+g+' (partial)',625,y+44);}
+  });
+  if(step>=4){
+    ctx.strokeStyle=css('--danger');ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(660,80);ctx.bezierCurveTo(740,120,740,180,660,230);ctx.stroke();
+    ctx.fillStyle=css('--danger');ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+    ctx.fillText('all-reduce',700,155);
+    ctx.fillStyle='#b07cff';rr(ctx,790,130,80,46,8);ctx.fill();ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText('Z exact',830,157);
+  }
+  document.getElementById('tpLabel').textContent='step '+step+'/4 — '+STEPS[step];
+}
+document.getElementById('tpStep').onclick=()=>{step=Math.min(4,step+1);draw();};
+document.getElementById('tpReset').onclick=()=>{step=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 4. 1F1B pipeline ----------
+(function(){
+const cv=document.getElementById('ppViz'),ctx=cv.getContext('2d');
+const P=4;let t=0,timer=null;
+const mSlider=document.getElementById('ppM');
+function schedule(m){
+  // simple 1F1B: forward f(i,s) at time s+i (unit 1), backward b(i,s) 2 units, stage s backward starts after forward done & in reverse order
+  // Build per-stage timeline greedily, classic 1F1B timing: fwd_time(i,s)=... use known formula via simulation
+  const END=4*m+2*P+6;const grid=Array.from({length:P},()=>Array(END).fill(null));
+  // forward completion times
+  const fDone=Array.from({length:P},()=>Array(m).fill(0));
+  const bDone=Array.from({length:P},()=>Array(m).fill(0));
+  const free=Array(P).fill(0);
+  // warmup: stage s does min(P-s, m) forwards before first backward; then 1F1B
+  const fq=Array.from({length:P},()=>0),bq=Array.from({length:P},()=>0);
+  // event sim
+  for(let guard=0;guard<10000;guard++){
+    let progress=false;
+    for(let s=0;s<P;s++){
+      const warm=Math.min(P-s,m);
+      // can do forward?
+      const i=fq[s];
+      const canF=i<m&&(s===0||fDone[s-1][i]>0)&&(fq[s]-bq[s]<warm);
+      const j=bq[s];
+      const canB=j<m&&fDone[s][j]>0&&(s===P-1||bDone[s+1][j]>0)&&(fq[s]-bq[s]>=warm||fq[s]>=m);
+      if(canB){const st=Math.max(free[s],(s===P-1?fDone[s][j]:bDone[s+1][j]));for(let k=0;k<2;k++)grid[s][st+k]={i:j,b:true};bDone[s][j]=st+2;free[s]=st+2;bq[s]++;progress=true;}
+      else if(canF){const st=Math.max(free[s],s===0?0:fDone[s-1][i]);grid[s][st]={i,b:false};fDone[s][i]=st+1;free[s]=st+1;fq[s]++;progress=true;}
+    }
+    if(!progress)break;
+  }
+  let end=0;for(let s=0;s<P;s++)for(let x=0;x<END;x++)if(grid[s][x])end=Math.max(end,x+1);
+  return{grid,end};
+}
+let sched=schedule(8);
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),acc=css('--accent'),warn=css('--warn');
+  const m=parseInt(mSlider.value);document.getElementById('ppML').textContent=m;
+  const cw=Math.min(26,820/sched.end),ch=36,x0=70,y0=30;
+  for(let s=0;s<P;s++){
+    ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('stage '+s,10,y0+s*(ch+8)+22);
+    for(let x=0;x<Math.min(t,sched.end);x++){
+      const cell=sched.grid[s][x];const px=x0+x*cw,py=y0+s*(ch+8);
+      if(cell){ctx.fillStyle=cell.b?warn:acc;ctx.fillRect(px,py,cw-1,ch);
+        if(cw>14){ctx.fillStyle='#fff';ctx.font='9px monospace';ctx.textAlign='center';ctx.fillText((cell.b?'b':'f')+cell.i,px+cw/2,py+22);}}
+      else{ctx.fillStyle='rgba(128,128,128,0.15)';ctx.fillRect(px,py,cw-1,ch);}
+    }
+  }
+  // stats
+  let busy=0,total=0;
+  for(let s=0;s<P;s++)for(let x=0;x<sched.end;x++){total++;if(sched.grid[s][x])busy++;}
+  const theo=((P-1)/(m+P-1)*100).toFixed(1);
+  document.getElementById('ppStats').textContent='bubble (formula): '+theo+'% — idle cells shrink as microbatches grow';
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('time →   blue = forward, orange = backward (2×), grey = bubble',x0,H-12);
+}
+function tick(){if(t<sched.end){t++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('ppPlay').textContent='▶ Play';}}
+document.getElementById('ppPlay').onclick=function(){if(timer){stop();return;}if(t>=sched.end)t=0;this.textContent='⏸';timer=setInterval(tick,120);};
+document.getElementById('ppReset').onclick=()=>{stop();t=0;draw();};
+mSlider.oninput=()=>{stop();sched=schedule(parseInt(mSlider.value));t=sched.end;draw();};
+sched=schedule(8);t=sched.end;draw();onTheme(draw);
+})();
+
+// ---------- 5. FSDP ----------
+(function(){
+const cv=document.getElementById('fsdpViz'),ctx=cv.getContext('2d');
+const L=4,N=4;let step=0,timer=null; // per layer: gather, compute, free → 3 phases × 4 layers
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),acc=css('--accent'),acc2=css('--accent2'),bd=css('--border');
+  const layer=Math.floor(step/3),phase=step%3; // 0 gather,1 compute,2 free
+  ctx.font='12px sans-serif';
+  for(let l=0;l<L;l++){
+    const x=60+l*210;
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('layer '+(l+1),x,30);
+    const active=l===layer&&step<L*3;
+    const gathered=active&&phase>=0&&phase<2;
+    for(let g=0;g<N;g++){
+      const y=44+g*38;
+      // shard always resident
+      ctx.fillStyle='rgba(128,128,128,0.35)';ctx.fillRect(x,y,34,28);
+      ctx.fillStyle=dim;ctx.font='9px monospace';ctx.fillText('sh'+g,x+6,y+18);ctx.font='12px sans-serif';
+      // gathered full copy
+      if(gathered){ctx.fillStyle=phase===1?acc2:acc;ctx.fillRect(x+44,y,120,28);
+        ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText(phase===1?'compute':'full params',x+104,y+19);ctx.textAlign='left';}
+      else if(l<layer||step>=L*3){ctx.strokeStyle=bd;ctx.setLineDash([3,3]);ctx.strokeRect(x+44,y,120,28);ctx.setLineDash([]);
+        ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('freed',x+104,y+19);ctx.textAlign='left';}
+    }
+  }
+  const msgs=['all-gather layer shards into full weights','compute with full layer','free the gathered copy — shards remain'];
+  document.getElementById('fsdpLabel').textContent=step>=L*3?'done: at no point did a GPU hold more than one full layer':'layer '+(layer+1)+': '+msgs[phase];
+}
+function tick(){if(step<L*3){step++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('fsdpPlay').textContent='▶ Play';}}
+document.getElementById('fsdpPlay').onclick=function(){if(timer){stop();return;}if(step>=L*3)step=0;this.textContent='⏸';timer=setInterval(tick,800);};
+document.getElementById('fsdpReset').onclick=()=>{stop();step=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 6. MoE ----------
+(function(){
+const cv=document.getElementById('moeViz'),ctx=cv.getContext('2d');
+let step=0; // 0 routed, 1 dispatched, 2 computed, 3 combined
+const COLORS=['#5b8cff','#38c6a0','#f2a65a','#b07cff'];
+// tokens[gpu] = expert assignment
+const asg=[[1,2,0,2],[0,1,3,2],[2,2,1,0],[3,0,2,1]];
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),bd=css('--border'),txt=css('--text');
+  ctx.font='12px sans-serif';
+  for(let g=0;g<4;g++){
+    const x=40+g*215;
+    ctx.fillStyle=txt;ctx.textAlign='left';ctx.font='bold 12px sans-serif';
+    ctx.fillText('GPU '+g+' — expert '+g,x,30);ctx.font='12px sans-serif';
+    // expert box
+    ctx.strokeStyle=COLORS[g];ctx.lineWidth=2;rr(ctx,x,120,170,60,10);
+    if(step===2){ctx.fillStyle=COLORS[g];ctx.globalAlpha=0.25;ctx.fill();ctx.globalAlpha=1;}
+    ctx.stroke();
+    ctx.fillStyle=dim;ctx.fillText('expert '+g+(step===2?' computing':''),x+8,152);
+    // home tokens row (top) & post rows
+    const toks=asg[g];
+    toks.forEach((e,i)=>{
+      const tx=x+i*42;
+      if(step===0||step===3){ // at home
+        ctx.fillStyle=COLORS[e];rr(ctx,tx,44,34,26,6);ctx.fill();
+        ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='10px monospace';ctx.fillText('→e'+e,tx+17,61);ctx.font='12px sans-serif';ctx.textAlign='left';
+        if(step===3){ctx.strokeStyle=css('--accent2');ctx.lineWidth=2;rr(ctx,tx,44,34,26,6);ctx.stroke();}
+      }
+    });
+    // tokens at expert (dispatched)
+    if(step===1||step===2){
+      let k=0;
+      for(let src=0;src<4;src++)asg[src].forEach((e,i)=>{if(e===g){
+        const tx=x+8+k*40;k++;
+        ctx.fillStyle=COLORS[g];rr(ctx,tx,190,34,26,6);ctx.fill();
+        ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='10px monospace';ctx.fillText('g'+src,tx+17,207);ctx.font='12px sans-serif';ctx.textAlign='left';}});
+      ctx.fillStyle=dim;ctx.fillText(k+' token(s) received',x,250);
+    }
+  }
+  const msgs=['router picked an expert per token (color = destination expert)',
+   'all-to-all DISPATCH: tokens traveled to their expert’s GPU — note GPU 2 got the most',
+   'experts run dense MLPs on whatever arrived',
+   'all-to-all COMBINE: outputs returned home (green outline). Two all-to-alls per MoE layer.'];
+  document.getElementById('moeLabel').textContent='step '+step+'/3 — '+msgs[step];
+}
+document.getElementById('moeStep').onclick=()=>{step=(step+1)%4;draw();};
+document.getElementById('moeReset').onclick=()=>{step=0;draw();};
+draw();onTheme(draw);
+})();
+</script>
+</body>
+</html>

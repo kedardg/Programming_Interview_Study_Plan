@@ -1,0 +1,34 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CPU Memory</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › compute/cpu-memory/README.md</div>
+<article class="note"><h1 id="cpu-memory">CPU Memory</h1>
+<p>This is a tiny chapter, since usually there are very few nuances one needs to know about CPU memory - which is a good thing!</p>
+<p>Most of the ML workload compute happens on GPUs, but typically there should be at least as much CPU memory on each node as there is on the GPUs. So, for example, if you're on a H100 node with 8x 80GiB GPUs, you have 640GiB of GPU memory. Thus you want at least as much of CPU memory. Most recent high end cloud packages usually come with 1-2TiBs of CPU memory.</p>
+<h2 id="what-cpu-memory-is-needed-for-in-ml-workloads">What CPU memory is needed for in ML workloads</h2>
+<ul>
+<li>Loading the model weights, unless they are loaded directly onto the GPUs - this is usually a transitory memory usage that goes back to zero once the model has been moved to GPUs.</li>
+<li>Saving the model weights. In some situations each GPU writes its own checkpoint directly to the disk, in other cases the model is recomposed on the CPU before it's written to disk - this too is a transitory memory usage.</li>
+<li>Possible parameter and optimizer state offloading when using frameworks like <a href="https://www.deepspeed.ai/tutorials/zero-offload/">DeepSpeed</a>. In which case quite a lot of CPU memory might be needed.</li>
+<li>Activations calculated in the <code>forward</code> pass, and which need to be available for the <code>backward</code> path can also be offloaded to CPU, rather than discarded and then recomputed during the backward pass to save the unnecessary overhead</li>
+<li><code>DataLoader</code> is usually one of the main users of CPU memory and at times it may consume very large amounts of memory. Typically there are at least 2x 8 DL workers running on each node, so you need enough memory to support at least 16 processes each holding some data. For example, in the case of streaming data from the cloud, if the data shards are large, these processes could easily eat up hundreds of GBs of CPU memory.</li>
+<li>The software itself and its dependent libraries uses a bit of CPU memory, but this amount is usually negligible.</li>
+</ul>
+<h2 id="things-to-know">Things to know</h2>
+<ul>
+<li>If the <code>DataLoader</code> uses HF <code>datasets</code> in <code>mmap</code> mode the Resident memory usage may appear to be using a huge amount of CPU memory as it'll try to map out the whole datasets to the memory. Except this is misleading, since if the memory is needed elsewhere the OS will page out any unneeded mmap'ed pages back to the system. You can read more about it <a href="https://stasosphere.com/entrepreneur-being/301-mmap-memory-leak-investigation/">here</a>. This awareness, of course, applies to any dataset using <code>mmap</code>, I was using HF <code>datasets</code> as an example since it's very widely used.</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/compute/cpu-memory/README.md">compute/cpu-memory/README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

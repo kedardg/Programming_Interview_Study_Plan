@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Inference Systems</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html" class="here">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>LLM Inference Systems</h1>
+<p class="dim">How a trained transformer actually serves requests: prefill and decode, the KV cache, continuous batching, PagedAttention, scheduling, and speculative decoding. This chapter is the systems counterpart of Steps 14–15 in the study plan.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (11:17)</h3><audio controls preload="none" src="audio/inference.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/inference.txt">Read the transcript</a>.</p></div>
+<h2 id="two-phases">1. One request, two very different phases</h2>
+<p>When a request arrives at an inference engine, the model processes it in two phases that stress the hardware in opposite ways.</p>
+<p><strong>Prefill</strong> runs the whole prompt through the model at once. Every layer sees all prompt tokens together, so the matrix multiplies are large and the GPU's tensor cores stay busy: prefill is <em>compute-bound</em>. Its cost grows roughly linearly with prompt length (quadratically in the attention term), and it produces one thing the rest of the request depends on: the first output token, plus the keys and values of every prompt token, saved for later.</p>
+<p><strong>Decode</strong> then generates the response one token at a time. Each step feeds only the single newest token through the model, but attention still has to look at <em>every</em> previous key and value. The matrices are skinny (batch × 1 token), so the GPU spends almost all its time streaming weights and cached KV from HBM rather than multiplying: decode is <em>memory-bandwidth-bound</em>. This asymmetry drives nearly every design decision in this chapter.</p>
+
+<div class="card">
+<h3>Animation: prefill vs decode</h3>
+<canvas id="phaseViz" class="viz" width="900" height="280"></canvas>
+<div class="controls">
+  <button class="btn" id="phasePlay">▶ Play</button>
+  <button class="btn secondary" id="phaseStep">Step</button>
+  <button class="btn secondary" id="phaseReset">Reset</button>
+</div>
+<p class="caption">Prefill (blue) processes all prompt tokens in parallel in one pass and fills the KV cache. Decode (green) emits one token per step; each step reads the entire KV cache (highlighted) to attend over the past. Watch the cache column grow by exactly one entry per decode step — that growth is the memory cost of generation.</p>
+</div>
+
+<p>The two phases also map onto the two latency metrics every serving benchmark reports:</p>
+<ul>
+  <li><strong>TTFT</strong> (time to first token) — dominated by prefill; what makes a chat feel responsive.</li>
+  <li><strong>TPOT</strong> (time per output token, also called ITL, inter-token latency) — dominated by decode; what makes streaming feel fast. <code>total latency ≈ TTFT + TPOT × output tokens</code>.</li>
+</ul>
+<p>Because decode is bandwidth-bound, a useful mental model for its floor is: <em>one decode step cannot be faster than the time it takes to read every active byte (weights + KV cache) from HBM once</em>. A 70B model in FP16 is ~140&nbsp;GB of weights; on a GPU with 3.35&nbsp;TB/s of bandwidth (H100 SXM), the floor is ~42&nbsp;ms per token at batch 1 without tensor parallelism — which is exactly why batching and parallelism exist.</p>
+
+<h2 id="kv-cache">2. The KV cache</h2>
+<p>Why cache at all? Attention for the newest token needs <code>softmax(q·Kᵀ)·V</code> over all previous tokens. Without a cache, each decode step would recompute every past token's K and V by re-running the whole prompt — turning an O(n) generation into O(n²) full forward passes. The KV cache trades memory for that recomputation: after a token is processed, its per-layer K and V vectors are stored, and each new step only computes K and V for itself.</p>
+<p>The cost of that trade is captured by one formula worth knowing cold (it is the formula behind the <a href="https://melchi.me/tools/kv-cache-calculator/">melchi.me calculator</a> in Step 14):</p>
+<div class="formula">KV bytes = 2 (K and V) × layers × KV heads × head_dim × cached tokens × batch × bytes/element</div>
+<p>Every serving-side attention variant is an attack on one factor of this product:</p>
+<table class="cmp">
+<tr><th>Variant</th><th>What changes</th><th>Cache size vs MHA</th><th>Used by</th></tr>
+<tr><td><strong>MHA</strong> (multi-head)</td><td>Every query head has its own K/V head</td><td>1× (baseline)</td><td>GPT-3, Llama 1</td></tr>
+<tr><td><strong>MQA</strong> (multi-query)</td><td>All query heads share one K/V head</td><td>1 / n_heads</td><td>PaLM, Falcon</td></tr>
+<tr><td><strong>GQA</strong> (grouped-query)</td><td>Groups of query heads share K/V heads</td><td>n_kv / n_heads (e.g. 8/64)</td><td>Llama 2/3, Mistral</td></tr>
+<tr><td><strong>MLA</strong> (multi-head latent)</td><td>K/V compressed into a small shared latent vector, decompressed on the fly</td><td>~1/10 or less</td><td>DeepSeek-V2/V3</td></tr>
+</table>
+
+<div class="card">
+<h3>Interactive: size a KV cache by hand</h3>
+<div class="controls">
+  <label class="ctl">Model
+    <select id="kvModel">
+      <option value="llama8b">Llama-3-8B (32L, 8 KV heads, d=128)</option>
+      <option value="llama70b" selected>Llama-3-70B (80L, 8 KV heads, d=128)</option>
+      <option value="mha70b">Hypothetical 70B with full MHA (80L, 64 KV heads)</option>
+      <option value="mistral7b">Mistral-7B (32L, 8 KV heads, d=128)</option>
+    </select>
+  </label>
+  <label class="ctl">Precision
+    <select id="kvDtype"><option value="2" selected>FP16/BF16 (2 B)</option><option value="1">FP8/INT8 (1 B)</option><option value="0.5">INT4 (0.5 B)</option></select>
+  </label>
+</div>
+<div class="controls">
+  <label class="ctl">Context tokens <input type="range" id="kvCtx" min="9" max="17" value="15" step="1"> <span id="kvCtxLabel"></span></label>
+  <label class="ctl">Concurrent users <input type="range" id="kvBatch" min="0" max="8" value="4" step="1"> <span id="kvBatchLabel"></span></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="kvPerTok">–</div><div class="l">KV per token</div></div>
+  <div class="box"><div class="v" id="kvPerSeq">–</div><div class="l">per sequence</div></div>
+  <div class="box"><div class="v" id="kvTotal">–</div><div class="l">total cache</div></div>
+  <div class="box"><div class="v" id="kvGpus">–</div><div class="l">H100-80GB just for cache</div></div>
+</div>
+<p class="caption">Try the hypothetical full-MHA 70B at 32K context and 16 users: about 1.25&nbsp;TiB of cache — nine times the model's own 140&nbsp;GB of BF16 weights. Switch to GQA and watch it drop 8×; switch the precision to FP8 for another 2×. This is why GQA/MLA plus cache quantization decide how many users fit on a GPU.</p>
+</div>
+
+<h2 id="batching">3. Batching: from static to continuous</h2>
+<p>Batch-1 decode wastes the GPU: reading 140&nbsp;GB of weights from HBM to produce <em>one</em> token is an arithmetic intensity of well under 1 FLOP/byte against hardware that balances at hundreds. The fix is to serve many sequences at once so that each weight read is amortized across the whole batch — decode throughput rises almost linearly with batch size until the KV cache runs out of memory or the batch becomes compute-bound.</p>
+<p>But <em>how</em> you batch matters as much as whether you batch:</p>
+<ul>
+<li><strong>Static batching</strong> groups requests, runs them in lockstep, and returns when the <em>longest</em> one finishes. Short requests sit idle, padded, holding memory, while stragglers finish — utilization collapses when output lengths vary (and they always vary).</li>
+<li><strong>Continuous batching</strong> (Orca's iteration-level scheduling) makes the batch a living thing: after <em>every</em> decode iteration, finished sequences leave and waiting requests join. No padding, no waiting for stragglers. This single idea is the backbone of every modern engine — vLLM, SGLang, TensorRT-LLM.</li>
+</ul>
+
+<div class="card">
+<h3>Animation: static vs continuous batching</h3>
+<canvas id="batchViz" class="viz" width="900" height="330"></canvas>
+<div class="controls">
+  <button class="btn" id="batchPlay">▶ Play</button>
+  <button class="btn secondary" id="batchReset">Reset</button>
+  <span class="dim" id="batchScore"></span>
+</div>
+<p class="caption">Each row is a batch slot; each cell is one decode iteration. Grey = slot idle (wasted). Top: static batching waits for the longest sequence before admitting the next group. Bottom: continuous batching back-fills the moment a sequence finishes. Same requests, same hardware — count the wasted cells.</p>
+</div>
+
+<p>One subtlety: a newly admitted request still needs its prefill, which is long and compute-bound, and running it stalls every decoding request in the batch for that iteration. <strong>Sarathi-Serve</strong>'s answer is <em>chunked prefill</em>: split the prompt into chunks and co-schedule a chunk alongside the batch's decode steps each iteration, smoothing the stall into a small, bounded overhead. This is why you see "chunked prefill" as a flag in vLLM and friends.</p>
+
+<h2 id="paged">4. PagedAttention: virtual memory for the KV cache</h2>
+<p>Continuous batching created a memory problem. If each sequence pre-allocates a contiguous KV region sized for its <em>maximum possible</em> length, most of it is never used — the vLLM paper measured only 20–38% of KV memory doing useful work in prior systems, the rest lost to internal fragmentation and reservations. Fewer sequences fit, so the batch shrinks, so throughput falls.</p>
+<p><strong>PagedAttention</strong> borrows the oldest trick in operating systems: paging. The cache is carved into fixed-size <em>blocks</em> (e.g. 16 tokens each); a per-sequence <em>block table</em> maps logical positions to physical blocks allocated on demand. Waste is bounded to the last partially-filled block per sequence (near-zero fragmentation), and the same physical block can back many sequences — a shared system prompt is stored once and referenced by every request that uses it, with copy-on-write when a sequence diverges.</p>
+
+<div class="card">
+<h3>Animation: paged KV allocation</h3>
+<canvas id="pageViz" class="viz" width="900" height="340"></canvas>
+<div class="controls">
+  <button class="btn" id="pagePlay">▶ Play</button>
+  <button class="btn secondary" id="pageReset">Reset</button>
+  <span class="dim" id="pageStats"></span>
+</div>
+<p class="caption">Left: the physical block pool. Right: three sequences and their block tables. Sequences grow token by token and grab a new block only when the current one fills; the two chat requests share the yellow system-prompt blocks until one of them writes past the shared prefix (copy-on-write, shown with a flash). When a sequence finishes, its private blocks return to the pool instantly.</p>
+</div>
+
+<p>Prefix sharing generalizes beyond system prompts: <strong>SGLang's RadixAttention</strong> keeps finished sequences' KV in a radix tree keyed by token prefix, so few-shot prompts, chat histories, and tree-of-thought branches all reuse cached computation automatically. Distributed versions (<strong>Mooncake</strong>) treat the KV cache as a cluster-wide resource with its own data plane.</p>
+
+<h2 id="metrics">5. Scheduling, SLOs, and goodput</h2>
+<p>Throughput alone is a bad target: a scheduler can always raise tokens/second by batching harder, at the cost of each user's latency. Production systems therefore optimize <strong>goodput</strong> — requests served <em>within their latency SLOs</em> (a TTFT bound and a TPOT bound) per unit of hardware (Etalon formalizes this). The levers:</p>
+<ul>
+<li><strong>Admission and preemption</strong> — when the cache fills, vLLM preempts whole sequences (recompute or swap their KV later) rather than OOM-ing.</li>
+<li><strong>Chunked prefill ratio</strong> — bigger chunks help TTFT of the new request, hurt TPOT of everyone else.</li>
+<li><strong>Prefill/decode disaggregation</strong> (DistServe, Splitwise, Mooncake, NVIDIA Dynamo) — run prefill and decode on <em>separate GPU pools</em>, each provisioned and parallelized for its own regime, shipping the KV cache between them. This removes phase interference entirely and lets you scale TTFT capacity and TPOT capacity independently; the price is moving KV over the network (NIXL is a transport layer built for exactly this).</li>
+<li><strong>Fairness</strong> — request sizes are unknown in advance; fair schedulers (VTC) account service in tokens, not requests.</li>
+</ul>
+
+<h2 id="speculative">6. Speculative decoding</h2>
+<p>Decode wastes compute: the big model's FLOPs are idle while bandwidth streams weights. Speculative decoding spends that idle compute to cut latency. A cheap <em>draft</em> model proposes k tokens; the target model scores all k in <strong>one</strong> parallel forward pass (which costs barely more than scoring one token — the pass is bandwidth-bound); accepted tokens are kept, the first rejection is resampled from a corrected distribution. The acceptance rule is constructed so the output distribution is <em>mathematically identical</em> to sampling the target model alone — it is a lossless speedup, typically 2–3× when draft and target agree often.</p>
+
+<div class="card">
+<h3>Animation: draft, verify, accept</h3>
+<canvas id="specViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="specStep">Next round</button>
+  <button class="btn secondary" id="specReset">Reset</button>
+  <label class="ctl">Draft quality <input type="range" id="specQ" min="30" max="95" value="75"> <span id="specQLabel">75%</span></label>
+</div>
+<p class="caption">Each round: the small model drafts 5 tokens (hollow), the large model verifies them all in one pass, accepts a prefix (green) and corrects the first miss (red→solid). Higher draft quality → longer accepted runs → fewer large-model passes per token. Drag the slider and watch tokens-per-pass change.</p>
+</div>
+
+<p>Variants move the draft inside the target model: <strong>Medusa</strong> adds extra prediction heads; <strong>EAGLE</strong> drafts at the feature level from the target's own hidden states (current best acceptance rates); vLLM ships n-gram, EAGLE, and draft-model speculation behind one flag.</p>
+
+<h2 id="structured">7. Structured and constrained decoding</h2>
+<p>Serving agents and APIs means guaranteeing output shape (JSON, SQL, tool-call schemas). Constrained decoding masks invalid tokens at each step using a grammar compiled ahead of time — <strong>XGrammar</strong> precomputes pushdown-automaton masks so the per-token overhead is microseconds. The subtlety ("Guiding LLMs the Right Way"): naive greedy masking can distort the model's intended distribution; correct methods mask without changing relative probabilities of valid continuations.</p>
+
+<h2 id="engines">8. The production engines</h2>
+<table class="cmp">
+<tr><th>Engine</th><th>Signature ideas</th><th>Reach for it when</th></tr>
+<tr><td><a href="https://github.com/vllm-project/vllm">vLLM</a></td><td>PagedAttention, continuous batching, chunked prefill, speculative decoding, broad model support</td><td>Default open-source choice; fastest-moving ecosystem</td></tr>
+<tr><td><a href="https://github.com/sgl-project/sglang">SGLang</a></td><td>RadixAttention prefix cache, structured programs, fast constrained decoding, strong MoE/DeepSeek support</td><td>Heavy prefix reuse: agents, few-shot, multi-turn</td></tr>
+<tr><td><a href="https://github.com/NVIDIA/TensorRT-LLM">TensorRT-LLM</a></td><td>Compiled kernels, FP8/FP4 paths, in-flight batching</td><td>Squeezing peak performance from NVIDIA hardware</td></tr>
+</table>
+
+<div class="card">
+<h3>Try it on your 5080 (Week 10 exercise)</h3>
+<div class="formula">pip install vllm<br>vllm serve Qwen/Qwen2.5-3B-Instruct --max-model-len 8192<br><br># separate shell: measure TTFT / TPOT / throughput under load<br>vllm bench serve --model Qwen/Qwen2.5-3B-Instruct \
+  --num-prompts 100 --request-rate 4</div>
+<p class="caption">Watch <code>--max-num-seqs</code>, cache usage, and preemptions in the logs while you raise the request rate; you will see every concept in this chapter — batch occupancy, cache pressure, chunked prefill — in the metrics. 16&nbsp;GB fits a 3B model in FP16 or a 4-bit 7–8B model.</p>
+</div>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li><a href="https://jax-ml.github.io/scaling-book/inference/">How to Scale Your Model: Inference</a> — the arithmetic behind every claim above.</li>
+<li><a href="https://arxiv.org/html/2309.06180">vLLM / PagedAttention paper</a> and <a href="https://www.usenix.org/conference/osdi22/presentation/yu">Orca</a> — the two foundational systems papers.</li>
+<li><a href="https://www.usenix.org/system/files/osdi24-agrawal.pdf">Sarathi-Serve</a> (chunked prefill), <a href="https://arxiv.org/html/2401.09670">DistServe</a> (disaggregation), <a href="https://proceedings.mlr.press/v202/leviathan23a.html">speculative decoding</a>.</li>
+<li>Steps 14–15 of the <a href="../index.html">study plan</a> for the full reading list, and the <a href="flashcards.html">Inference flashcard deck</a> to retain it.</li>
+</ul>
+
+<div class="footer-nav"><a href="quantization.html">← Quantization</a><a href="parallelism.html">Parallelism →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------- 1. prefill vs decode ----------
+(function(){
+const cv=document.getElementById('phaseViz'),ctx=cv.getContext('2d');
+const PROMPT=6,GEN=7;let step=0,timer=null; // steps: 0=idle,1=prefill done,2..=decode steps
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='13px sans-serif';ctx.textAlign='center';
+  const cw=46,ch=34,x0=30,yTok=40;
+  ctx.textAlign='left';ctx.fillStyle=dim;ctx.fillText('Tokens',x0,yTok-14);
+  ctx.fillText('KV cache',x0,150);ctx.textAlign='center';
+  const total=PROMPT+GEN;
+  for(let i=0;i<total;i++){
+    const x=x0+i*(cw+6);const isPrompt=i<PROMPT;
+    const done=isPrompt?step>=1:(step>=2+(i-PROMPT));
+    const active=(step===0&&isPrompt)||(!isPrompt&&step===1+(i-PROMPT)+1&&false);
+    ctx.fillStyle=done?(isPrompt?acc:acc2):'transparent';
+    ctx.strokeStyle=bd;ctx.lineWidth=1.5;
+    rr(ctx,x,yTok,cw,ch,7);if(done)ctx.fill();ctx.stroke();
+    ctx.fillStyle=done?'#fff':dim;
+    ctx.fillText(isPrompt?['How','do','GPUs','serve','LLMs','?'][i]:'t'+(i-PROMPT+1),x+cw/2,yTok+22);
+  }
+  // current op label
+  ctx.fillStyle=txt;ctx.textAlign='left';ctx.font='bold 14px sans-serif';
+  let label;
+  if(step===0)label='Waiting. Press play: prefill will process all '+PROMPT+' prompt tokens in ONE parallel pass (compute-bound).';
+  else if(step===1)label='Prefill done in one pass → first token ready, cache holds '+PROMPT+' entries.';
+  else if(step<1+GEN)label='Decode step '+(step-1)+': feed 1 token, read ALL '+(PROMPT+step-2)+' cached entries (bandwidth-bound).';
+  else label='Done: '+GEN+' decode steps, each touching the whole cache. TTFT = prefill; TPOT = one decode step.';
+  ctx.fillText(label,x0,120);
+  // cache row
+  const yC=165;const cached=step===0?0:PROMPT+Math.min(Math.max(step-1,0),GEN-1);
+  for(let i=0;i<cached;i++){
+    const x=x0+i*(cw+6);const reading=step>=2&&step<1+GEN&&i<PROMPT+step-2;
+    ctx.fillStyle=i<PROMPT?acc:acc2;ctx.globalAlpha=reading?1:0.45;
+    rr(ctx,x,yC,cw,ch,7);ctx.fill();ctx.globalAlpha=1;
+    ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='12px monospace';ctx.fillText('K,V',x+cw/2,yC+22);
+  }
+  if(step>=2&&step<=1+GEN){ctx.fillStyle=dim;ctx.textAlign='left';ctx.font='12px sans-serif';
+    ctx.fillText('← decode step reads every cached K,V (one HBM sweep)',x0+cached*(cw+6)+6,yC+22);}
+  // legend
+  ctx.fillStyle=acc;rr(ctx,x0,H-42,14,14,4);ctx.fill();ctx.fillStyle=dim;ctx.fillText('prefill (parallel, compute-bound)',x0+20,H-30);
+  ctx.fillStyle=acc2;rr(ctx,x0+260,H-42,14,14,4);ctx.fill();ctx.fillStyle=dim;ctx.fillText('decode (sequential, bandwidth-bound)',x0+280,H-30);
+}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+function advance(){if(step<1+GEN){step++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('phasePlay').textContent='▶ Play';}}
+document.getElementById('phaseStep').onclick=()=>{stop();advance();};
+document.getElementById('phaseReset').onclick=()=>{stop();step=0;draw();};
+document.getElementById('phasePlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(advance,900);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 2. KV calculator ----------
+(function(){
+const MODELS={llama8b:{L:32,kv:8,d:128},llama70b:{L:80,kv:8,d:128},mha70b:{L:80,kv:64,d:128},mistral7b:{L:32,kv:8,d:128}};
+const $=id=>document.getElementById(id);
+function fmt(b){const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++;}return b.toFixed(b>=100?0:b>=10?1:2)+' '+u[i];}
+function upd(){
+  const m=MODELS[$('kvModel').value],bytes=parseFloat($('kvDtype').value);
+  const ctx=Math.pow(2,parseInt($('kvCtx').value)),batch=Math.pow(2,parseInt($('kvBatch').value));
+  $('kvCtxLabel').textContent=ctx>=1024?(ctx/1024)+'K':ctx;$('kvBatchLabel').textContent=batch;
+  const perTok=2*m.L*m.kv*m.d*bytes,perSeq=perTok*ctx,total=perSeq*batch;
+  $('kvPerTok').textContent=fmt(perTok);$('kvPerSeq').textContent=fmt(perSeq);$('kvTotal').textContent=fmt(total);
+  $('kvGpus').textContent=(total/(80*1024**3)).toFixed(2);
+}
+['kvModel','kvDtype','kvCtx','kvBatch'].forEach(id=>$(id).oninput=upd);upd();
+})();
+
+// ---------- 3. batching ----------
+(function(){
+const cv=document.getElementById('batchViz'),ctx=cv.getContext('2d');
+// request lengths (decode iterations); same workload for both schedulers
+const REQ=[9,3,6,2,8,4,3,7,2,5,6,3];const SLOTS=4,ITERS=26;
+let t=0,timer=null;
+function sim(continuous){
+  const slots=Array(SLOTS).fill(null);let q=REQ.map((len,i)=>({len,i}));let done=0;
+  const grid=[];// grid[iter][slot] = reqIndex or null
+  let groupEnd=0;
+  for(let it=0;it<ITERS;it++){
+    if(continuous){for(let s=0;s<SLOTS;s++){if(!slots[s]&&q.length)slots[s]={...q.shift(),left:0};}}
+    else if(it>=groupEnd){let max=0;for(let s=0;s<SLOTS;s++){slots[s]=q.length?{...q.shift(),left:0}:null;if(slots[s])max=Math.max(max,slots[s].len);}groupEnd=it+max;}
+    grid.push(slots.map(x=>x?x.i:null));
+    for(let s=0;s<SLOTS;s++){if(slots[s]){slots[s].left++;if(slots[s].left>=slots[s].len){done++;slots[s]=null;}}}
+    if(!continuous){/* static: finished slots stay empty until groupEnd */}
+  }
+  return grid;
+}
+const gStatic=sim(false),gCont=sim(true);
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),bd=css('--border'),txt=css('--text');
+  const colors=['#5b8cff','#38c6a0','#f2a65a','#e5604c','#b07cff','#4cc3e5','#e5a0c3','#9ad24c','#ff8c66','#66c7ff','#d2b84c','#8fe0b8'];
+  const cw=28,chh=22,x0=120;
+  [['Static',gStatic,40],['Continuous',gCont,190]].forEach(([name,grid,y0])=>{
+    ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillText(name+' batching',x0,y0-10);
+    let busy=0,cells=0;
+    for(let it=0;it<Math.min(t,ITERS);it++)for(let s=0;s<SLOTS;s++){
+      const r=grid[it][s];const x=x0+it*cw,y=y0+s*chh;cells++;
+      if(r!==null){busy++;ctx.fillStyle=colors[r%colors.length];ctx.fillRect(x,y,cw-2,chh-2);}
+      else{ctx.fillStyle='rgba(128,128,128,0.18)';ctx.fillRect(x,y,cw-2,chh-2);}
+    }
+    for(let s=0;s<SLOTS;s++){ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('slot '+(s+1),30,y0+s*chh+15);}
+    if(t>0){ctx.fillStyle=dim;ctx.fillText('util '+Math.round(100*busy/Math.max(cells,1))+'%',x0+ITERS*cw+8,y0+40);}
+  });
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText('time → (one column = one decode iteration; colors = requests; grey = wasted slot)',x0,H-14);
+}
+function tick(){if(t<ITERS){t++;draw();const bs=gStatic.flat().slice(0,t*SLOTS),bc=gCont.flat().slice(0,t*SLOTS);
+  }else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('batchPlay').textContent='▶ Play';}}
+document.getElementById('batchPlay').onclick=function(){if(timer){stop();return;}if(t>=ITERS)t=0;this.textContent='⏸ Pause';timer=setInterval(tick,220);};
+document.getElementById('batchReset').onclick=()=>{stop();t=0;draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4. paged attention ----------
+(function(){
+const cv=document.getElementById('pageViz'),ctx=cv.getContext('2d');
+const POOL=24,BLK=4; // pool blocks, tokens per block
+// seq A,B share 2-block system prompt; C independent. events per tick: add token to a seq
+let state=null,timer=null,flash=null;
+function init(){
+  state={pool:Array(POOL).fill(null),seqs:[
+    {name:'chat A',color:'#5b8cff',toks:0,blocks:[],shared:2,done:false,len:14},
+    {name:'chat B',color:'#38c6a0',toks:0,blocks:[],shared:2,done:false,len:9},
+    {name:'batch C',color:'#e5604c',toks:0,blocks:[],shared:0,done:false,len:11}],
+    sharedBlocks:[],t:0};
+  // allocate shared prefix (8 tokens = 2 blocks)
+  for(let i=0;i<2;i++){state.pool[i]={owner:'shared',full:true};state.sharedBlocks.push(i);}
+  state.seqs[0].blocks=[...state.sharedBlocks];state.seqs[0].toks=8;
+  state.seqs[1].blocks=[...state.sharedBlocks];state.seqs[1].toks=8;
+  flash=null;
+}
+function alloc(owner){for(let i=0;i<POOL;i++)if(!state.pool[i]){state.pool[i]={owner,full:false};return i;}return -1;}
+function tick(){
+  state.t++;let any=false;
+  state.seqs.forEach((s,si)=>{
+    if(s.done||s.toks>=s.len+ (s.shared?8:0))
+      {if(!s.done&&s.toks>=s.len+(s.shared?8:0)){s.done=true;
+        // free private blocks
+        s.blocks.forEach(b=>{if(!state.sharedBlocks.includes(b))state.pool[b]=null;});}
+       return;}
+    any=true;
+    const within=s.toks%BLK;
+    if(within===0||s.blocks.length===0||(s.shared&&s.toks===8)){const b=alloc(s.name);if(b>=0){s.blocks.push(b);if(s.shared&&s.toks===8)flash={seq:si,t:state.t};}}
+    s.toks++;
+    const lb=s.blocks[s.blocks.length-1];if(state.pool[lb])state.pool[lb].full=(s.toks%BLK===0);
+  });
+  draw();if(!any)stop();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('Physical block pool ('+BLK+' tokens/block)',30,28);
+  const bw=56,bh=36;
+  for(let i=0;i<POOL;i++){
+    const x=30+(i%8)*(bw+8),y=44+Math.floor(i/8)*(bh+8);
+    const b=state.pool[i];
+    ctx.strokeStyle=bd;ctx.lineWidth=1.5;
+    if(b){ctx.fillStyle=b.owner==='shared'?'#d2b84c':(state.seqs.find(s=>s.name===b.owner)||{}).color||'#888';
+      ctx.globalAlpha=b.full?1:0.55;ctx.fillRect(x,y,bw,bh);ctx.globalAlpha=1;
+      ctx.fillStyle='#fff';ctx.font='10px monospace';ctx.fillText(b.owner==='shared'?'shared':b.owner,x+4,y+22);}
+    else{ctx.strokeRect(x,y,bw,bh);}
+  }
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('Sequences & block tables',560,28);
+  state.seqs.forEach((s,si)=>{
+    const y=50+si*86;
+    ctx.fillStyle=s.color;ctx.fillRect(560,y,12,12);
+    ctx.fillStyle=txt;ctx.font='12px sans-serif';
+    ctx.fillText(s.name+' — '+s.toks+' toks'+(s.done?' ✓ freed':''),578,y+11);
+    ctx.fillStyle=dim;ctx.fillText('table: ['+s.blocks.join(', ')+']',560,y+30);
+    if(s.shared)ctx.fillText(si<2?'first 2 blocks shared (system prompt)':'',560,y+48);
+    if(flash&&flash.seq===si&&state.t-flash.t<3){ctx.fillStyle='#f2a65a';ctx.fillText('↳ diverged: copy-on-write, new private block',560,y+66);}
+  });
+  const used=state.pool.filter(Boolean).length;
+  document.getElementById('pageStats').textContent='blocks used: '+used+'/'+POOL+' — waste bounded to last partial block per sequence';
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('pagePlay').textContent='▶ Play';}}
+document.getElementById('pagePlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(tick,450);};
+document.getElementById('pageReset').onclick=()=>{stop();init();draw();};
+init();draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 6. speculative decoding ----------
+(function(){
+const cv=document.getElementById('specViz'),ctx=cv.getContext('2d');
+const K=5;let rounds=[],committed=0,passes=0;
+const q=document.getElementById('specQ'),ql=document.getElementById('specQLabel');
+q.oninput=()=>ql.textContent=q.value+'%';
+function round(){
+  const p=parseInt(q.value)/100;let acc=0;
+  while(acc<K&&Math.random()<p)acc++;
+  const corrected=1; // rejected position resampled (or bonus token if all accepted)
+  rounds.push({acc,total:K});committed+=acc+corrected;passes++;
+  if(rounds.length>6)rounds.shift();
+  draw();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc2=css('--accent2');
+  ctx.font='12px sans-serif';
+  rounds.forEach((r,ri)=>{
+    const y=26+ri*34;
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('round '+(passes-rounds.length+ri+1),20,y+15);
+    for(let i=0;i<K;i++){
+      const x=110+i*54;
+      ctx.lineWidth=2;
+      if(i<r.acc){ctx.fillStyle=acc2;rrect(x,y,44,22);ctx.fill();ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText('✓',x+22,y+16);}
+      else if(i===r.acc){ctx.fillStyle='#e5604c';rrect(x,y,44,22);ctx.fill();ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText('fix',x+22,y+16);}
+      else{ctx.strokeStyle=bd;rrect(x,y,44,22);ctx.stroke();ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('·',x+22,y+16);}
+    }
+    ctx.fillStyle=dim;ctx.textAlign='left';
+    ctx.fillText('1 target pass → '+(r.acc+1)+' tokens',110+K*54+10,y+15);
+  });
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText(passes?('total: '+committed+' tokens from '+passes+' target passes = '+(committed/passes).toFixed(2)+' tokens/pass (plain decode = 1.00)'):'Press "Next round". Hollow = draft proposals; the target model verifies all 5 in one pass.',20,H-16);
+  function rrect(x,y,w,h){ctx.beginPath();ctx.moveTo(x+6,y);ctx.arcTo(x+w,y,x+w,y+h,6);ctx.arcTo(x+w,y+h,x,y+h,6);ctx.arcTo(x,y+h,x,y,6);ctx.arcTo(x,y,x+w,y,6);ctx.closePath();}
+}
+document.getElementById('specStep').onclick=round;
+document.getElementById('specReset').onclick=()=>{rounds=[];committed=0;passes=0;draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Math Foundations for Deep Learning</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html" class="here">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Math Foundations for Deep Learning</h1>
+<p class="dim">Everything in this track — attention, backprop, quantization, roofline models — reduces to four pieces of math: linear algebra, calculus, probability, and floating-point arithmetic. This chapter builds each one from intuition to the exact form you will meet again in later chapters.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (14:06)</h3><audio controls preload="none" src="audio/math.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/math.txt">Read the transcript</a>.</p></div>
+<h2 id="linear-algebra">1. Linear algebra: vectors, dot products, and matrices</h2>
+<p>A <strong>vector</strong> is just an ordered list of numbers, but deep learning leans on its geometric reading: a point (or arrow) in a space with one axis per number. A 4096-dimensional embedding is an arrow in a 4096-dimensional space, and "two tokens mean similar things" becomes "two arrows point in similar directions". The tool that measures this is the <strong>dot product</strong>:</p>
+<div class="formula">a · b = Σᵢ aᵢbᵢ = |a| |b| cos θ</div>
+<p>Both forms matter. The sum form is what hardware computes — a <em>multiply-accumulate</em>, the single operation GPUs are built around (one FMA = 2 FLOPs). The cosine form is what the number <em>means</em>: positive when the vectors agree, zero when they are orthogonal (unrelated), negative when they oppose. Divide out the lengths and you get <strong>cosine similarity</strong>, the standard "how alike are these embeddings" metric in retrieval. And every attention score you will meet in the <a href="attention.html">Attention chapter</a> is exactly this: a query vector dotted with a key vector, asking "how relevant is that token to me?"</p>
+
+<div class="card">
+<h3>Interactive: the dot product</h3>
+<canvas id="vecViz" class="viz" width="900" height="340"></canvas>
+<div class="kpi">
+  <div class="box"><div class="v" id="vDot">–</div><div class="l">a · b</div></div>
+  <div class="box"><div class="v" id="vCos">–</div><div class="l">cos θ (similarity)</div></div>
+  <div class="box"><div class="v" id="vLenA">–</div><div class="l">|a|</div></div>
+  <div class="box"><div class="v" id="vLenB">–</div><div class="l">|b|</div></div>
+</div>
+<p class="caption">Drag the tips of <strong>a</strong> (blue) and <strong>b</strong> (green). The dashed segment is the <em>projection</em> of a onto b — the shadow a casts on b's direction; the dot product equals that shadow's length times |b|. Make the vectors perpendicular and watch a·b hit zero; point them apart and it goes negative. This one picture is attention scoring, cosine retrieval, and the FMA all at once.</p>
+</div>
+
+<h3>Matrices are functions, not grids</h3>
+<p>The productive way to read a matrix is as a <strong>linear map</strong>: a function that takes a vector in and gives a vector out, where the columns of the matrix tell you where the basis vectors land. Multiply a 2×2 matrix by every point of a unit square and the square becomes a parallelogram: rotations, stretches, shears — any combination, as long as lines stay lines and the origin stays put. The <strong>determinant</strong> is the area-scaling factor of that map (negative when the map flips orientation; zero when it squashes the plane into a line, destroying information — which is why det = 0 means "not invertible").</p>
+<p>A neural network layer <code>y = Wx + b</code> is exactly this: a linear reshaping of space, followed by a shift. Everything a plain linear layer can do to data, you can see in the animation below.</p>
+
+<div class="card">
+<h3>Interactive: a 2×2 matrix as a map</h3>
+<div class="controls">
+  <label class="ctl">W = [<input type="number" id="m00" value="1.2" step="0.1" style="width:64px"> <input type="number" id="m01" value="0.6" step="0.1" style="width:64px">]</label>
+  <label class="ctl">&nbsp;&nbsp;&nbsp;[<input type="number" id="m10" value="0.2" step="0.1" style="width:64px"> <input type="number" id="m11" value="0.9" step="0.1" style="width:64px">]</label>
+  <button class="btn" id="mPlay">▶ Animate</button>
+  <span class="dim">det = <span id="mDet">–</span></span>
+</div>
+<canvas id="matViz" class="viz" width="900" height="320"></canvas>
+<p class="caption">The grey square is the unit square; the colored shape is its image under W, with the basis vectors e₁ → first column, e₂ → second column. Dashed lines (when they appear) are <strong>eigenvector</strong> directions: the special directions W only stretches, never rotates — the eigenvalue is the stretch factor. Try [2 0; 0 0.5] (pure stretch), [0 -1; 1 0] (pure rotation — no real eigenvectors, the dashes vanish), and [1 1; 0 1] (shear).</p>
+</div>
+
+<h3>Matrix multiplication: composition, and 2mnk FLOPs</h3>
+<p>Multiplying two matrices composes the two maps: <code>(AB)x = A(Bx)</code> — apply B, then A. Elementwise, each output entry is a dot product between a row of A and a column of B:</p>
+<div class="formula">for i in range(m):        # each output row
+    for j in range(n):    # each output column
+        acc = 0.0
+        for l in range(k):          # one dot product
+            acc += A[i][l] * B[l][j]   # 1 multiply + 1 add = 2 FLOPs
+        C[i][j] = acc</div>
+<p>Count the work: m·n output entries, each needing k multiply-adds, so <strong>2·m·n·k FLOPs</strong>. For a square n×n matmul that is 2n³ — cubic growth, which is why a 4096×4096×4096 multiply is already 137 GFLOP, and why the <a href="gpu.html">GPU chapter</a> is largely the story of making this one loop nest fast. Memorize 2mnk: it is the numerator of every arithmetic-intensity and MFU calculation you will ever do.</p>
+<p>Deep learning is matmul all the way down: a batch of activations times a weight matrix (linear layers), queries times keys (attention scores), scores times values (attention output). The reason is partly mathematical (linear maps compose and differentiate cleanly) and partly economic — matmul's O(n³) compute over O(n²) data is the rare workload dense enough to keep arithmetic units busy, so hardware evolved to serve it, so architectures evolved to use it.</p>
+
+<h2 id="calculus">2. Calculus: derivatives, the chain rule, and gradient descent</h2>
+<p>A derivative answers one question: <em>if I nudge the input a little, how much does the output move?</em> f′(x) = 3 means a nudge of 0.01 in x moves f by about 0.03. That "sensitivity" reading scales up to millions of inputs: for a function of many variables — say, a loss as a function of every weight in a network — the <strong>gradient</strong> ∇L collects all the partial sensitivities into one vector, and that vector points in the direction of <em>steepest increase</em>. Training is then almost embarrassingly simple: repeatedly step the other way.</p>
+<div class="formula">w ← w − η ∇L(w)        # η = learning rate</div>
+<p>The <strong>chain rule</strong> is how we get the gradient through a composition of functions — and a deep network is nothing but a composition of functions:</p>
+<div class="formula">L = f(g(h(x)))   ⇒   dL/dx = f′(g(h(x))) · g′(h(x)) · h′(x)</div>
+<p>Each factor is local: a layer only needs to know how its own output responds to its own input. Multiply the local factors along the path from the loss back to any weight and you have that weight's gradient. That observation — compute the factors once, back to front, reusing shared prefixes — <em>is</em> backpropagation, and the <a href="deep-learning.html">Deep Learning chapter</a> animates it edge by edge. For now, build the physical intuition below.</p>
+
+<div class="card">
+<h3>Interactive: gradient descent on a loss surface</h3>
+<div class="controls">
+  <button class="btn" id="gdPlay">▶ Run</button>
+  <button class="btn secondary" id="gdReset">Reset</button>
+  <label class="ctl">learning rate <input type="range" id="gdLr" min="1" max="100" value="18"> <span id="gdLrLabel"></span></label>
+  <label class="ctl"><input type="checkbox" id="gdMom"> momentum β=0.9</label>
+</div>
+<canvas id="gdViz" class="viz" width="900" height="360"></canvas>
+<p class="caption">The contours show L(x, y) = ½x² + 5y² — an elongated valley, the classic hard case. <strong>Click anywhere to drop a ball</strong>, then run. At a small learning rate the ball zig-zags: the gradient points mostly across the valley, not along it. Raise the rate past ~0.2 and the y-direction oscillation diverges — the step overshoots a curved direction. Turn on momentum and the zig-zags cancel while progress along the valley accumulates: that damping is why momentum (and Adam, later) exists. Every optimizer in the next chapter is a smarter answer to this exact picture.</p>
+</div>
+
+<h2 id="probability">3. Probability and information theory</h2>
+<p>A language model's entire output is a <strong>probability distribution</strong>: given the context, a probability for every token in the vocabulary. Three tools govern how we create, sample, and train such distributions.</p>
+<h3>Softmax: scores → probabilities, with a temperature knob</h3>
+<p>Models produce raw scores ("logits") — any real numbers. Softmax converts them to a valid distribution while keeping their order:</p>
+<div class="formula">softmax(zᵢ / T) = exp(zᵢ/T) / Σⱼ exp(zⱼ/T)</div>
+<p>The temperature T reshapes confidence without changing ranking: T → 0 puts all mass on the argmax (greedy decoding), T = 1 uses the model's native confidence, large T flattens toward uniform (more diverse, less accurate sampling). This one function is the last layer of every LLM, the normalizer inside attention, and the sampling knob in every inference API.</p>
+
+<div class="card">
+<h3>Interactive: softmax and temperature</h3>
+<div class="controls" id="smSliders"></div>
+<div class="controls">
+  <label class="ctl">temperature T <input type="range" id="smT" min="10" max="300" value="100"> <span id="smTLabel">1.0</span></label>
+  <span class="dim">entropy = <span id="smH">–</span> bits</span>
+</div>
+<canvas id="smViz" class="viz" width="900" height="260"></canvas>
+<p class="caption">Five tokens, five logit sliders. Drag T down and watch the distribution sharpen onto the winner; drag it up and watch it flatten. The entropy readout is the distribution's uncertainty in bits — it collapses toward 0 as T → 0 and climbs toward log₂5 ≈ 2.32 as T grows. Note what temperature cannot do: reorder the bars.</p>
+</div>
+
+<h3>Cross-entropy: the loss behind next-token prediction</h3>
+<p>Information theory measures the <strong>surprise</strong> of an outcome with probability p as −log p: certain events carry no surprise, rare events carry a lot. The <strong>entropy</strong> H(p) is the average surprise of a distribution — how unpredictable it is. The <strong>cross-entropy</strong> between the true distribution p and a model q is the average surprise you feel when reality is drawn from p but you expected q:</p>
+<div class="formula">H(p, q) = − Σᵢ pᵢ log qᵢ        = H(p) + KL(p ‖ q)</div>
+<p>The decomposition on the right is the key: cross-entropy equals the irreducible entropy of the data plus the <strong>KL divergence</strong> — the extra surprise caused purely by your model being wrong. Minimizing cross-entropy therefore minimizes KL: it drives the model's distribution toward the data's.</p>
+<p>Now the punchline for LLMs. During pretraining the "true" distribution for each position is one-hot (the actual next token had probability 1), so the sum collapses to a single term: <strong>the loss is just −log q(correct token)</strong> — the model's surprise at the token that actually came next, averaged over trillions of positions. All of pretraining is: be less surprised by the internet. The per-token loss exponentiated, e^loss, is the <em>perplexity</em> you see in papers — "the model was as confused as if choosing uniformly among that many tokens."</p>
+<p>KL divergence returns in post-training: RLHF and DPO (see <a href="training.html">Training</a>) add a KL penalty against the base model so the tuned policy improves rewards <em>without drifting far</em> from the distribution it learned in pretraining.</p>
+
+<h2 id="numerics">4. Numerical computing: the float, and the trick that makes softmax work</h2>
+<p>Real hardware does not compute with real numbers; it computes with <strong>floating point</strong> — scientific notation in binary. A float is a sign bit, an <em>exponent</em> (which power-of-two window you are in), and a <em>mantissa</em> (where you sit inside that window):</p>
+<table class="cmp">
+<tr><th>Format</th><th>Bits (sign/exp/mantissa)</th><th>Max value</th><th>What the split means</th></tr>
+<tr><td>FP32</td><td>1 / 8 / 23</td><td>~3.4×10³⁸</td><td>The default: wide range and ~7 decimal digits of precision</td></tr>
+<tr><td>FP16</td><td>1 / 5 / 10</td><td>65,504</td><td>Precise but narrow-ranged — overflows easily, needs loss scaling</td></tr>
+<tr><td>BF16</td><td>1 / 8 / 7</td><td>~3.4×10³⁸</td><td>FP32's range, 3 decimal digits — the training default: range beats precision</td></tr>
+</table>
+<p>Two consequences matter everywhere. First, floats have <em>relative</em> precision: the gap between adjacent representable numbers grows with magnitude, so adding a tiny gradient to a large weight can round to nothing — one reason optimizers keep FP32 "master" copies of weights during BF16 training. Second, exp() overflows catastrophically: e⁸⁹ already exceeds FP32's max, and attention logits routinely get that large.</p>
+<p>Softmax as written is therefore numerically broken. The fix exploits an invariance — shifting all logits by a constant cancels in the ratio — so you subtract the max first:</p>
+<div class="formula"># naive: exp overflows → inf/inf → NaN
+softmax(z) = exp(z) / sum(exp(z))
+
+# stable: largest exponent is exp(0) = 1, nothing overflows
+m = max(z)
+softmax(z) = exp(z − m) / sum(exp(z − m))</div>
+<p>Hold onto this trick: the <a href="kernels.html">Kernels chapter</a>'s <em>online softmax</em> — the heart of FlashAttention — is this same max-subtraction performed incrementally, updating m and the running sum as each block of scores streams through on-chip memory, so the full score matrix never has to exist at once.</p>
+
+<h2 id="reading">5. Where to go deeper</h2>
+<ul>
+<li><a href="https://www.youtube.com/playlist?list=PLZHQObOWTQDPD3MizzM2xVFitgF8hE_ab">3Blue1Brown: Essence of Linear Algebra</a> — the animated geometric intuition this section compresses.</li>
+<li><a href="https://textbooks.math.gatech.edu/ila/">Interactive Linear Algebra</a> (Margalit &amp; Rabinoff) — a free interactive textbook.</li>
+<li><a href="https://seeing-theory.brown.edu/">Seeing Theory</a> — interactive probability, from basic chance to inference.</li>
+<li><a href="https://arxiv.org/abs/1805.02867">Online normalizer calculation for softmax</a> — the paper behind the stable/online softmax, used directly in Step 9 of the <a href="../index.html">study plan</a>.</li>
+<li>Then test yourself with the <a href="flashcards.html">Math flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="index.html">← Hub</a><a href="deep-learning.html">Deep Learning →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function themeWatch(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+
+// ---------- 1a. dot product playground ----------
+(function(){
+const cv=document.getElementById('vecViz'),ctx=cv.getContext('2d');
+const O={x:330,y:180},S=60; // origin, px per unit
+let a={x:2.0,y:1.2},b={x:1.6,y:-0.8},drag=null;
+function toPx(v){return{x:O.x+v.x*S,y:O.y-v.y*S}}
+function fromPx(p){return{x:(p.x-O.x)/S,y:(O.y-p.y)/S}}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),bd=css('--border'),warn=css('--warn');
+  // grid
+  ctx.strokeStyle=bd;ctx.lineWidth=1;
+  for(let gx=O.x%S;gx<W;gx+=S){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,H);ctx.stroke();}
+  for(let gy=O.y%S;gy<H;gy+=S){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(W,gy);ctx.stroke();}
+  ctx.strokeStyle=dim;ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.moveTo(0,O.y);ctx.lineTo(W,O.y);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(O.x,0);ctx.lineTo(O.x,H);ctx.stroke();
+  // projection of a onto b
+  const bb=b.x*b.x+b.y*b.y;
+  if(bb>1e-9){const k=(a.x*b.x+a.y*b.y)/bb;const p={x:k*b.x,y:k*b.y};
+    const pp=toPx(p),pa=toPx(a);
+    ctx.strokeStyle=warn;ctx.setLineDash([5,4]);ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(pa.x,pa.y);ctx.lineTo(pp.x,pp.y);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(O.x,O.y);ctx.lineTo(pp.x,pp.y);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=warn;ctx.font='12px sans-serif';ctx.fillText('projection',pp.x+6,pp.y+14);}
+  arrow(a,acc,'a');arrow(b,acc2,'b');
+  function arrow(v,color,label){
+    const p=toPx(v);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(O.x,O.y);ctx.lineTo(p.x,p.y);ctx.stroke();
+    const ang=Math.atan2(p.y-O.y,p.x-O.x);
+    ctx.beginPath();ctx.moveTo(p.x,p.y);
+    ctx.lineTo(p.x-12*Math.cos(ang-0.4),p.y-12*Math.sin(ang-0.4));
+    ctx.lineTo(p.x-12*Math.cos(ang+0.4),p.y-12*Math.sin(ang+0.4));ctx.closePath();ctx.fill();
+    ctx.font='bold 15px sans-serif';ctx.fillText(label,p.x+10,p.y-6);
+    ctx.beginPath();ctx.arc(p.x,p.y,9,0,7);ctx.strokeStyle=color;ctx.lineWidth=1;ctx.stroke();
+  }
+  // readouts
+  const dot=a.x*b.x+a.y*b.y,la=Math.hypot(a.x,a.y),lb=Math.hypot(b.x,b.y);
+  document.getElementById('vDot').textContent=dot.toFixed(2);
+  document.getElementById('vCos').textContent=(la*lb>1e-9?(dot/(la*lb)):0).toFixed(3);
+  document.getElementById('vLenA').textContent=la.toFixed(2);
+  document.getElementById('vLenB').textContent=lb.toFixed(2);
+}
+function pos(e){const r=cv.getBoundingClientRect();const t=e.touches?e.touches[0]:e;
+  return{x:(t.clientX-r.left)*cv.width/r.width,y:(t.clientY-r.top)*cv.height/r.height};}
+function down(e){const p=pos(e);const pa=toPx(a),pb=toPx(b);
+  if(Math.hypot(p.x-pa.x,p.y-pa.y)<22)drag='a';else if(Math.hypot(p.x-pb.x,p.y-pb.y)<22)drag='b';
+  if(drag)e.preventDefault();}
+function move(e){if(!drag)return;e.preventDefault();const v=fromPx(pos(e));
+  if(drag==='a')a=v;else b=v;draw();}
+cv.addEventListener('mousedown',down);cv.addEventListener('mousemove',move);
+window.addEventListener('mouseup',()=>drag=null);
+cv.addEventListener('touchstart',down,{passive:false});cv.addEventListener('touchmove',move,{passive:false});
+cv.addEventListener('touchend',()=>drag=null);
+draw();themeWatch(draw);
+})();
+
+// ---------- 1b. matrix as a map ----------
+(function(){
+const cv=document.getElementById('matViz'),ctx=cv.getContext('2d');
+const O={x:450,y:170},S=70;let t=1,timer=null;
+const $=id=>document.getElementById(id);
+function M(){return[parseFloat($('m00').value)||0,parseFloat($('m01').value)||0,parseFloat($('m10').value)||0,parseFloat($('m11').value)||0];}
+function lerpM(m,t){return[1+(m[0]-1)*t,m[1]*t,m[2]*t,1+(m[3]-1)*t];}
+function ap(m,v){return{x:m[0]*v.x+m[1]*v.y,y:m[2]*v.x+m[3]*v.y}}
+function toPx(v){return{x:O.x+v.x*S,y:O.y-v.y*S}}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),bd=css('--border'),warn=css('--warn');
+  const m=M(),mi=lerpM(m,t);
+  $('mDet').textContent=(m[0]*m[3]-m[1]*m[2]).toFixed(2);
+  // grid under map
+  ctx.strokeStyle=bd;ctx.lineWidth=1;
+  for(let i=-6;i<=6;i++){
+    const p1=toPx(ap(mi,{x:i,y:-4})),p2=toPx(ap(mi,{x:i,y:4}));
+    ctx.beginPath();ctx.moveTo(p1.x,p1.y);ctx.lineTo(p2.x,p2.y);ctx.stroke();
+    const q1=toPx(ap(mi,{x:-6,y:i})),q2=toPx(ap(mi,{x:6,y:i}));
+    ctx.beginPath();ctx.moveTo(q1.x,q1.y);ctx.lineTo(q2.x,q2.y);ctx.stroke();
+  }
+  // original unit square (static, grey)
+  ctx.strokeStyle=dim;ctx.setLineDash([4,4]);ctx.lineWidth=1.5;
+  poly([{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}],null,true);
+  ctx.setLineDash([]);
+  // transformed square
+  const sq=[{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}].map(v=>ap(mi,v));
+  ctx.fillStyle='rgba(91,140,255,0.22)';poly(sq,true,true,acc);
+  // basis vectors
+  arrow(ap(mi,{x:1,y:0}),acc,'e₁→col 1');arrow(ap(mi,{x:0,y:1}),acc2,'e₂→col 2');
+  // eigenvectors of the FULL matrix (if real)
+  const tr=m[0]+m[3],det=m[0]*m[3]-m[1]*m[2],disc=tr*tr/4-det;
+  if(disc>=0){
+    [tr/2+Math.sqrt(disc),tr/2-Math.sqrt(disc)].forEach(lam=>{
+      let v;
+      if(Math.abs(m[1])>1e-9)v={x:m[1],y:lam-m[0]};
+      else if(Math.abs(m[2])>1e-9)v={x:lam-m[3],y:m[2]};
+      else v=Math.abs(m[0]-lam)<1e-9?{x:1,y:0}:{x:0,y:1};
+      const n=Math.hypot(v.x,v.y);if(n<1e-9)return;v={x:v.x/n*3,y:v.y/n*3};
+      const p1=toPx(v),p2=toPx({x:-v.x,y:-v.y});
+      ctx.strokeStyle=warn;ctx.setLineDash([7,5]);ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(p1.x,p1.y);ctx.lineTo(p2.x,p2.y);ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle=warn;ctx.font='11px sans-serif';
+      ctx.fillText('λ='+lam.toFixed(2),p1.x+4,p1.y);
+    });
+  }
+  function poly(pts,fill,stroke,sc){
+    ctx.beginPath();pts.forEach((v,i)=>{const p=toPx(v);i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y);});ctx.closePath();
+    if(fill)ctx.fill();if(stroke){if(sc)ctx.strokeStyle=sc;ctx.lineWidth=2;ctx.stroke();}
+  }
+  function arrow(v,color,label){
+    const p=toPx(v);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=3;
+    ctx.beginPath();ctx.moveTo(O.x,O.y);ctx.lineTo(p.x,p.y);ctx.stroke();
+    ctx.font='12px sans-serif';ctx.fillText(label,p.x+8,p.y-4);
+  }
+}
+['m00','m01','m10','m11'].forEach(id=>$(id).oninput=()=>{t=1;draw();});
+$('mPlay').onclick=()=>{if(timer)return;t=0;let dir=1;
+  timer=setInterval(()=>{t+=0.025*dir;if(t>=1){t=1;clearInterval(timer);timer=null;}draw();},16);};
+draw();themeWatch(draw);
+})();
+
+// ---------- 2. gradient descent ----------
+(function(){
+const cv=document.getElementById('gdViz'),ctx=cv.getContext('2d');
+const O={x:450,y:180},SX=55,SY=55;
+let ball=null,vel={x:0,y:0},trail=[],timer=null;
+const lrS=document.getElementById('gdLr'),lrL=document.getElementById('gdLrLabel');
+function lr(){return lrS.value/400;} // 0.0025 .. 0.25
+function upd(){lrL.textContent=lr().toFixed(3);}
+lrS.oninput=()=>{upd();};upd();
+function grad(p){return{x:p.x,y:10*p.y};} // L = x²/2 + 5y²
+function toPx(v){return{x:O.x+v.x*SX,y:O.y-v.y*SY}}
+function fromPx(p){return{x:(p.x-O.x)/SX,y:(O.y-p.y)/SY}}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),bd=css('--border'),danger=css('--danger');
+  // contours: x²/2 + 5y² = c  → ellipse with a=sqrt(2c), b=sqrt(c/5)
+  ctx.lineWidth=1.2;
+  [0.15,0.5,1.2,2.5,4.5,7.5,11.5].forEach((c,i)=>{
+    ctx.strokeStyle=bd;ctx.beginPath();
+    ctx.ellipse(O.x,O.y,Math.sqrt(2*c)*SX,Math.sqrt(c/5)*SY,0,0,7);ctx.stroke();
+  });
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText('L(x,y) = ½x² + 5y²   (minimum at center ✕)',20,24);
+  ctx.strokeStyle=dim;ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(O.x-7,O.y-7);ctx.lineTo(O.x+7,O.y+7);ctx.moveTo(O.x+7,O.y-7);ctx.lineTo(O.x-7,O.y+7);ctx.stroke();
+  // trail
+  if(trail.length>1){ctx.strokeStyle=acc;ctx.lineWidth=2;ctx.beginPath();
+    trail.forEach((p,i)=>{const q=toPx(p);i?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y);});ctx.stroke();}
+  if(ball){
+    const p=toPx(ball);const L=ball.x*ball.x/2+5*ball.y*ball.y;
+    const diverged=Math.abs(ball.x)>8||Math.abs(ball.y)>8;
+    ctx.fillStyle=diverged?danger:acc2;
+    ctx.beginPath();ctx.arc(p.x,p.y,8,0,7);ctx.fill();
+    ctx.fillStyle=dim;ctx.fillText(diverged?'diverged! lower the learning rate':'L = '+L.toFixed(3)+'   steps: '+(trail.length-1),20,44);
+  } else {ctx.fillStyle=dim;ctx.fillText('click to drop a ball',20,44);}
+}
+function step(){
+  if(!ball)return;
+  const g=grad(ball),beta=document.getElementById('gdMom').checked?0.9:0;
+  vel={x:beta*vel.x-lr()*g.x,y:beta*vel.y-lr()*g.y};
+  ball={x:ball.x+vel.x,y:ball.y+vel.y};
+  trail.push({...ball});if(trail.length>400)trail.shift();
+  draw();
+  if(Math.abs(ball.x)>50||Math.abs(ball.y)>50||(Math.abs(ball.x)<1e-3&&Math.abs(ball.y)<1e-3&&Math.hypot(vel.x,vel.y)<1e-4))stop();
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('gdPlay').textContent='▶ Run';}}
+document.getElementById('gdPlay').onclick=function(){if(timer){stop();return;}if(!ball){ball={x:-5.5,y:1.5};trail=[{...ball}];vel={x:0,y:0};}this.textContent='⏸ Pause';timer=setInterval(step,50);};
+document.getElementById('gdReset').onclick=()=>{stop();ball=null;vel={x:0,y:0};trail=[];draw();};
+cv.addEventListener('click',e=>{const r=cv.getBoundingClientRect();
+  const p=fromPx({x:(e.clientX-r.left)*cv.width/r.width,y:(e.clientY-r.top)*cv.height/r.height});
+  ball=p;vel={x:0,y:0};trail=[{...p}];draw();});
+draw();themeWatch(draw);
+})();
+
+// ---------- 3. softmax ----------
+(function(){
+const cv=document.getElementById('smViz'),ctx=cv.getContext('2d');
+const TOKENS=['the','cat','sat','on','mat'];
+const init=[2.1,0.4,1.2,-0.6,-1.4];
+const box=document.getElementById('smSliders');
+const sliders=init.map((v,i)=>{
+  const l=document.createElement('label');l.className='ctl';
+  l.innerHTML=TOKENS[i]+' <input type="range" min="-50" max="50" value="'+(v*10)+'">';
+  box.appendChild(l);const s=l.querySelector('input');s.oninput=draw;return s;});
+const tS=document.getElementById('smT'),tL=document.getElementById('smTLabel');
+tS.oninput=draw;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),dim=css('--text-dim'),txt=css('--text');
+  const T=tS.value/100;tL.textContent=T.toFixed(2);
+  const z=sliders.map(s=>s.value/10);
+  const m=Math.max(...z.map(v=>v/T));
+  const e=z.map(v=>Math.exp(v/T-m));const Z=e.reduce((a,b)=>a+b,0);
+  const p=e.map(v=>v/Z);
+  const Hbits=-p.reduce((a,b)=>a+(b>0?b*Math.log2(b):0),0);
+  document.getElementById('smH').textContent=Hbits.toFixed(2);
+  const bw=120,x0=80,y0=H-50,hmax=H-90;
+  p.forEach((pi,i)=>{
+    const x=x0+i*(bw+40),h=pi*hmax;
+    ctx.fillStyle=acc;ctx.globalAlpha=0.3+0.7*pi;ctx.fillRect(x,y0-h,bw,h);ctx.globalAlpha=1;
+    ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='center';
+    ctx.fillText((pi*100).toFixed(1)+'%',x+bw/2,y0-h-8);
+    ctx.fillStyle=dim;ctx.font='13px sans-serif';
+    ctx.fillText(TOKENS[i]+'  (z='+z[i].toFixed(1)+')',x+bw/2,y0+20);
+  });
+  ctx.textAlign='left';
+}
+draw();themeWatch(draw);
+})();
+</script>
+</body>
+</html>

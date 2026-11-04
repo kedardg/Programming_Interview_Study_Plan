@@ -1,0 +1,1024 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PyTorch ML Coding Problems: Interview Questions and Reference Responses</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLC/pytorch-ml-coding.md</div>
+<article class="note"><h1 id="pytorch-ml-coding-problems-interview-questions-and-reference-responses">PyTorch ML Coding Problems: Interview Questions and Reference Responses</h1>
+<p><a href="../../src/MLC/ml-coding.html">Back to Chapter 2: ML/Data Coding</a></p>
+<p>This guide covers Python and PyTorch ML utilities through a timed mock interview, practice problems, coding challenges, and concise reference responses. The answers are representative, not the only acceptable solutions. In a live interview, a strong candidate should state assumptions, discuss trade-offs, handle edge cases, and explain how the code would be tested.</p>
+<p>Difficulty labels follow the <a href="../../src/MLC/ml-coding.html#difficulty-and-company-tags">chapter rubric</a>. Company tags are omitted unless an exact question-level source is available.</p>
+<h2 id="contents">Contents</h2>
+<ul>
+<li><a href="#mock-interview-60-minute-session">Mock interview: 60-minute session</a></li>
+<li><a href="#practice-question-bank-with-reference-responses">Practice question bank with reference responses</a></li>
+<li><a href="#supplemental-pytorch-core-and-advanced-questions">Supplemental PyTorch core and advanced questions</a></li>
+<li><a href="#quick-drill-general-python-and-pytorch-ml-utilities">Quick drill: general Python and PyTorch ML utilities</a></li>
+<li><a href="#broader-discussion-questions-with-reference-responses">Broader discussion questions with reference responses</a></li>
+</ul>
+<h2 id="mock-interview-60-minute-session">Mock interview: 60-minute session</h2>
+<h3 id="1-tensor-fundamentals-10-minutes">1. Tensor fundamentals — 10 minutes</h3>
+<h4 id="question">Question</h4>
+<p><strong>Difficulty:</strong> Medium</p>
+<p>Implement the following function without Python loops:</p>
+<pre><code class="language-python">def normalize_rows(x: torch.Tensor, eps: float = 1e-8) -&gt; torch.Tensor:
+    &quot;&quot;&quot;Standardize each row to zero mean and unit variance.&quot;&quot;&quot;
+    ...
+</code></pre>
+<p>Requirements:</p>
+<ul>
+<li><code>x</code> has shape <code>[batch_size, num_features]</code>.</li>
+<li>Preserve <code>x</code>'s device and dtype.</li>
+<li>Avoid division by zero.</li>
+<li>Do not modify <code>x</code> in place.</li>
+</ul>
+<h4 id="reference-response">Reference response</h4>
+<pre><code class="language-python">import torch
+
+
+def normalize_rows(x: torch.Tensor, eps: float = 1e-8) -&gt; torch.Tensor:
+    if x.ndim != 2:
+        raise ValueError(f&quot;Expected a 2D tensor, received shape {tuple(x.shape)}&quot;)
+    if not (x.is_floating_point() or x.is_complex()):
+        raise TypeError(&quot;x must have a floating-point or complex dtype&quot;)
+
+    mean = x.mean(dim=1, keepdim=True)
+    std = x.std(dim=1, keepdim=True, unbiased=False).clamp_min(eps)
+    return (x - mean) / std
+</code></pre>
+<p>The reduction uses <code>keepdim=True</code>, so the <code>[B, 1]</code> mean and standard deviation broadcast correctly across <code>[B, D]</code>. <code>clamp_min</code> makes constant rows safe; after centering, those rows become zeros. The operations are out of place and naturally remain on the input device with the input dtype.</p>
+<h4 id="follow-up-responses">Follow-up responses</h4>
+<ol>
+<li><strong>What should happen when a row has zero variance?</strong> After subtracting its mean, a constant row contains only zeros. Clamping its standard deviation to <code>eps</code> therefore produces a finite all-zero output.</li>
+<li><strong>How would this change for <code>[B, C, H, W]</code>?</strong> For per-sample normalization, reduce over <code>(1, 2, 3)</code>. For per-channel dataset normalization, reduce over <code>(0, 2, 3)</code>. The correct dimensions depend on the intended semantics.</li>
+<li><strong><code>view</code>, <code>reshape</code>, <code>squeeze</code>, and <code>unsqueeze</code>?</strong> <code>view</code> requires compatible strides, while <code>reshape</code> may return a view or allocate a copy. <code>squeeze</code> removes size-one dimensions, and <code>unsqueeze</code> inserts a size-one dimension.</li>
+<li><strong>When can broadcasting be wrong?</strong> A tensor shaped <code>[B]</code> may align with the last dimension of <code>[B, D]</code> instead of the batch dimension, sometimes without an error when dimensions happen to match. Make intended broadcast dimensions explicit, such as <code>[B, 1]</code>.</li>
+</ol>
+<h3 id="2-batch-preprocessing-10-minutes">2. Batch preprocessing — 10 minutes</h3>
+<h4 id="question_1">Question</h4>
+<p><strong>Difficulty:</strong> Medium</p>
+<p>Write a reusable preprocessing component that replaces non-finite values, standardizes features using training statistics, works on CPU or GPU, saves its state, and prevents validation leakage.</p>
+<h4 id="reference-response_1">Reference response</h4>
+<pre><code class="language-python">import torch
+from torch import nn
+
+
+class FeatureStandardizer(nn.Module):
+    def __init__(self, num_features: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.register_buffer(&quot;mean&quot;, torch.zeros(num_features))
+        self.register_buffer(&quot;scale&quot;, torch.ones(num_features))
+        self.register_buffer(&quot;is_fitted&quot;, torch.tensor(False))
+
+    @torch.no_grad()
+    def fit(self, x: torch.Tensor) -&gt; &quot;FeatureStandardizer&quot;:
+        if x.ndim != 2 or x.shape[1] != self.mean.numel():
+            raise ValueError(&quot;Expected [batch, num_features] with the configured width&quot;)
+
+        # Accumulate statistics in float32 for low-precision input.
+        work = x.float() if x.dtype in (torch.float16, torch.bfloat16) else x
+        work = torch.nan_to_num(work)
+        mean = work.mean(dim=0)
+        scale = work.std(dim=0, unbiased=False).clamp_min(self.eps)
+        self.mean.copy_(mean.to(device=self.mean.device, dtype=self.mean.dtype))
+        self.scale.copy_(scale.to(device=self.scale.device, dtype=self.scale.dtype))
+        self.is_fitted.fill_(True)
+        return self
+
+    def forward(self, x: torch.Tensor) -&gt; torch.Tensor:
+        if not bool(self.is_fitted):
+            raise RuntimeError(&quot;FeatureStandardizer must be fitted before use&quot;)
+        clean = torch.nan_to_num(x)
+        return (clean - self.mean.to(dtype=clean.dtype)) / self.scale.to(dtype=clean.dtype)
+</code></pre>
+<p>Fit the module on training data only, then call <code>transform</code>/<code>forward</code> unchanged for validation, test, and inference. Buffers are appropriate because the statistics are state but are not optimized parameters; they move with <code>.to(device)</code> and are included in <code>state_dict()</code>.</p>
+<p>Follow-ups:</p>
+<ul>
+<li>A function is appropriate for stateless preprocessing; a class or <code>nn.Module</code> is preferable when fitted state must be saved and moved across devices.</li>
+<li>Statistics should be buffers, not parameters, because an optimizer should not update them.</li>
+<li>Low-precision inputs should use higher-precision accumulation for statistics, then cast deliberately for transformation.</li>
+<li>A leakage test can fit on a known training subset, alter validation values drastically, and verify that stored statistics remain unchanged.</li>
+</ul>
+<h3 id="3-classification-metrics-10-minutes">3. Classification metrics — 10 minutes</h3>
+<h4 id="question_2">Question</h4>
+<p><strong>Difficulty:</strong> Medium</p>
+<p>Implement binary precision, recall, and F1 from logits. Inputs may be on GPU, targets may contain only one class, no autograd graph should be created, and the result should contain Python floats.</p>
+<h4 id="reference-response_2">Reference response</h4>
+<pre><code class="language-python">import torch
+
+
+@torch.inference_mode()
+def binary_metrics(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    threshold: float = 0.5,
+) -&gt; dict[str, float]:
+    if logits.shape != targets.shape:
+        raise ValueError(&quot;logits and targets must have the same shape&quot;)
+    if not 0.0 &lt;= threshold &lt;= 1.0:
+        raise ValueError(&quot;threshold must be in [0, 1]&quot;)
+
+    predictions = torch.sigmoid(logits) &gt;= threshold
+    actual = targets.bool()
+
+    tp = (predictions &amp; actual).sum()
+    fp = (predictions &amp; ~actual).sum()
+    fn = (~predictions &amp; actual).sum()
+
+    def divide(numerator: torch.Tensor, denominator: torch.Tensor) -&gt; torch.Tensor:
+        return torch.where(denominator &gt; 0, numerator.float() / denominator, 0.0)
+
+    precision = divide(tp, tp + fp)
+    recall = divide(tp, tp + fn)
+    f1 = divide(2 * precision * recall, precision + recall)
+
+    return {
+        &quot;precision&quot;: precision.item(),
+        &quot;recall&quot;: recall.item(),
+        &quot;f1&quot;: f1.item(),
+    }
+</code></pre>
+<p>Follow-ups:</p>
+<ul>
+<li>Logits are unbounded scores. Apply <code>sigmoid</code> before comparing them with a probability threshold; alternatively, convert the probability threshold to its equivalent logit threshold.</li>
+<li>Accuracy can hide failure on a rare positive class. Precision, recall, F1, PR-AUC, and cost-sensitive metrics often provide more useful information.</li>
+<li>For multiclass metrics, form class predictions with <code>argmax</code>, compute per-class TP/FP/FN, and expose micro, macro, and weighted aggregation.</li>
+<li>Aggregate sufficient statistics globally. Averaging a nonlinear metric such as F1 across batches generally does not equal dataset-level F1.</li>
+</ul>
+<h3 id="4-training-and-evaluation-loops-20-minutes">4. Training and evaluation loops — 20 minutes</h3>
+<h4 id="question_3">Question</h4>
+<p><strong>Difficulty:</strong> Hard</p>
+<p>Implement one training epoch and a complete evaluation pass with correct modes, gradient handling, device placement, sample-weighted loss, empty-loader behavior, and final predictions.</p>
+<h4 id="reference-response_3">Reference response</h4>
+<pre><code class="language-python">import torch
+
+
+def train_one_epoch(model, dataloader, optimizer, loss_fn, device):
+    model.train()
+    total_loss = 0.0
+    total_examples = 0
+
+    for inputs, targets in dataloader:
+        inputs = inputs.to(device)
+        targets = targets.to(device)
+
+        optimizer.zero_grad(set_to_none=True)
+        outputs = model(inputs)
+        loss = loss_fn(outputs, targets)
+        loss.backward()
+        optimizer.step()
+
+        batch_size = targets.shape[0]
+        total_loss += loss.detach().item() * batch_size
+        total_examples += batch_size
+
+    if total_examples == 0:
+        raise ValueError(&quot;Cannot train on an empty dataloader&quot;)
+    return {&quot;loss&quot;: total_loss / total_examples}
+
+
+@torch.inference_mode()
+def evaluate(model, dataloader, loss_fn, device):
+    previous_mode = model.training
+    model.eval()
+    total_loss = 0.0
+    total_examples = 0
+    predictions = []
+    targets_out = []
+
+    try:
+        for inputs, targets in dataloader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+            outputs = model(inputs)
+            loss = loss_fn(outputs, targets)
+
+            batch_size = targets.shape[0]
+            total_loss += loss.item() * batch_size
+            total_examples += batch_size
+            predictions.append(outputs.detach().cpu())
+            targets_out.append(targets.detach().cpu())
+    finally:
+        model.train(previous_mode)
+
+    if total_examples == 0:
+        raise ValueError(&quot;Cannot evaluate an empty dataloader&quot;)
+
+    return {
+        &quot;loss&quot;: total_loss / total_examples,
+        &quot;predictions&quot;: torch.cat(predictions),
+        &quot;targets&quot;: torch.cat(targets_out),
+    }
+</code></pre>
+<p>This assumes <code>loss_fn</code> returns a batch mean. Multiplying by batch size and dividing by the total number of examples prevents the smaller final batch from receiving equal weight.</p>
+<p>Follow-ups:</p>
+<ul>
+<li><code>model.eval()</code> changes module behavior such as Dropout and BatchNorm; <code>inference_mode()</code> disables autograd bookkeeping. They solve different problems.</li>
+<li>Clear gradients before the forward/backward pass for the next optimizer update.</li>
+<li>Clip gradients after <code>backward()</code> and, with AMP, after unscaling but before <code>optimizer.step()</code>.</li>
+<li>AMP uses <code>autocast</code> around the forward/loss calculation and <code>GradScaler</code> for scaled backward and optimizer steps on CUDA.</li>
+<li>For accumulation, divide loss by the accumulation count, call <code>backward()</code> for each microbatch, and step/clear gradients only at the accumulation boundary.</li>
+<li>Exact resumption may require model, optimizer, scheduler, scaler, epoch/step, sampler position, configuration, and Python/NumPy/PyTorch RNG states.</li>
+</ul>
+<h3 id="5-code-review-and-debugging-10-minutes">5. Code review and debugging — 10 minutes</h3>
+<h4 id="question_4">Question</h4>
+<p><strong>Difficulty:</strong> Medium</p>
+<p>Review the following code:</p>
+<pre><code class="language-python">def evaluate(model, loader):
+    model.train()
+    losses = []
+
+    for x, y in loader:
+        prediction = model(x)
+        loss = torch.nn.CrossEntropyLoss()(prediction, y)
+        losses.append(loss)
+
+    return torch.tensor(losses).mean().item()
+</code></pre>
+<h4 id="reference-response_4">Reference response</h4>
+<p>Problems include:</p>
+<ul>
+<li><code>model.train()</code> enables training behavior during evaluation.</li>
+<li>Inputs are not moved to the model's device.</li>
+<li>Autograd remains enabled, and storing losses retains computation graphs.</li>
+<li><code>torch.tensor(losses)</code> attempts to construct a new tensor from tensors and can cause device or conversion errors.</li>
+<li>Each batch is weighted equally even when batch sizes differ.</li>
+<li>The loss object is recreated every iteration.</li>
+<li>Empty loaders are not handled.</li>
+<li>The model's prior mode is not restored.</li>
+</ul>
+<p>A corrected version is:</p>
+<pre><code class="language-python">@torch.inference_mode()
+def evaluate(model, loader, device):
+    loss_fn = torch.nn.CrossEntropyLoss()
+    previous_mode = model.training
+    model.eval()
+    total_loss = 0.0
+    total_examples = 0
+
+    try:
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            loss = loss_fn(model(x), y)
+            batch_size = y.shape[0]
+            total_loss += loss.item() * batch_size
+            total_examples += batch_size
+    finally:
+        model.train(previous_mode)
+
+    if total_examples == 0:
+        raise ValueError(&quot;Cannot evaluate an empty loader&quot;)
+    return total_loss / total_examples
+</code></pre>
+<h2 id="practice-question-bank-with-reference-responses">Practice question bank with reference responses</h2>
+<h3 id="python-and-clean-utility-design">Python and clean utility design</h3>
+<ol>
+<li>
+<p><strong>Write a function that splits a sequence into batches while optionally retaining the final incomplete batch.</strong> — <strong>Difficulty:</strong> Easy
+   Validate that <code>batch_size &gt; 0</code>, iterate over <code>range(0, len(items), batch_size)</code>, and yield slices. Skip the last slice only when <code>drop_last=True</code> and its length is smaller than <code>batch_size</code>.</p>
+</li>
+<li>
+<p><strong>Implement a reproducible train/validation split without scikit-learn.</strong> — <strong>Difficulty:</strong> Easy
+   Create indices, shuffle them with a local seeded generator, and split at a documented boundary. Validate the ratio and avoid global RNG state so unrelated random calls do not change the result.</p>
+</li>
+<li>
+<p><strong>Write a generator that lazily reads and transforms records from a large dataset.</strong> — <strong>Difficulty:</strong> Medium
+   Open the source in a context manager, parse and transform one record at a time, and <code>yield</code> it. Decide whether malformed rows should raise, be skipped with logging, or be sent to an error stream.</p>
+</li>
+<li>
+<p><strong>Flatten a nested dictionary while preserving a reversible mapping.</strong> — <strong>Difficulty:</strong> Medium
+   Traverse recursively and store keys as tuples such as <code>("model", "hidden_size")</code>. Tuple paths avoid delimiter-escaping problems and can be replayed to reconstruct the nested dictionaries.</p>
+</li>
+<li>
+<p><strong>Merge metric dictionaries and compute weighted averages.</strong> — <strong>Difficulty:</strong> Medium
+   Require each record to include a weight such as sample count, sum <code>metric * weight</code>, and divide by total weight per key. Define behavior for missing keys and zero total weight explicitly.</p>
+</li>
+<li>
+<p><strong>Implement an execution-time decorator.</strong> — <strong>Difficulty:</strong> Easy
+   Use <code>functools.wraps</code>, capture <code>time.perf_counter()</code> before and in a <code>finally</code> block after the call, and return the original result unchanged. A <code>finally</code> block also records timing when the function raises.</p>
+</li>
+<li>
+<p><strong>Design a registry for losses, optimizers, or preprocessing functions.</strong> — <strong>Difficulty:</strong> Easy
+   Use an explicit mapping from validated names to constructors, for example <code>REGISTRY = {"adamw": torch.optim.AdamW}</code>. Avoid <code>eval</code>; produce an error listing supported names and keep object construction separate from lookup.</p>
+</li>
+<li>
+<p><strong>Refactor a monolithic training script into testable modules.</strong> — <strong>Difficulty:</strong> Medium
+   Separate configuration, data loading, preprocessing, model construction, training, evaluation, metrics, checkpointing, and logging. Pass dependencies explicitly so each component can be tested with small fakes or synthetic tensors.</p>
+</li>
+<li>
+<p><strong>Define a typed configuration object.</strong> — <strong>Difficulty:</strong> Easy
+   Use nested dataclasses or a validated settings model with explicit defaults and types. Validate cross-field constraints, serialize the resolved configuration with checkpoints, and prefer immutability when runtime mutation is unnecessary.</p>
+</li>
+<li>
+<p><strong>Make a utility deterministic without mutable global state.</strong> — <strong>Difficulty:</strong> Medium
+    Accept a seed or generator as an argument and use local objects such as <code>random.Random(seed)</code> or <code>torch.Generator().manual_seed(seed)</code>. Determinism should be controlled by the caller rather than hidden module state.</p>
+</li>
+<li>
+<p><strong>When should you use a dataclass, function, class, or abstract base class?</strong> — <strong>Difficulty:</strong> Easy
+    Use a function for stateless behavior, a dataclass for structured data, a class for stateful behavior or lifecycle, and an abstract base class only when multiple implementations need a stable enforced contract.</p>
+</li>
+<li>
+<p><strong>What is wrong with mutable default arguments?</strong> — <strong>Difficulty:</strong> Easy
+    The object is created once and shared across calls. Use <code>None</code> as the default and create the list or dictionary inside the function.</p>
+</li>
+<li>
+<p><strong>Explain shallow versus deep copies with an ML configuration.</strong> — <strong>Difficulty:</strong> Easy
+    A shallow copy creates a new outer dictionary but shares nested objects, so changing <code>copy["optimizer"]["lr"]</code> can affect the original. A deep copy recursively duplicates nested mutable values, though immutable objects and external resources need special consideration.</p>
+</li>
+<li>
+<p><strong>Design errors for an invalid preprocessing shape or dtype.</strong> — <strong>Difficulty:</strong> Easy
+    Name the argument, state the expected contract, report the received shape/dtype, and suggest the likely fix. For example: <code>Expected features with shape [B, 32] and floating dtype; received [32] torch.int64</code>.</p>
+</li>
+<li>
+<p><strong>Accept either NumPy arrays or PyTorch tensors without unclear behavior.</strong> — <strong>Difficulty:</strong> Medium
+    Document one canonical internal representation and a clear return policy. For example, convert inputs with <code>torch.as_tensor</code>, preserve device only for tensor inputs, and either always return a tensor or explicitly restore the original backend.</p>
+</li>
+</ol>
+<h3 id="tensor-operations">Tensor operations</h3>
+<ol start="16">
+<li>
+<p><strong>Compute the masked mean of <code>[B, T, D]</code> using a <code>[B, T]</code> mask.</strong> — <strong>Difficulty:</strong> Medium
+    Convert the mask to <code>x.dtype</code>, expand it with <code>mask.unsqueeze(-1)</code>, sum <code>x * mask</code> over time, and divide by <code>mask.sum(dim=1, keepdim=True).clamp_min(1)</code>. Define whether an all-padding sequence returns zeros or raises.</p>
+</li>
+<li>
+<p><strong>Compute pairwise cosine similarity for <code>[N, D]</code> and <code>[M, D]</code>.</strong> — <strong>Difficulty:</strong> Easy
+    Normalize both tensors along the feature dimension with <code>F.normalize</code>, then compute <code>a_normalized @ b_normalized.T</code>, producing <code>[N, M]</code>.</p>
+</li>
+<li>
+<p><strong>Determine whether the true label is in the top-k predictions.</strong> — <strong>Difficulty:</strong> Easy
+    Compute <code>topk_indices = logits.topk(k, dim=1).indices</code>, compare with <code>targets[:, None]</code>, and call <code>.any(dim=1)</code>. Validate that <code>1 &lt;= k &lt;= num_classes</code>.</p>
+</li>
+<li>
+<p><strong>Implement one-hot encoding without <code>F.one_hot</code>.</strong> — <strong>Difficulty:</strong> Easy
+    Allocate zeros of shape <code>[B, C]</code> on the label device and use <code>scatter_(1, labels[:, None], 1)</code>. Validate label range; use an appropriate floating dtype if the result will feed a loss.</p>
+</li>
+<li>
+<p><strong>Create label-smoothed targets.</strong> — <strong>Difficulty:</strong> Easy
+    Fill a <code>[B, C]</code> tensor with <code>smoothing / (C - 1)</code> and scatter <code>1 - smoothing</code> into the true-class column. State whether smoothing mass includes or excludes the true class, because both conventions exist.</p>
+</li>
+<li>
+<p><strong>Compute a batched confusion matrix without per-example loops.</strong> — <strong>Difficulty:</strong> Medium
+    Encode each pair as <code>targets * C + predictions</code>, apply <code>torch.bincount(..., minlength=C*C)</code>, and reshape to <code>[C, C]</code>. Accumulate these matrices across batches.</p>
+</li>
+<li>
+<p><strong>Pad variable-length tensors and create a mask.</strong> — <strong>Difficulty:</strong> Medium
+    Use <code>pad_sequence(sequences, batch_first=True)</code>, compute lengths, and compare <code>torch.arange(max_len)[None, :] &lt; lengths[:, None]</code>. Keep the lengths or mask with the padded batch.</p>
+</li>
+<li>
+<p><strong>Gather one class score per example from <code>[B, C]</code>.</strong> — <strong>Difficulty:</strong> Easy
+    Use <code>logits.gather(1, labels[:, None]).squeeze(1)</code>. This makes the batch-wise indexing intent explicit.</p>
+</li>
+<li>
+<p><strong>Advanced indexing versus <code>gather</code> versus <code>index_select</code>?</strong> — <strong>Difficulty:</strong> Easy
+    Advanced indexing is flexible and can select using multiple index tensors. <code>gather</code> takes per-position indices along one dimension, while <code>index_select</code> applies one shared 1D index list to an entire dimension.</p>
+</li>
+<li>
+<p><strong>Diagnose CPU targets with GPU predictions.</strong> — <strong>Difficulty:</strong> Easy
+    PyTorch operations generally require participating tensors on the same device. Move the complete batch recursively to the model's device before the forward/loss computation, while avoiding device transfers hidden deep inside utilities.</p>
+</li>
+<li>
+<p><strong>Explain contiguous tensors and <code>.contiguous()</code>.</strong> — <strong>Difficulty:</strong> Medium
+    Transposes and some slices produce views with nonstandard strides. <code>view</code> may reject them; <code>.contiguous()</code> creates standard contiguous storage, while <code>reshape</code> may handle the case by copying when required.</p>
+</li>
+<li>
+<p><strong>Find the <code>squeeze()</code> batch-size-one bug.</strong> — <strong>Difficulty:</strong> Easy
+    Calling <code>squeeze()</code> without a dimension removes every size-one axis, possibly deleting the batch dimension. Use <code>squeeze(-1)</code> or another explicitly intended dimension.</p>
+</li>
+<li>
+<p><strong>How do in-place operations affect autograd?</strong> — <strong>Difficulty:</strong> Medium
+    They change tensor storage that a backward formula may need and can trigger version-counter errors or silently complicate reasoning. Avoid them on leaf tensors requiring gradients and on intermediates needed for backward unless their safety is well understood.</p>
+</li>
+<li>
+<p><strong>Compare <code>detach()</code>, <code>clone()</code>, and <code>torch.no_grad()</code>.</strong> — <strong>Difficulty:</strong> Easy
+    <code>detach()</code> returns a tensor sharing storage but disconnected from the current graph. <code>clone()</code> copies data while retaining gradient history, and <code>no_grad()</code> disables graph recording for operations executed inside its context.</p>
+</li>
+<li>
+<p><strong>Why can <code>.item()</code> slow a GPU loop?</strong> — <strong>Difficulty:</strong> Medium
+    Converting a GPU scalar to a Python value forces synchronization so the CPU waits for queued GPU work. Aggregate on device and transfer less frequently when possible.</p>
+</li>
+</ol>
+<h3 id="preprocessing-and-datasets">Preprocessing and datasets</h3>
+<ol start="31">
+<li>
+<p><strong>Implement <code>fit</code>, <code>transform</code>, and <code>inverse_transform</code> standardization.</strong> — <strong>Difficulty:</strong> Medium
+    <code>fit</code> stores training-only means and safe scales, <code>transform</code> applies <code>(x - mean) / scale</code>, and <code>inverse_transform</code> applies <code>z * scale + mean</code>. Validate feature width and serialize the fitted state.</p>
+</li>
+<li>
+<p><strong>Normalize images with per-channel statistics.</strong> — <strong>Difficulty:</strong> Easy
+    For <code>[B, C, H, W]</code>, reshape mean and std to <code>[1, C, 1, 1]</code> and compute <code>(x - mean) / std.clamp_min(eps)</code>. Confirm the expected input range, color order, and dtype.</p>
+</li>
+<li>
+<p><strong>Implement a custom <code>Dataset</code> for numerical and categorical features.</strong> — <strong>Difficulty:</strong> Medium
+    Store immutable references or indexed arrays, implement <code>__len__</code>, and have <code>__getitem__</code> return a documented structure such as <code>{"numeric": ..., "categorical": ..., "target": ...}</code>. Fit encoders outside the dataset on training data only.</p>
+</li>
+<li>
+<p><strong>Write a <code>collate_fn</code> for variable-length sequences.</strong> — <strong>Difficulty:</strong> Medium
+    Extract sequences, record lengths, pad them with <code>pad_sequence</code>, create a validity mask, and stack labels and identifiers. Keep the output structure consistent with the training loop.</p>
+</li>
+<li>
+<p><strong>Handle missing values without leakage.</strong> — <strong>Difficulty:</strong> Medium
+    Fit numerical imputation values and categorical vocabularies on training data only. Store a missing indicator or sentinel category when useful, and reuse the frozen preprocessing state for validation and inference.</p>
+</li>
+<li>
+<p><strong>Handle an unseen category at inference.</strong> — <strong>Difficulty:</strong> Medium
+    Map it to a reserved unknown token, use hashing, or reject it with a clear contract. Never extend a learned embedding vocabulary silently unless the model and deployment process explicitly support it.</p>
+</li>
+<li>
+<p><strong>Where should preprocessing live?</strong> — <strong>Difficulty:</strong> Medium
+    Per-example parsing often belongs in the dataset, padding and batch assembly in the collator, differentiable/exportable transforms in the model, and request validation plus production parity in the serving layer. Choose one owner for every transform to avoid duplication.</p>
+</li>
+<li>
+<p><strong>Make stochastic augmentation reproducible with DataLoader workers.</strong> — <strong>Difficulty:</strong> Medium
+    Seed the DataLoader generator and derive distinct worker seeds in <code>worker_init_fn</code>; also seed libraries used inside workers. If augmentations should change by epoch, incorporate the epoch into the seed deliberately.</p>
+</li>
+<li>
+<p><strong>Why might multiple DataLoader workers be slower?</strong> — <strong>Difficulty:</strong> Medium
+    Startup, serialization, interprocess communication, duplicated memory, small datasets, or storage contention can exceed the work saved. Profile worker counts, batch size, persistent workers, prefetching, and the actual transform cost.</p>
+</li>
+<li>
+<p><strong>Pinned memory and non-blocking transfers?</strong> — <strong>Difficulty:</strong> Medium
+    Page-locked host memory enables faster asynchronous host-to-GPU copies. <code>non_blocking=True</code> is useful when the source is pinned and computation/copy overlap is organized correctly; it is not automatically faster in every pipeline.</p>
+</li>
+</ol>
+<h3 id="metrics">Metrics</h3>
+<ol start="41">
+<li>
+<p><strong>Implement binary accuracy from logits.</strong> — <strong>Difficulty:</strong> Easy
+    Convert logits to predictions with <code>logits &gt;= 0</code> or <code>sigmoid(logits) &gt;= 0.5</code>, compare with Boolean targets, and average the equality tensor in floating point.</p>
+</li>
+<li>
+<p><strong>Implement multiclass top-k accuracy.</strong> — <strong>Difficulty:</strong> Easy
+    Take <code>logits.topk(k, dim=1).indices</code>, compare against <code>targets[:, None]</code>, reduce with <code>any(dim=1)</code>, and average. Report both the numerator and denominator for distributed aggregation.</p>
+</li>
+<li>
+<p><strong>Micro, macro, and weighted F1?</strong> — <strong>Difficulty:</strong> Medium
+    Micro aggregates TP/FP/FN before computing F1, macro averages class F1 equally, and weighted F1 weights each class by support. State how zero-support classes are handled.</p>
+</li>
+<li>
+<p><strong>Masked mean squared error?</strong> — <strong>Difficulty:</strong> Easy
+    Compute squared error, select or multiply by a Boolean mask, sum valid error, and divide by the valid count. Raise or return a documented sentinel when no target is valid.</p>
+</li>
+<li>
+<p><strong>MAPE and its failure cases?</strong> — <strong>Difficulty:</strong> Easy
+    MAPE averages <code>abs(prediction - target) / abs(target)</code>, so zero or near-zero targets make it undefined or unstable. Alternatives include MAE, WAPE, sMAPE, or a domain-specific denominator rule.</p>
+</li>
+<li>
+<p><strong>Confusion matrix without storing all predictions?</strong> — <strong>Difficulty:</strong> Medium
+    Maintain a <code>[C, C]</code> integer tensor and add each batch's <code>bincount</code>-based matrix. In distributed evaluation, sum the matrices across workers before deriving metrics.</p>
+</li>
+<li>
+<p><strong>Design a streaming metric.</strong> — <strong>Difficulty:</strong> Medium
+    <code>update</code> accumulates sufficient statistics, <code>compute</code> derives the final metric without mutating state, and <code>reset</code> clears it. Make device, dtype, distributed reduction, and empty-state behavior explicit.</p>
+</li>
+<li>
+<p><strong>Why is averaging batch F1 wrong?</strong> — <strong>Difficulty:</strong> Medium
+    F1 is a nonlinear ratio of aggregate counts. Compute it once from dataset-level TP/FP/FN rather than averaging ratios calculated from differently sized or distributed batches.</p>
+</li>
+<li>
+<p><strong>Metrics for imbalanced fraud detection?</strong> — <strong>Difficulty:</strong> Medium
+    Use precision, recall, PR-AUC, F-beta, recall at a fixed precision, and expected business cost. Evaluate calibration and threshold behavior; plain accuracy and sometimes ROC-AUC can obscure rare-positive performance.</p>
+</li>
+<li>
+<p><strong>How should a classification threshold be selected?</strong> — <strong>Difficulty:</strong> Medium
+    Choose it on a validation set using a predeclared cost or metric objective, then lock it before the final test evaluation. Revisit it when prevalence, costs, or calibration drift in production.</p>
+</li>
+</ol>
+<h3 id="training-and-evaluation">Training and evaluation</h3>
+<ol start="51">
+<li>
+<p><strong>Implement early stopping.</strong> — <strong>Difficulty:</strong> Easy
+    Track the best validation value and checkpoint, count evaluations without an improvement larger than <code>min_delta</code>, and stop after <code>patience</code> failures. Define metric direction, ties, warm-up, and whether patience counts epochs or evaluations.</p>
+</li>
+<li>
+<p><strong>Add gradient clipping.</strong> — <strong>Difficulty:</strong> Easy
+    Call <code>loss.backward()</code>, unscale gradients first when using AMP, then call <code>clip_grad_norm_</code> or <code>clip_grad_value_</code> before the optimizer step. Log the pre-clipping norm when diagnosing instability.</p>
+</li>
+<li>
+<p><strong>Add gradient accumulation.</strong> — <strong>Difficulty:</strong> Medium
+    Divide each microbatch loss by <code>accumulation_steps</code>, call backward for every microbatch, and step/clear gradients at each boundary. Handle the final partial group and DDP synchronization deliberately.</p>
+</li>
+<li>
+<p><strong>Add automatic mixed precision.</strong> — <strong>Difficulty:</strong> Medium
+    Run forward and loss computation inside the device-appropriate <code>autocast</code> context, then use <code>GradScaler.scale(loss).backward()</code>, <code>step</code>, and <code>update</code> on CUDA. Keep numerically sensitive operations in higher precision when needed.</p>
+</li>
+<li>
+<p><strong>Save and resume a checkpoint exactly.</strong> — <strong>Difficulty:</strong> Hard
+    Save model, optimizer, scheduler, AMP scaler, epoch/global step, best metric, configuration, data/sampler position when relevant, and Python/NumPy/PyTorch RNG states. Restore objects before continuing the next batch.</p>
+</li>
+<li>
+<p><strong>When should a learning-rate scheduler step?</strong> — <strong>Difficulty:</strong> Medium
+    Follow the scheduler's semantics: OneCycle and many warm-up schedules step per optimizer update, StepLR commonly steps per epoch, and ReduceLROnPlateau steps after a monitored validation metric. Document the order relative to <code>optimizer.step()</code>.</p>
+</li>
+<li>
+<p><strong>Freeze and later unfreeze a backbone.</strong> — <strong>Difficulty:</strong> Medium
+    Set <code>requires_grad=False</code> for frozen parameters and build the optimizer from trainable parameters. On unfreezing, set selected parameters true and rebuild or extend optimizer groups, often with a smaller learning rate.</p>
+</li>
+<li>
+<p><strong>Why does validation differ between <code>train()</code> and <code>eval()</code>?</strong> — <strong>Difficulty:</strong> Easy
+    Dropout is stochastic in training mode, while BatchNorm uses batch statistics and updates running estimates. Evaluation mode disables Dropout and uses stored BatchNorm statistics.</p>
+</li>
+<li>
+<p><strong>Prevent gradients during validation.</strong> — <strong>Difficulty:</strong> Easy
+    Use both <code>model.eval()</code> and <code>torch.inference_mode()</code> or <code>torch.no_grad()</code>. Do not call backward or optimizer methods, and detach any tensors retained after the loop.</p>
+</li>
+<li>
+<p><strong>Calculate epoch loss with a smaller final batch.</strong> — <strong>Difficulty:</strong> Easy
+    If the criterion returns a batch mean, accumulate <code>loss.item() * batch_size</code> and divide by total examples. For token-level losses, weight by the number of valid tokens instead.</p>
+</li>
+<li>
+<p><strong>Handle a non-finite loss.</strong> — <strong>Difficulty:</strong> Medium
+    Detect it with <code>torch.isfinite</code>, log the batch and relevant diagnostics, and follow an explicit policy: stop, skip, reduce scale, or recover from a checkpoint. In distributed training, ensure all ranks make the same decision.</p>
+</li>
+<li>
+<p><strong>Support classification and regression in one loop.</strong> — <strong>Difficulty:</strong> Hard
+    Keep the loop task-agnostic and inject a task adapter that prepares targets, computes loss, converts outputs to predictions, and updates metrics. Avoid scattered <code>if task == ...</code> branches throughout the loop.</p>
+</li>
+<li>
+<p><strong>Add callback hooks cleanly.</strong> — <strong>Difficulty:</strong> Medium
+    Define a small lifecycle interface such as <code>on_train_start</code>, <code>on_batch_end</code>, <code>on_validation_end</code>, and <code>on_exception</code>. Pass read-only context or controlled state so logging and checkpoint callbacks do not own core optimization logic.</p>
+</li>
+<li>
+<p><strong>Move nested batches to a device.</strong> — <strong>Difficulty:</strong> Medium
+    Use a recursive tree-map that calls <code>.to(device)</code> on tensors, preserves mappings/sequences, and leaves strings or identifiers unchanged. Centralize it so every loop uses identical behavior.</p>
+</li>
+<li>
+<p><strong>Preserve input order and sample identifiers during prediction.</strong> — <strong>Difficulty:</strong> Medium
+    Include stable IDs in dataset outputs and return them with predictions. Disable shuffling for inference or sort collected outputs back to a recorded source index; account for distributed sampler padding.</p>
+</li>
+</ol>
+<h3 id="testing-and-debugging">Testing and debugging</h3>
+<ol start="66">
+<li>
+<p><strong>Test a standardization utility, including constant features.</strong> — <strong>Difficulty:</strong> Medium
+    Verify fitted means/scales, near-zero transformed mean, near-unit variance for varying features, finite all-zero output for constant features, inverse round-trip, shape errors, state serialization, and CPU/GPU behavior.</p>
+</li>
+<li>
+<p><strong>Verify evaluation does not update model state.</strong> — <strong>Difficulty:</strong> Medium
+    Snapshot parameters and BatchNorm buffers, run evaluation, and compare the complete state afterward. Also assert <code>model.training</code> is restored as intended and outputs do not require gradients.</p>
+</li>
+<li>
+<p><strong>Compare CPU and GPU metric implementations.</strong> — <strong>Difficulty:</strong> Medium
+    Run identical fixed inputs on both devices and compare outputs with dtype-appropriate tolerances. Avoid nondeterministic operations or document expected tolerance when exact equality is unrealistic.</p>
+</li>
+<li>
+<p><strong>Test empty input, batch size one, and unexpected shapes.</strong> — <strong>Difficulty:</strong> Easy
+    Parameterize cases and assert either a defined output or a clear exception. Include scalar/singleton dimensions, zero-length axes, noncontiguous tensors, wrong dtypes, and mismatched devices where relevant.</p>
+</li>
+<li>
+<p><strong>Use a tiny dataset to verify overfitting.</strong> — <strong>Difficulty:</strong> Medium
+    Train on one small batch with augmentation and regularization disabled. A sufficiently expressive model should drive training loss very low; failure suggests a bug in data, labels, loss, gradients, or optimizer steps.</p>
+</li>
+<li>
+<p><strong>Diagnose a loss that never changes.</strong> — <strong>Difficulty:</strong> Medium
+    Check label correctness, learning rate, model mode, <code>requires_grad</code>, nonzero gradients, optimizer parameter groups, <code>zero_grad</code>/<code>backward</code>/<code>step</code> order, detached outputs, loss compatibility, and whether parameters actually change.</p>
+</li>
+<li>
+<p><strong>Diagnose validation changes across identical runs.</strong> — <strong>Difficulty:</strong> Hard
+    Check seeds, evaluation mode, stochastic transforms, DataLoader worker seeds, sample order, nondeterministic GPU kernels, uninitialized state, data races, and floating-point reduction order.</p>
+</li>
+<li>
+<p><strong>Find a memory leak from retained graphs.</strong> — <strong>Difficulty:</strong> Hard
+    Look for lists or logs storing <code>loss</code>, outputs, or hidden states without detaching. Store <code>.item()</code> for scalars or <code>.detach().cpu()</code> for tensors, and avoid <code>retain_graph=True</code> unless it is genuinely required.</p>
+</li>
+<li>
+<p><strong>Check gradients numerically.</strong> — <strong>Difficulty:</strong> Hard
+    Use <code>torch.autograd.gradcheck</code> with double-precision inputs requiring gradients, small well-conditioned values, and a function returning differentiable outputs. Avoid nondifferentiable boundaries in the test points.</p>
+</li>
+<li>
+<p><strong>Verify identical predictions after checkpoint restoration.</strong> — <strong>Difficulty:</strong> Medium
+    Save a model, load it into a fresh instance, put both in evaluation mode, and compare outputs on the same fixed input. Also test device mapping and use appropriate floating-point tolerances.</p>
+</li>
+</ol>
+<h2 id="supplemental-pytorch-core-and-advanced-questions">Supplemental PyTorch core and advanced questions</h2>
+<p>The following 50-question supplement is based on the GitHub-formatted excerpt supplied with this guide and the <a href="https://devinterview.io/questions/machine-learning-and-data-science/pytorch-interview-questions/">full question index published by Devinterview</a>. The responses below are newly written, condensed, and updated for current PyTorch practices rather than copied from the source.</p>
+<h3 id="pytorch-fundamentals">PyTorch fundamentals</h3>
+<ol>
+<li>
+<p><strong>What is PyTorch, and how does it differ from frameworks such as TensorFlow?</strong> — <strong>Difficulty:</strong> Easy
+   PyTorch is an open-source tensor and deep-learning framework with eager execution, automatic differentiation, accelerator support, distributed training, compilation, and deployment tooling. PyTorch is strongly integrated with Python and research workflows; TensorFlow has a different ecosystem and deployment history. Modern versions of both support eager execution and graph optimization, so the choice should consider team expertise, required runtimes, libraries, and production constraints rather than the outdated dynamic-versus-static distinction alone.</p>
+</li>
+<li>
+<p><strong>What are tensors in PyTorch?</strong> — <strong>Difficulty:</strong> Easy
+   A tensor is a typed, multidimensional array with a shape, strides, dtype, layout, and device. Unlike a plain NumPy array, it can participate in autograd, run on accelerators, and use dense, sparse, quantized, or other specialized representations.</p>
+</li>
+<li>
+<p><strong>What is the difference between a Tensor and a Variable?</strong> — <strong>Difficulty:</strong> Easy
+   There is no practical distinction in modern PyTorch. <code>Variable</code> was merged into <code>torch.Tensor</code> in PyTorch 0.4; tensors now carry <code>requires_grad</code>, <code>grad</code>, and <code>grad_fn</code> behavior directly. New code should not wrap tensors in <code>Variable</code>.</p>
+</li>
+<li>
+<p><strong>How do you convert a NumPy array to a tensor?</strong> — <strong>Difficulty:</strong> Easy
+   <code>torch.from_numpy(array)</code> and usually <code>torch.as_tensor(array)</code> share compatible CPU memory with the NumPy array, while <code>torch.tensor(array)</code> copies and infers or accepts a dtype. Use <code>.clone()</code> when independent storage is required, and move to an accelerator explicitly after conversion.</p>
+</li>
+<li>
+<p><strong>What is the purpose of <code>.grad</code>?</strong> — <strong>Difficulty:</strong> Easy
+   After <code>backward()</code>, <code>.grad</code> stores the accumulated gradient for leaf tensors whose <code>requires_grad</code> flag is true, including model parameters. Non-leaf tensors do not retain <code>.grad</code> by default; call <code>retain_grad()</code> if it is needed for debugging. Gradients accumulate until cleared or set to <code>None</code>.</p>
+</li>
+<li>
+<p><strong>What is CUDA, and how does it relate to PyTorch?</strong> — <strong>Difficulty:</strong> Easy
+   CUDA is NVIDIA's GPU computing platform. A CUDA-enabled PyTorch build can allocate tensors and execute supported operations on NVIDIA GPUs. Models and participating tensors must be placed on compatible devices explicitly, and performance depends on batching, memory movement, kernel efficiency, and synchronization—not merely calling <code>.cuda()</code>.</p>
+</li>
+<li>
+<p><strong>How does autograd work?</strong> — <strong>Difficulty:</strong> Easy
+   When grad mode is enabled, PyTorch records operations involving tensors that require gradients into a dynamic graph. Calling <code>backward()</code> applies reverse-mode automatic differentiation and the chain rule, accumulating derivatives into leaf tensors. Saved intermediates are normally released after backward unless the graph is retained.</p>
+</li>
+</ol>
+<h3 id="neural-network-design">Neural-network design</h3>
+<ol start="8">
+<li>
+<p><strong>What are the main steps for creating a neural-network model?</strong> — <strong>Difficulty:</strong> Easy
+   Define the data and metric contracts, create an <code>nn.Module</code>, initialize it deliberately, choose a compatible loss and optimizer, build train/validation loops, verify it can overfit a tiny dataset, train with monitoring, evaluate on protected data, and package the model with preprocessing and configuration for inference.</p>
+</li>
+<li>
+<p><strong>How does <code>nn.Sequential</code> differ from subclassing <code>nn.Module</code>?</strong> — <strong>Difficulty:</strong> Easy
+   <code>nn.Sequential</code> composes modules in a single linear chain. A custom <code>nn.Module</code> supports branching, residual connections, multiple inputs or outputs, conditional computation, shared layers, and other nonsequential behavior. <code>Sequential</code> itself is also an <code>nn.Module</code>.</p>
+</li>
+<li>
+<p><strong>How do you implement a custom layer?</strong> — <strong>Difficulty:</strong> Medium
+    Subclass <code>nn.Module</code>, create child modules, <code>nn.Parameter</code> values, or registered buffers in <code>__init__</code>, and implement tensor operations in <code>forward</code>. Initialize parameters explicitly when defaults are unsuitable and test shapes, gradients, devices, dtypes, state serialization, and compilation behavior.</p>
+</li>
+<li>
+<p><strong>What is the role of <code>forward</code>?</strong> — <strong>Difficulty:</strong> Easy
+    <code>forward</code> defines the module's tensor computation. Call <code>module(inputs)</code> rather than invoking <code>forward</code> directly so PyTorch can run hooks and other <code>nn.Module.__call__</code> behavior around the computation.</p>
+</li>
+</ol>
+<h3 id="training-and-optimization">Training and optimization</h3>
+<ol start="12">
+<li>
+<p><strong>What are optimizers, and how are they used?</strong> — <strong>Difficulty:</strong> Easy
+    Optimizers update selected parameters using their gradients and optimizer state such as momentum or adaptive moments. A normal update is <code>zero_grad</code>, forward, loss, backward, and <code>step</code>. Save optimizer state in checkpoints when training must resume faithfully.</p>
+</li>
+<li>
+<p><strong>Why and when do you call <code>zero_grad()</code>?</strong> — <strong>Difficulty:</strong> Easy
+    PyTorch accumulates gradients, so they must be cleared before beginning a logically new optimizer update unless intentional accumulation is being used. <code>optimizer.zero_grad(set_to_none=True)</code> often saves work and makes missing gradients distinguishable from explicit zeros; it does not perform backward itself.</p>
+</li>
+<li>
+<p><strong>How do you implement learning-rate scheduling?</strong> — <strong>Difficulty:</strong> Medium
+    Create a scheduler tied to the optimizer and step it according to its contract: per optimizer update, per epoch, or after a validation metric. For example, OneCycle-style schedules usually step per update, StepLR commonly steps per epoch, and ReduceLROnPlateau consumes a monitored metric.</p>
+</li>
+<li>
+<p><strong>Describe backpropagation in PyTorch.</strong> — <strong>Difficulty:</strong> Medium
+    The forward pass creates outputs and a scalar or explicitly seeded loss. <code>loss.backward()</code> traverses the recorded graph in reverse and accumulates parameter gradients. The optimizer then reads those gradients to update parameters; backpropagation calculates gradients, while the optimizer performs the update.</p>
+</li>
+<li>
+<p><strong>How does gradient clipping work, and why is it useful?</strong> — <strong>Difficulty:</strong> Medium
+    Gradient clipping limits gradient values or the global norm to reduce unstable updates, especially in recurrent, deep, or mixed-precision training. Apply it after backward, and after unscaling when using AMP, but before the optimizer step. It mitigates symptoms and does not replace diagnosing bad objectives, data, or learning rates.</p>
+</li>
+</ol>
+<h3 id="debugging-and-model-improvement">Debugging and model improvement</h3>
+<ol start="17">
+<li>
+<p><strong>How do you check whether a model is using the GPU?</strong> — <strong>Difficulty:</strong> Easy
+    Inspect <code>next(model.parameters()).device</code> and representative input/output devices, and verify accelerator utilization and memory with the PyTorch profiler or system tools. GPU allocation alone does not demonstrate useful utilization; profile kernels, input stalls, transfers, and synchronization.</p>
+</li>
+<li>
+<p><strong>How do you monitor and reduce overfitting?</strong> — <strong>Difficulty:</strong> Medium
+    Compare training and validation curves on representative splits, inspect slice metrics, and check for leakage first. Possible controls include more or better data, augmentation, weight decay, dropout, early stopping, smaller capacity, transfer learning, label smoothing, and improved validation design.</p>
+</li>
+<li>
+<p><strong>What is batch normalization, and how does it affect training?</strong> — <strong>Difficulty:</strong> Medium
+    BatchNorm normalizes activations using batch statistics during training, then applies learned scale and bias while updating running estimates. It can improve optimization and permit larger learning rates, but small or nonrepresentative batches can make estimates noisy. <code>train()</code> and <code>eval()</code> modes are therefore behaviorally different.</p>
+</li>
+<li>
+<p><strong>How does PyTorch initialize neural-network weights?</strong> — <strong>Difficulty:</strong> Medium
+    Standard modules define default <code>reset_parameters</code> methods. Custom initialization can be applied under <code>torch.no_grad()</code> or with <code>model.apply</code>, using methods such as Xavier or Kaiming initialization chosen for the activation and architecture. Initialization should also address biases, normalization parameters, embeddings, and reproducibility.</p>
+</li>
+<li>
+<p><strong>What common training problems occur, and how do you debug them?</strong> — <strong>Difficulty:</strong> Medium
+    Common failures include device or shape mismatches, incorrect targets or loss functions, missing or exploding gradients, non-finite values, data leakage, wrong model mode, excessive synchronization, input bottlenecks, and failure to update parameters. Start with assertions and a tiny overfit test, inspect gradients and parameter deltas, then profile only after correctness is established.</p>
+</li>
+</ol>
+<h3 id="data-handling-and-preprocessing">Data handling and preprocessing</h3>
+<ol start="22">
+<li>
+<p><strong>How do you build a DataLoader for a custom dataset?</strong> — <strong>Difficulty:</strong> Medium
+    Implement a map-style <code>Dataset</code> with <code>__len__</code> and <code>__getitem__</code>, or an <code>IterableDataset</code> for streams, then pass it to <code>DataLoader</code> with deliberate batch, shuffle or sampler, worker, collation, and memory settings. Use a custom <code>collate_fn</code> for variable-length or nested samples.</p>
+</li>
+<li>
+<p><strong>What are <code>torchvision</code> transforms used for?</strong> — <strong>Difficulty:</strong> Easy
+    Transforms decode, convert, resize, normalize, and augment image-like inputs. Stochastic training transforms should be separated from deterministic validation/inference preprocessing. Their expected range, dtype, channel order, and target transformations must remain consistent with the model.</p>
+</li>
+<li>
+<p><strong>How do you preprocess time-series data for RNNs?</strong> — <strong>Difficulty:</strong> Medium
+    Split chronologically to prevent future leakage, fit normalization on training data, build input/target windows, retain lengths and masks, and pad or pack variable-length sequences. Decide whether hidden state resets between sequences and avoid mixing unrelated entities across a continuous state.</p>
+</li>
+<li>
+<p><strong>What is data augmentation, and how is it implemented?</strong> — <strong>Difficulty:</strong> Easy
+    Augmentation samples label-preserving variations to improve generalization and robustness. It can live in dataset or transform pipelines and may include geometric, photometric, temporal, mixing, or domain-specific operations. Validate that each transformation preserves task semantics and seed workers when reproducibility is required.</p>
+</li>
+</ol>
+<h3 id="advanced-topics">Advanced topics</h3>
+<ol start="26">
+<li>
+<p><strong>How do you use GPUs for distributed PyTorch training?</strong> — <strong>Difficulty:</strong> Hard
+    <code>DistributedDataParallel</code> normally runs one process per GPU, partitions input with a distributed sampler, and synchronizes gradients with collective communication. Choose an appropriate backend, set devices before constructing the model, checkpoint carefully, and ensure all ranks follow compatible control flow. Use sharded approaches such as FSDP when model or optimizer state does not fit per device.</p>
+</li>
+<li>
+<p><strong>How do you implement transfer learning?</strong> — <strong>Difficulty:</strong> Medium
+    Load a pretrained model, replace its task-specific head, apply the required preprocessing, and first train the new head with the backbone frozen when appropriate. Then selectively unfreeze layers, use smaller learning rates for pretrained weights, and monitor catastrophic forgetting and domain mismatch.</p>
+</li>
+<li>
+<p><strong>Compare RNNs, LSTMs, and GRUs.</strong> — <strong>Difficulty:</strong> Medium
+    A basic RNN has a simple recurrent state but is vulnerable to vanishing or exploding gradients. LSTMs add input, forget, and output gates plus a cell state; GRUs use a simpler gated state with fewer parameters. The best choice depends on sequence length, data, latency, and whether newer convolutional or attention architectures are more appropriate.</p>
+</li>
+<li>
+<p><strong>What is TorchScript, and how does it help deployment?</strong> — <strong>Difficulty:</strong> Medium
+    TorchScript historically converted PyTorch programs into a serializable representation runnable without Python through scripting or tracing. Current PyTorch documentation marks TorchScript as deprecated and directs new export workflows toward <code>torch.export</code>; existing TorchScript deployments may still require maintenance and migration planning.</p>
+</li>
+</ol>
+<h3 id="coding-challenges">Coding challenges</h3>
+<ol start="30">
+<li>
+<p><strong>Implement a DataLoader for a CSV dataset.</strong> — <strong>Difficulty:</strong> Medium</p>
+<p>```python
+import pandas as pd
+import torch
+from torch.utils.data import DataLoader, Dataset</p>
+<p>class CsvDataset(Dataset):
+    def <strong>init</strong>(self, path: str, feature_cols: list[str], target_col: str):
+        frame = pd.read_csv(path)
+        self.x = torch.tensor(frame[feature_cols].to_numpy(), dtype=torch.float32)
+        self.y = torch.tensor(frame[target_col].to_numpy(), dtype=torch.long)</p>
+<pre><code>def __len__(self) -&gt; int:
+    return self.y.shape[0]
+
+def __getitem__(self, index: int):
+    return self.x[index], self.y[index]
+</code></pre>
+<p>loader = DataLoader(
+    CsvDataset("train.csv", ["f1", "f2"], "label"),
+    batch_size=64,
+    shuffle=True,
+    num_workers=2,
+)
+```</p>
+<p>For large files, avoid loading the entire CSV per worker; preprocess to a columnar or sharded format or use an iterable pipeline.</p>
+</li>
+<li>
+<p><strong>Demonstrate slicing, indexing, concatenation, and transposition.</strong> — <strong>Difficulty:</strong> Easy</p>
+<p><code>python
+x = torch.arange(12).reshape(3, 4)
+first_two_columns = x[:, :2]
+selected_rows = x[torch.tensor([0, 2])]
+stacked_rows = torch.cat([x, x], dim=0)
+transposed = x.transpose(0, 1)</code></p>
+<p>Explain resulting shapes and remember that transposed tensors may be noncontiguous.</p>
+</li>
+<li>
+<p><strong>Create a feedforward MNIST model.</strong> — <strong>Difficulty:</strong> Medium</p>
+<p>```python
+from torch import nn</p>
+<p>model = nn.Sequential(
+    nn.Flatten(),
+    nn.Linear(28 * 28, 256),
+    nn.ReLU(),
+    nn.Dropout(0.2),
+    nn.Linear(256, 10),
+)</p>
+<p>loss_fn = nn.CrossEntropyLoss()
+```</p>
+<p>Feed raw logits to <code>CrossEntropyLoss</code>; do not add softmax in the model for this training objective.</p>
+</li>
+<li>
+<p><strong>Manually compute linear-regression gradients.</strong> — <strong>Difficulty:</strong> Medium</p>
+<p><code>python
+def linear_regression_gradients(x, y, weight, bias):
+    prediction = x @ weight + bias
+    residual = prediction - y
+    count = y.numel()
+    grad_weight = (2.0 / count) * x.transpose(0, 1) @ residual
+    grad_bias = (2.0 / count) * residual.sum(dim=0)
+    return grad_weight, grad_bias</code></p>
+<p>Compare the result with autograd in a unit test using the same mean-squared-error convention.</p>
+</li>
+<li>
+<p><strong>Implement a CNN for image classification.</strong> — <strong>Difficulty:</strong> Medium</p>
+<p>```python
+class SmallCnn(nn.Module):
+    def <strong>init</strong>(self, num_classes: int):
+        super().<strong>init</strong>()
+        self.features = nn.Sequential(
+            nn.Conv2d(3, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),
+        )
+        self.classifier = nn.Linear(64, num_classes)</p>
+<pre><code>def forward(self, x):
+    x = self.features(x).flatten(1)
+    return self.classifier(x)
+</code></pre>
+<p>```</p>
+<p>Training still requires normalized inputs, a compatible loss, optimizer, validation, and device handling.</p>
+</li>
+<li>
+<p><strong>Save and load a trained model.</strong> — <strong>Difficulty:</strong> Easy</p>
+<p>```python
+torch.save(
+    {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "epoch": epoch,
+    },
+    "checkpoint.pt",
+)</p>
+<p>checkpoint = torch.load("checkpoint.pt", map_location=device, weights_only=True)
+model.load_state_dict(checkpoint["model"])
+optimizer.load_state_dict(checkpoint["optimizer"])
+```</p>
+<p>Reconstruct the architecture and configuration before loading, validate artifact provenance, and call <code>eval()</code> for inference.</p>
+</li>
+</ol>
+<h3 id="case-studies-and-scenarios">Case studies and scenarios</h3>
+<ol start="36">
+<li>
+<p><strong>How do you handle imbalanced classes?</strong> — <strong>Difficulty:</strong> Medium
+    Use stratified evaluation, class-weighted or focal losses, balanced sampling, targeted augmentation, threshold tuning, and metrics such as per-class recall, macro F1, and PR-AUC. Choose methods based on the cost of errors and avoid evaluating with accuracy alone.</p>
+</li>
+<li>
+<p><strong>How can PyTorch support real-time inference?</strong> — <strong>Difficulty:</strong> Medium
+    Use an inference or no-grad context, evaluation mode, controlled batching, compilation or export, lower precision, quantization, and architecture optimization. Measure end-to-end tail latency, warm-up, memory, input processing, concurrency, device transfers, numerical drift, and fallback behavior on target hardware.</p>
+</li>
+<li>
+<p><strong>When would you convert a model to ONNX?</strong> — <strong>Difficulty:</strong> Medium
+    ONNX can be useful when a non-Python runtime, cross-framework interoperability, or a deployment engine expects ONNX. Validate supported operators, dynamic shapes, numerical parity, preprocessing, and performance on the target runtime; conversion is not automatically an optimization.</p>
+</li>
+<li>
+<p><strong>How would you deploy a model as a REST API?</strong> — <strong>Difficulty:</strong> Hard
+    Package a versioned model and preprocessing pipeline behind a service such as FastAPI, load the model once at startup, validate requests, batch when useful, run inference without gradients, and return a stable schema. Add authentication, timeouts, concurrency controls, observability, health checks, canary rollout, and rollback.</p>
+</li>
+<li>
+<p><strong>How do you fine-tune a pretrained model?</strong> — <strong>Difficulty:</strong> Medium
+    Match the pretrained preprocessing and tokenizer or feature contract, replace the task head, establish a frozen-backbone baseline, then unfreeze deliberately with smaller learning rates for pretrained layers. Monitor domain shift, overfitting, catastrophic forgetting, and calibration.</p>
+</li>
+</ol>
+<h3 id="advanced-topics-and-research">Advanced topics and research</h3>
+<ol start="41">
+<li>
+<p><strong>What are GNNs, and how are they implemented in PyTorch?</strong> — <strong>Difficulty:</strong> Hard
+    Graph neural networks update node, edge, or graph representations through message passing over connectivity. Implement the primitives with tensor indexing and sparse operations or use libraries such as PyTorch Geometric. Define batching, neighborhood sampling, aggregation, and permutation invariance carefully.</p>
+</li>
+<li>
+<p><strong>What are important NAS directions, and how can PyTorch support them?</strong> — <strong>Difficulty:</strong> Hard
+    Neural architecture search may use reinforcement learning, evolutionary search, Bayesian optimization, differentiable relaxation, or weight-sharing supernets. Current practical work emphasizes hardware-aware multi-objective search, lower search cost, reliable rankings, and reproducibility. PyTorch can express candidate modules and training loops while an orchestration layer manages trials and measured latency.</p>
+</li>
+<li>
+<p><strong>How are GANs implemented, and what makes them difficult?</strong> — <strong>Difficulty:</strong> Hard
+    Train a generator to fool a discriminator and a discriminator to distinguish real from generated samples, using separate objectives and optimizer steps. Common problems include mode collapse, oscillation, unstable gradients, sensitivity to architecture and hyperparameters, and difficult evaluation. Alternatives or improvements include Wasserstein objectives, gradient penalties, normalization, and careful update ratios.</p>
+</li>
+<li>
+<p><strong>What is model quantization, and when is it useful?</strong> — <strong>Difficulty:</strong> Medium
+    Quantization represents weights and sometimes activations with lower-precision formats to reduce memory, bandwidth, power, or latency. Post-training quantization is cheaper, while quantization-aware training can recover quality by simulating quantization during training. Current PyTorch development centralizes many quantization workflows in <code>torchao</code>; always benchmark accuracy and actual target-hardware performance.</p>
+</li>
+<li>
+<p><strong>What role does PyTorch play in reinforcement learning?</strong> — <strong>Difficulty:</strong> Hard
+    PyTorch supplies differentiable policies, value functions, distributions, optimizers, vectorized tensor computation, and accelerator support. For example, an actor-critic implementation samples actions from a policy distribution, estimates returns or advantages, and updates policy and value losses while an environment library handles interaction.</p>
+</li>
+</ol>
+<h3 id="practical-implementation-and-contribution">Practical implementation and contribution</h3>
+<ol start="46">
+<li>
+<p><strong>How do you create a custom C++ or CUDA operation?</strong> — <strong>Difficulty:</strong> Hard
+    Define and register the operator schema and device implementations, build it with the supported extension tooling, and register autograd or a decomposition when gradients or compilation are required. Test CPU/CUDA parity, shapes, dtypes, noncontiguous tensors, numerical gradients, errors, streams, and performance before choosing a custom kernel over composable PyTorch operations.</p>
+</li>
+<li>
+<p><strong>How should you discuss open-source contributions or community tools?</strong> — <strong>Difficulty:</strong> Medium
+    Use a specific example: the problem, why the tool or contribution was selected, your technical work, review or compatibility challenges, tests and documentation, and measurable impact. If you have not contributed code upstream, describe responsible evaluation, issue reporting, internal extensions, or maintenance of community dependencies honestly.</p>
+</li>
+<li>
+<p><strong>How should you discuss a project where PyTorch was central?</strong> — <strong>Difficulty:</strong> Medium
+    Structure the response around the product problem, data and constraints, architecture and training choices, evaluation design, debugging, deployment, and quantified outcome. Separate your personal decisions from the team's work and explain one trade-off or failure that changed the final system.</p>
+</li>
+<li>
+<p><strong>How do you improve experiment reproducibility?</strong> — <strong>Difficulty:</strong> Medium
+    Record code, environment, configuration, data and artifact versions; seed Python, NumPy, PyTorch, and DataLoader workers; control samplers; and request deterministic algorithms when required. Exact equality is not guaranteed across PyTorch releases, platforms, or CPU/GPU execution, and deterministic kernels can be slower, so define the intended reproducibility boundary.</p>
+</li>
+<li>
+<p><strong>How can PyTorch Lightning simplify a PyTorch workflow?</strong> — <strong>Difficulty:</strong> Easy
+    Lightning can standardize training hooks, device and distributed setup, precision, logging, checkpointing, and common loop mechanics while keeping models in PyTorch. It can reduce boilerplate and enforce team conventions, but candidates should still understand raw PyTorch semantics and weigh framework abstraction, debugging, customization, dependency, and migration costs.</p>
+</li>
+</ol>
+<h2 id="quick-drill-general-python-and-pytorch-ml-utilities">Quick drill: general Python and PyTorch ML utilities</h2>
+<ol>
+<li><strong>How would you normalize each row of a tensor without using a Python loop?</strong> — <strong>Difficulty:</strong> Easy</li>
+</ol>
+<p>Compute the mean and standard deviation across the feature dimension and retain that dimension for broadcasting:</p>
+<p><code>python
+   def normalize_rows(x: torch.Tensor, eps: float = 1e-8) -&gt; torch.Tensor:
+       mean = x.mean(dim=1, keepdim=True)
+       std = x.std(dim=1, keepdim=True, unbiased=False).clamp_min(eps)
+       return (x - mean) / std</code></p>
+<p><code>keepdim=True</code> produces <code>[B, 1]</code> statistics that broadcast across <code>[B, D]</code>. Clamping protects constant rows from division by zero, and the operations preserve the tensor's device and floating-point dtype.</p>
+<ol start="2">
+<li><strong>What is the difference between <code>view</code>, <code>reshape</code>, and <code>squeeze</code>?</strong> — <strong>Difficulty:</strong> Easy</li>
+</ol>
+<p><code>view</code> returns a different shape over the same storage and requires compatible memory strides, so it often fails after a transpose. <code>reshape</code> has the same shape semantics but may create a contiguous copy when a view is impossible. <code>squeeze(dim)</code> removes a specified dimension only when its size is one. Avoid bare <code>squeeze()</code> when batch size can be one because it may accidentally remove the batch dimension.</p>
+<ol start="3">
+<li><strong>How would you design a reusable preprocessing component?</strong> — <strong>Difficulty:</strong> Medium</li>
+</ol>
+<p>Give it a small contract such as <code>fit</code>, <code>transform</code>, and <code>state_dict</code>. Fit statistics only on training data, store non-trainable state such as means and scales as registered buffers, validate input shape and dtype, and make device behavior explicit. Keep stochastic training augmentation separate from deterministic validation and inference preprocessing.</p>
+<ol start="4">
+<li><strong>What is data leakage, and how do you prevent it during preprocessing?</strong> — <strong>Difficulty:</strong> Easy</li>
+</ol>
+<p>Leakage occurs when information unavailable at training time influences the model or evaluation—for example, fitting a scaler on the full dataset before splitting. Split first, fit preprocessing only on the training set, then reuse the frozen transformation for validation, test, and serving. For temporal data, split chronologically and ensure features do not contain future information.</p>
+<ol start="5">
+<li><strong>Explain precision, recall, and F1. When would you use each?</strong> — <strong>Difficulty:</strong> Easy</li>
+</ol>
+<p>Precision is <code>TP / (TP + FP)</code> and answers, “Of the predicted positives, how many were correct?” Recall is <code>TP / (TP + FN)</code> and answers, “Of the real positives, how many did we find?” F1 is their harmonic mean. Favor precision when false positives are expensive, recall when false negatives are expensive, and F1 when both matter and the classes are imbalanced. The final choice should reflect the product's error costs.</p>
+<ol start="6">
+<li><strong>Why is averaging F1 across batches usually incorrect?</strong> — <strong>Difficulty:</strong> Medium</li>
+</ol>
+<p>F1 is a nonlinear function of true positives, false positives, and false negatives. The mean of per-batch F1 scores generally differs from the F1 calculated over the full dataset, especially when batch sizes or class distributions differ. Accumulate TP, FP, and FN across all batches—reducing them across workers in distributed evaluation—and compute F1 once at the end.</p>
+<ol start="7">
+<li><strong>What are the essential steps in a PyTorch training loop?</strong> — <strong>Difficulty:</strong> Medium</li>
+</ol>
+<p>Put the model in training mode, move the batch to the correct device, clear old gradients, run the forward pass, compute loss, backpropagate, and update the parameters:</p>
+<p><code>python
+   model.train()
+   for x, y in loader:
+       x, y = x.to(device), y.to(device)
+       optimizer.zero_grad(set_to_none=True)
+       logits = model(x)
+       loss = loss_fn(logits, y)
+       loss.backward()
+       optimizer.step()</code></p>
+<p>Production loops should also handle sample-weighted metrics, non-finite loss checks, logging, checkpointing, and mixed precision when appropriate.</p>
+<ol start="8">
+<li><strong>What is the difference between <code>model.eval()</code> and <code>torch.no_grad()</code> or <code>torch.inference_mode()</code>?</strong> — <strong>Difficulty:</strong> Easy</li>
+</ol>
+<p><code>model.eval()</code> changes layer behavior—for example, it disables Dropout and tells BatchNorm to use stored running statistics. <code>no_grad()</code> disables gradient recording, while <code>inference_mode()</code> additionally removes more autograd overhead and is preferred for pure evaluation when its stricter semantics are acceptable. Evaluation normally needs both <code>model.eval()</code> and an inference/no-grad context.</p>
+<ol start="9">
+<li><strong>What happens if you forget <code>optimizer.zero_grad()</code>?</strong> — <strong>Difficulty:</strong> Easy</li>
+</ol>
+<p>PyTorch accumulates gradients into each parameter's <code>.grad</code>. Without clearing them, the next update uses the sum of gradients from multiple backward passes. That is useful only when deliberate gradient accumulation is implemented with the correct loss scaling and optimizer-step schedule; otherwise, it silently changes the optimization behavior.</p>
+<ol start="10">
+<li>
+<p><strong>How would you refactor a monolithic ML script into clean modules?</strong> — <strong>Difficulty:</strong> Medium</p>
+<p>Separate configuration, dataset and preprocessing code, model construction, training, evaluation, metrics, checkpointing, and logging. Keep tensor transformations and metrics as pure functions where possible, make orchestration loops thin, and pass dependencies explicitly instead of relying on global state. Use stable interfaces based on tensors and small result dictionaries rather than tightly coupling every component to one framework abstraction.</p>
+</li>
+<li>
+<p><strong>How would you write a utility that works on both CPU and GPU?</strong> — <strong>Difficulty:</strong> Easy</p>
+<p>Derive new tensors from existing tensors or create them with the input's <code>device</code> and <code>dtype</code>; do not call <code>.cuda()</code> or create hidden CPU constants inside the function. Move the complete batch at a clear boundary, keep participating tensors on compatible devices, and return results on the input device unless the contract explicitly says otherwise. Test CPU/GPU parity within an appropriate numerical tolerance.</p>
+</li>
+<li>
+<p><strong>What tests would you write for a tensor preprocessing or metric utility?</strong> — <strong>Difficulty:</strong> Medium</p>
+<p>Test the normal case plus singleton batches, constant values, missing or non-finite values, empty inputs where supported, incorrect ranks, incompatible dtypes, and noncontiguous tensors. Verify expected shapes, device and dtype preservation, numerical output, no unintended mutation, serialization of fitted state, and CPU/accelerator parity. For preprocessing, add a leakage test; for metrics, include all-positive, all-negative, and zero-denominator cases.</p>
+</li>
+</ol>
+<h2 id="broader-discussion-questions-with-reference-responses">Broader discussion questions with reference responses</h2>
+<ol>
+<li>
+<p><strong>What makes an ML utility reusable without excessive abstraction?</strong> — <strong>Difficulty:</strong> Medium
+   It should have a small explicit contract, useful defaults, clear shape/device/dtype behavior, composable inputs and outputs, and focused tests. Add abstraction only after multiple real use cases reveal a stable common interface.</p>
+</li>
+<li>
+<p><strong>Which validation belongs at module boundaries?</strong> — <strong>Difficulty:</strong> Medium
+   Validate assumptions that would otherwise fail later or produce a silent wrong result: rank, feature width, dtype family, value range, fitted state, required keys, and incompatible configuration combinations. Avoid repeating expensive checks inside tight inner loops when upstream contracts already guarantee them.</p>
+</li>
+<li>
+<p><strong>When should a utility return tensors versus Python numbers?</strong> — <strong>Difficulty:</strong> Easy
+   Return tensors when callers may need device-side composition, batching, distributed reduction, or gradients. Return Python numbers at reporting or serialization boundaries where synchronization is intentional.</p>
+</li>
+<li>
+<p><strong>How do you keep preprocessing consistent across training, evaluation, and inference?</strong> — <strong>Difficulty:</strong> Medium
+   Implement one versioned preprocessing component, fit it only on training data, serialize its state with the model artifact, and reuse it in evaluation and serving. Test parity with golden examples.</p>
+</li>
+<li>
+<p><strong>How should an ML codebase be structured for independent testing?</strong> — <strong>Difficulty:</strong> Medium
+   Separate pure transformations and metrics from stateful orchestration. Inject the model, loss, optimizer, data source, and callbacks into thin loops so each boundary can be tested with synthetic data and simple fakes.</p>
+</li>
+<li>
+<p><strong>What can PyTorch control about reproducibility?</strong> — <strong>Difficulty:</strong> Medium
+   It can seed its RNGs, request deterministic algorithms, and control generator use, but hardware, library versions, distributed scheduling, data pipelines, and floating-point reduction order can still affect results. Reproducibility is an end-to-end system property.</p>
+</li>
+<li>
+<p><strong>How do you balance readable tensor code and vectorization?</strong> — <strong>Difficulty:</strong> Medium
+   Start with the clearest correct tensor expression, benchmark the actual bottleneck, and optimize only where the gain matters. Preserve readability with named intermediate shapes, assertions, comments about semantics, and equivalence tests.</p>
+</li>
+<li>
+<p><strong>What should a training loop log?</strong> — <strong>Difficulty:</strong> Medium
+   Log resolved configuration, code/data/model versions, epoch and global step, losses, key metrics, learning rate, throughput, gradient norms when useful, validation results, checkpoint identity, timing, and notable warnings such as skipped non-finite batches.</p>
+</li>
+<li>
+<p><strong>How do you review correctness across devices, dtypes, and shapes?</strong> — <strong>Difficulty:</strong> Medium
+   Define the supported matrix, parameterize tests across it, include singleton/empty/noncontiguous cases, compare CPU and accelerator outputs within tolerance, and test mixed precision plus serialization. Unsupported combinations should fail clearly.</p>
+</li>
+<li>
+<p><strong>What changes before moving notebook code into production?</strong> — <strong>Difficulty:</strong> Medium
+    Extract configuration and reusable modules, remove hidden state, add validation and tests, make preprocessing reproducible, add logging/checkpointing/error handling, pin dependencies, profile resource use, define artifact/version contracts, and document deployment and rollback behavior.</p>
+</li>
+</ol></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLC/pytorch-ml-coding.md">src/MLC/pytorch-ml-coding.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

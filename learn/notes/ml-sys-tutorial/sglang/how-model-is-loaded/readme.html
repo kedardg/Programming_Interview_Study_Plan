@@ -1,0 +1,152 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How A Model is Loaded in Hugging Face and SGLang</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/how-model-is-loaded/readme.md</div>
+<article class="note"><h1 id="how-a-model-is-loaded-in-hugging-face-and-sglang">How A Model is Loaded in Hugging Face and SGLang</h1>
+<p>I spend several days to build up the online update weights feature in SGLang for RLHF workflow. Till now, I still couldn't figure out how to load the <code>[name, weights]</code> pairs into SGLang Engine. This is quite annoying, so I decide to dig into the code to figure out how it works.</p>
+<p>Thus, this note is written to record my findings on how a model is loaded in Hugging Face and SGLang. We will first start with Hugging Face, and then move on to SGLang. All the codes are based on the <code>meta-llama/Llama-3.2-1B-Instruct</code> model.</p>
+<h2 id="hugging-face">Hugging Face</h2>
+<p>Loading a model from Hugging Face is quite simple with its direct API.</p>
+<pre><code class="language-python">from transformers import AutoModelForCausalLM, AutoTokenizer
+
+model = AutoModelForCausalLM.from_pretrained(&quot;meta-llama/Llama-3.2-1B-Instruct&quot;, torch_dtype=&quot;bfloat16&quot;).to(&quot;cuda&quot;)
+tokenizer = AutoTokenizer.from_pretrained(&quot;meta-llama/Llama-3.2-1B-Instruct&quot;)
+print(model)
+</code></pre>
+<p>Try to print the model, we get the following output:</p>
+<pre><code class="language-python">LlamaForCausalLM(
+  (model): LlamaModel(
+    (embed_tokens): Embedding(128256, 2048)
+    (layers): ModuleList(
+      (0-15): 16 x LlamaDecoderLayer(
+        (self_attn): LlamaSdpaAttention(
+          (q_proj): Linear(in_features=2048, out_features=2048, bias=False)
+          (k_proj): Linear(in_features=2048, out_features=512, bias=False)
+          (v_proj): Linear(in_features=2048, out_features=512, bias=False)
+          (o_proj): Linear(in_features=2048, out_features=2048, bias=False)
+          (rotary_emb): LlamaRotaryEmbedding()
+        )
+        (mlp): LlamaMLP(
+          (gate_proj): Linear(in_features=2048, out_features=8192, bias=False)
+          (up_proj): Linear(in_features=2048, out_features=8192, bias=False)
+          (down_proj): Linear(in_features=8192, out_features=2048, bias=False)
+          (act_fn): SiLU()
+        )
+        (input_layernorm): LlamaRMSNorm((2048,), eps=1e-05)
+        (post_attention_layernorm): LlamaRMSNorm((2048,), eps=1e-05)
+      )
+    )
+    (norm): LlamaRMSNorm((2048,), eps=1e-05)
+    (rotary_emb): LlamaRotaryEmbedding()
+  )
+  (lm_head): Linear(in_features=2048, out_features=128256, bias=False)
+)
+</code></pre>
+<p>Let's go into the detailed component of the model, i.e., <code>model.model, model.lm_head</code>.</p>
+<h3 id="modelmodel"><code>model.model</code></h3>
+<p>The whole class <code>LlamaModel</code> implements the Transformer decoder architecture.</p>
+<ol>
+<li><strong>Embedding Layer</strong></li>
+</ol>
+<ul>
+<li><code>embed_tokens: Embedding(128256, 2048)</code></li>
+<li><code>128256</code>: Vocabulary size.</li>
+<li><code>2048</code>: Dimensionality of each embedding vector.</li>
+<li>Maps discrete vocabulary indices to continuous embedding vectors.</li>
+</ul>
+<ol start="2">
+<li><strong>Decoder Layers</strong></li>
+</ol>
+<ul>
+<li><code>layers: ModuleList (16 x LlamaDecoderLayer)</code></li>
+<li>
+<p>A stack of 16 decoder layers. Each <code>LlamaDecoderLayer</code> contains one <code>self_attn, mlp, input_layernorm, post_attention_layernorm</code>.</p>
+</li>
+<li>
+<p><code>self_attn: LlamaSdpaAttention</code>: Computes self-attention scores and aggregates contextual information.</p>
+</li>
+<li><code>q_proj</code>: Projects input features into the query space. Input: <code>2048</code>, Output: <code>2048</code>.</li>
+<li><code>k_proj</code>: Projects input features into the key space. Input: <code>2048</code>, Output: <code>512</code> (dimensionality reduction for efficiency).</li>
+<li><code>v_proj</code>: Projects input features into the value space. Input: <code>2048</code>, Output: <code>512</code>.</li>
+<li><code>o_proj</code>: Projects attention outputs back to the input feature dimensionality. Input: <code>2048</code>, Output: <code>2048</code>.</li>
+<li>
+<p><code>rotary_emb</code>: Rotary positional embeddings to encode sequence position.</p>
+</li>
+<li>
+<p><code>mlp: LlamaMLP</code>: Applies non-linear transformations through a multi-layer perceptron.</p>
+</li>
+<li><code>gate_proj</code>: Linear layer, Input: <code>2048</code>, Output: <code>8192</code>.</li>
+<li><code>up_proj</code>: Linear layer, Input: <code>2048</code>, Output: <code>8192</code>.</li>
+<li><code>down_proj</code>: Linear layer, Input: <code>8192</code>, Output: <code>2048</code>.</li>
+<li>
+<p><code>act_fn</code>: Activation function <code>SiLU</code> (Swish) introduces non-linearity.</p>
+</li>
+<li>
+<p><code>input_layernorm</code>: Applies RMSNorm to the layer input with dimensionality <code>2048</code>.</p>
+</li>
+<li><code>post_attention_layernorm</code>: Applies RMSNorm after the attention mechanism.</li>
+</ul>
+<ol start="3">
+<li><strong>Global Normalization</strong></li>
+</ol>
+<ul>
+<li><code>norm: LlamaRMSNorm((2048,), eps=1e-05)</code></li>
+<li>Applies RMSNorm to the final decoder output for stable feature scaling.</li>
+</ul>
+<ol start="4">
+<li><strong>Rotary Positional Embedding</strong></li>
+</ol>
+<ul>
+<li><code>rotary_emb: LlamaRotaryEmbedding()</code></li>
+<li>Encodes positional information using rotary embeddings to enhance sequence modeling.</li>
+</ul>
+<h3 id="modellm_head"><code>model.lm_head</code></h3>
+<ul>
+<li><code>lm_head: Linear(in_features=2048, out_features=128256, bias=False)</code></li>
+<li>A linear layer that maps the decoder's output features (dim: <code>2048</code>) to the vocabulary size (<code>128256</code>).</li>
+<li>No bias term: Reduces the number of trainable parameters and computation complexity.</li>
+</ul>
+<h3 id="model-state-dict">Model State Dict</h3>
+<p>In Pytorch, <code>state_dict</code> is a core mechanism for saving and loading the parameters and optimizer states of a model. Here is its function and principle:</p>
+<ul>
+<li><code>state_dict</code>: A Python dictionary object that maps each layer to its parameter tensor.</li>
+<li><code>model.state_dict()</code>: Returns the state dictionary of the model, containing all the weights and biases.</li>
+<li><code>torch.save(model.state_dict(), PATH)</code>: Saves the state dictionary to a file.</li>
+<li><code>model.load_state_dict(torch.load(PATH))</code>: Loads the state dictionary from a file.</li>
+</ul>
+<p>As you see, state dict is a dictionary, and contains the name and weights of each layer.</p>
+<p>We first get the state dict of the model, and then get its VRAM usage.</p>
+<pre><code class="language-python">state_dict = model.state_dict()
+
+total_memory = 0
+for name, param in state_dict.items():
+    param_memory = param.numel() * param.element_size()  # numel() gives the number of elements, element_size() gives the size in bytes
+    total_memory += param_memory
+
+total_memory_mb = total_memory / (1024 * 1024)
+print(f&quot;Total memory usage of the state_dict: {total_memory_mb:.2f} MB&quot;)
+
+# Total memory usage of the state_dict: 2858.13 MB
+</code></pre>
+<p>A 1B model in bfloat16 precision takes about 2.8GB VRAM, that's reasonable.</p>
+<pre><code class="language-python">
+print(state_dict.keys())
+
+# odict_keys(['model.embed_tokens.weight', 'model.layers.0.self_attn.q_proj.weight', 'model.layers.0.self_attn.k_proj.weight', 'model.layers.0.self_attn.v_proj.weight', 'model.layers.0.self_attn.o_proj.weight', 'model.layers.0.mlp.gate_proj.weight', 'model.layers.0.mlp.up_proj.weight', 'model.layers.0.mlp.down_proj.weight', 'model.layers.0.input_layernorm.weight', 'model.layers.0.post_attention_layernorm.weight', 'model.layers.1.self_attn.q_proj.weight', 'model.layers.1.self_attn.k_proj.weight', 'model.layers.1.self_attn.v_proj.weight', 'model.layers.1.self_attn.o_proj.weight', 'model.layers.1.mlp.gate_proj.weight', 'model.layers.1.mlp.up_proj.weight', 'model.layers.1.mlp.down_proj.weight', 'model.layers.1.input_layernorm.weight', 'model.layers.1.post_attention_layernorm.weight', 'model.layers.2.self_attn.q_proj.weight', 'model.layers.2.self_attn.k_proj.weight', 'model.layers.2.self_attn.v_proj.weight', 'model.layers.2.self_attn.o_proj.weight', 'model.layers.2.mlp.gate_proj.weight', 'model.layers.2.mlp.up_proj.weight', 'model.layers.2.mlp.down_proj.weight', 'model.layers.2.input_layernorm.weight', 'model.layers.2.post_attention_layernorm.weight', 'model.layers.3.self_attn.q_proj.weight', 'model.layers.3.self_attn.k_proj.weight', 'model.layers.3.self_attn.v_proj.weight', 'model.layers.3.self_attn.o_proj.weight', 'model.layers.3.mlp.gate_proj.weight', 'model.layers.3.mlp.up_proj.weight', 'model.layers.3.mlp.down_proj.weight', 'model.layers.3.input_layernorm.weight', 'model.layers.3.post_attention_layernorm.weight', 'model.layers.4.self_attn.q_proj.weight', 'model.layers.4.self_attn.k_proj.weight', 'model.layers.4.self_attn.v_proj.weight', 'model.layers.4.self_attn.o_proj.weight', 'model.layers.4.mlp.gate_proj.weight', 'model.layers.4.mlp.up_proj.weight', 'model.layers.4.mlp.down_proj.weight', 'model.layers.4.input_layernorm.weight', 'model.layers.4.post_attention_layernorm.weight', 'model.layers.5.self_attn.q_proj.weight', 'model.layers.5.self_attn.k_proj.weight', 'model.layers.5.self_attn.v_proj.weight', 'model.layers.5.self_attn.o_proj.weight', 'model.layers.5.mlp.gate_proj.weight', 'model.layers.5.mlp.up_proj.weight', 'model.layers.5.mlp.down_proj.weight', 'model.layers.5.input_layernorm.weight', 'model.layers.5.post_attention_layernorm.weight', 'model.layers.6.self_attn.q_proj.weight', 'model.layers.6.self_attn.k_proj.weight', 'model.layers.6.self_attn.v_proj.weight', 'model.layers.6.self_attn.o_proj.weight', 'model.layers.6.mlp.gate_proj.weight', 'model.layers.6.mlp.up_proj.weight', 'model.layers.6.mlp.down_proj.weight', 'model.layers.6.input_layernorm.weight', 'model.layers.6.post_attention_layernorm.weight', 'model.layers.7.self_attn.q_proj.weight', 'model.layers.7.self_attn.k_proj.weight', 'model.layers.7.self_attn.v_proj.weight', 'model.layers.7.self_attn.o_proj.weight', 'model.layers.7.mlp.gate_proj.weight', 'model.layers.7.mlp.up_proj.weight', 'model.layers.7.mlp.down_proj.weight', 'model.layers.7.input_layernorm.weight', 'model.layers.7.post_attention_layernorm.weight', 'model.layers.8.self_attn.q_proj.weight', 'model.layers.8.self_attn.k_proj.weight', 'model.layers.8.self_attn.v_proj.weight', 'model.layers.8.self_attn.o_proj.weight', 'model.layers.8.mlp.gate_proj.weight', 'model.layers.8.mlp.up_proj.weight', 'model.layers.8.mlp.down_proj.weight', 'model.layers.8.input_layernorm.weight', 'model.layers.8.post_attention_layernorm.weight', 'model.layers.9.self_attn.q_proj.weight', 'model.layers.9.self_attn.k_proj.weight', 'model.layers.9.self_attn.v_proj.weight', 'model.layers.9.self_attn.o_proj.weight', 'model.layers.9.mlp.gate_proj.weight', 'model.layers.9.mlp.up_proj.weight', 'model.layers.9.mlp.down_proj.weight', 'model.layers.9.input_layernorm.weight', 'model.layers.9.post_attention_layernorm.weight', 'model.layers.10.self_attn.q_proj.weight', 'model.layers.10.self_attn.k_proj.weight', 'model.layers.10.self_attn.v_proj.weight', 'model.layers.10.self_attn.o_proj.weight', 'model.layers.10.mlp.gate_proj.weight', 'model.layers.10.mlp.up_proj.weight', 'model.layers.10.mlp.down_proj.weight', 'model.layers.10.input_layernorm.weight', 'model.layers.10.post_attention_layernorm.weight', 'model.layers.11.self_attn.q_proj.weight', 'model.layers.11.self_attn.k_proj.weight', 'model.layers.11.self_attn.v_proj.weight', 'model.layers.11.self_attn.o_proj.weight', 'model.layers.11.mlp.gate_proj.weight', 'model.layers.11.mlp.up_proj.weight', 'model.layers.11.mlp.down_proj.weight', 'model.layers.11.input_layernorm.weight', 'model.layers.11.post_attention_layernorm.weight', 'model.layers.12.self_attn.q_proj.weight', 'model.layers.12.self_attn.k_proj.weight', 'model.layers.12.self_attn.v_proj.weight', 'model.layers.12.self_attn.o_proj.weight', 'model.layers.12.mlp.gate_proj.weight', 'model.layers.12.mlp.up_proj.weight', 'model.layers.12.mlp.down_proj.weight', 'model.layers.12.input_layernorm.weight', 'model.layers.12.post_attention_layernorm.weight', 'model.layers.13.self_attn.q_proj.weight', 'model.layers.13.self_attn.k_proj.weight', 'model.layers.13.self_attn.v_proj.weight', 'model.layers.13.self_attn.o_proj.weight', 'model.layers.13.mlp.gate_proj.weight', 'model.layers.13.mlp.up_proj.weight', 'model.layers.13.mlp.down_proj.weight', 'model.layers.13.input_layernorm.weight', 'model.layers.13.post_attention_layernorm.weight', 'model.layers.14.self_attn.q_proj.weight', 'model.layers.14.self_attn.k_proj.weight', 'model.layers.14.self_attn.v_proj.weight', 'model.layers.14.self_attn.o_proj.weight', 'model.layers.14.mlp.gate_proj.weight', 'model.layers.14.mlp.up_proj.weight', 'model.layers.14.mlp.down_proj.weight', 'model.layers.14.input_layernorm.weight', 'model.layers.14.post_attention_layernorm.weight', 'model.layers.15.self_attn.q_proj.weight', 'model.layers.15.self_attn.k_proj.weight', 'model.layers.15.self_attn.v_proj.weight', 'model.layers.15.self_attn.o_proj.weight', 'model.layers.15.mlp.gate_proj.weight', 'model.layers.15.mlp.up_proj.weight', 'model.layers.15.mlp.down_proj.weight', 'model.layers.15.input_layernorm.weight', 'model.layers.15.post_attention_layernorm.weight', 'model.norm.weight', 'lm_head.weight'])
+</code></pre>
+<p>Different from the model architecture, the state dict unsqueezes the name and weights of all the components.</p>
+<p>Also, <code>dict(model.named_parameters()).keys()</code> gives the same result.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/how-model-is-loaded/readme.md">sglang/how-model-is-loaded/readme.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

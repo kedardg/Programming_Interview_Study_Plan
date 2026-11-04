@@ -1,0 +1,459 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beyond NVIDIA: Trainium, TPU &amp; More</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html" class="here">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Beyond NVIDIA: Trainium/NKI, TPU &amp; the Hardware Landscape</h1>
+<p class="dim">The ideas from the <a href="gpu.html">GPU</a> and <a href="kernels.html">Kernels</a> chapters — memory hierarchies, tiles, rooflines — reappear on every accelerator, just with different names and different trade-offs. This chapter covers AWS Trainium and the NKI programming model in depth, Google's TPU, AMD, and how to study them without owning the hardware. It is the interactive companion to Step 16 of the plan.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (10:21)</h3><audio controls preload="none" src="audio/hardware.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/hardware.txt">Read the transcript</a>.</p></div>
+<h2 id="why">2. Why alternatives exist at all</h2>
+<p>Three forces, all economic. <strong>Cost per token:</strong> inference at scale is a utility bill; if an accelerator delivers the same tokens for 30% less, that compounds into millions. <strong>Supply:</strong> top-end NVIDIA GPUs have been allocation-constrained for years; a second source is risk management. <strong>Vertical integration:</strong> AWS, Google, and Meta run the same few models at enormous scale, so a chip co-designed with the workload (and billed at cost) beats a general-purpose one at list price. For you, the engineering consequence is portability pressure: the serving stack of the future targets more than one backend, and people who can read an unfamiliar architecture doc and find the roofline quickly are rare.</p>
+<p>One honest caveat, straight from Step 16 of the plan: <em>read each architecture with its ISA or tuning guide — vendor peak numbers are not performance measurements.</em> Every claim below about "peak" is a ceiling, not a promise; the Deepgram case study (§4) shows what reaching even part of that ceiling takes.</p>
+
+<h2 id="trainium">2. AWS Trainium and the NeuronCore</h2>
+<p>A Trainium chip contains NeuronCores. Where an NVIDIA SM is a sea of identical warps scheduled onto shared pipelines, a NeuronCore is a small number of <strong>heterogeneous engines</strong>, each built for one job, connected by explicit on-chip memories:</p>
+<ul>
+<li><strong>Tensor engine</strong> — a 128×128 systolic array for matmuls (the big FLOPs; §5 animates how systolic arrays work).</li>
+<li><strong>Vector engine</strong> — elementwise and reduction math over tiles (softmax pieces, norms, activations).</li>
+<li><strong>Scalar engine</strong> — per-element functions (exp, sqrt) streamed over data.</li>
+<li><strong>GpSIMD engine</strong> — eight general-purpose DSP cores for the odd, control-heavy ops that fit nowhere else (custom top-k, dynamic shapes).</li>
+</ul>
+<p>The memory hierarchy is the real mental shift from CUDA. There is no hardware cache doing you favors: <strong>HBM</strong> (device memory) → <strong>SBUF</strong> (a 24&nbsp;MB software-managed staging buffer, organized as 128 partitions) → <strong>PSUM</strong> (a small accumulator memory the tensor engine writes matmul results into). Your kernel — or the compiler — explicitly DMAs tiles HBM→SBUF, feeds the engines from SBUF, accumulates in PSUM, and copies results back. The CUDA translation table:</p>
+<table class="cmp">
+<tr><th>Trainium</th><th>Closest CUDA concept</th><th>Key difference</th></tr>
+<tr><td>SBUF (24 MB, 128 partitions)</td><td>Shared memory / L1</td><td>Software-managed via tiles; much larger; partition dim ≤ 128 shapes every kernel</td></tr>
+<tr><td>PSUM</td><td>Tensor-core accumulator registers / Blackwell tensor memory</td><td>A named, addressable memory you allocate buffers in</td></tr>
+<tr><td>Engines (Tensor/Vector/Scalar/GpSIMD)</td><td>Pipelines inside an SM</td><td>Independently programmable; overlap is explicit, not warp-scheduled</td></tr>
+<tr><td>DMA queues</td><td>cp.async / TMA</td><td>All data movement is explicit DMA; no load/store through a cache</td></tr>
+</table>
+
+<div class="card">
+<h3>Animation: a tiled matmul flowing through a NeuronCore</h3>
+<canvas id="ncViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="ncPlay">▶ Play</button>
+  <button class="btn secondary" id="ncStep">Step</button>
+  <button class="btn secondary" id="ncReset">Reset</button>
+</div>
+<p class="caption">One C-tile of a matmul: A- and B-tiles DMA from HBM into SBUF partitions (step 1–2), the tensor engine streams them through its systolic array and accumulates partial products into PSUM across the K-loop (steps 3–5 — note PSUM fills <em>in place</em>, that's what an accumulator memory is for), the vector/scalar engines apply the epilogue (bias, activation) as the result copies back to SBUF, and a final DMA returns it to HBM. The pipelining insight: while the tensor engine chews tile k, the DMA engines are already fetching tile k+1 — the same double-buffering you built in the <a href="kernels.html">Kernels chapter</a>, with different names.</p>
+</div>
+
+<h2 id="nki">3. The NKI programming model</h2>
+<p><strong>NKI</strong> (Neuron Kernel Interface) is the Triton-analog for this hardware: a Python-embedded tile language. You write functions over <em>tiles</em> — arrays whose first ("partition") dimension is at most 128, matching SBUF's 128 partitions — and the compiler maps tile ops onto engines and schedules the DMAs. A real, annotated kernel:</p>
+<div class="formula">import neuronxcc.nki as nki
+import neuronxcc.nki.language as nl
+
+@nki.jit
+def matmul_kernel(A, B):                      # A:[M,K]  B:[K,N]  in HBM
+    C = nl.ndarray((A.shape[0], B.shape[1]), dtype=A.dtype,
+                   buffer=nl.shared_hbm)
+    TM, TK, TN = 128, 128, 512                # partition dim ≤ 128 (hardware rule)
+    for m in nl.affine_range(A.shape[0] // TM):      # affine_range → compiler may
+        for n in nl.affine_range(B.shape[1] // TN):  #   pipeline iterations
+            acc = nl.zeros((TM, TN), dtype=nl.float32,
+                           buffer=nl.psum)    # accumulator lives in PSUM
+            for k in nl.affine_range(A.shape[1] // TK):
+                a = nl.load(A[m*TM:(m+1)*TM, k*TK:(k+1)*TK])   # DMA: HBM → SBUF
+                b = nl.load(B[k*TK:(k+1)*TK, n*TN:(n+1)*TN])   # DMA: HBM → SBUF
+                acc += nl.matmul(a, b)        # tensor engine → accumulate in PSUM
+            nl.store(C[m*TM:(m+1)*TM, n*TN:(n+1)*TN], acc)     # PSUM→SBUF→HBM
+    return C
+
+# runs on your laptop CPU — no Trainium required:
+out = nki.simulate_kernel(matmul_kernel, A_np, B_np)</div>
+<p>Compare line-for-line with your Triton matmul from the Kernels chapter: <code>nl.load</code> ↔ <code>tl.load</code>, <code>affine_range</code> ↔ the pid grid, PSUM buffer ↔ the fp32 <code>acc</code> you kept in registers. The concepts transfer; the constraint that changes your tiling is the 128-partition limit and explicitly-sized SBUF/PSUM. <code>nki.simulate_kernel</code> runs kernels on CPU with real numerics — which is why the plan's Step 18 exercise (port your online softmax or RoPE kernel to NKI and compare against the reference) needs no AWS account.</p>
+<p>The <a href="https://github.com/aws-neuron/nki-library">NKI Library</a> is the production kernel catalog, and its structure repeats the <a href="inference.html">Inference chapter</a>: attention ships as <strong>CTE</strong> (context encoding = prefill: big parallel matmuls) and <strong>TKG</strong> (token generation = decode: bandwidth-bound, batch-skinny) variants, because the two phases want different tilings — the same prefill/decode asymmetry, baked into kernel names. Around them: MLP/MoE kernels, QKV and output projections with <em>fused normalization</em> (fusion logic again), RoPE, FP8/MX quantization kernels, and <strong>NeuroTile</strong>, a tile-iterator library that abstracts the HBM/SBUF/PSUM choreography for kernel authors. <strong>LNC sharding</strong> (logical NeuronCore) lets one kernel span multiple physical cores — the library marks which kernels support it; think of it as the tile-level analog of tensor parallelism.</p>
+
+<h2 id="deepgram">4. Case study: Deepgram's port, generalized</h2>
+<p>Deepgram moved Nova-3 (speech-to-text) batch inference to Trainium2 and reported <strong>11–70% more audio processed per dollar</strong>. The engineering decisions are a checklist for porting <em>anything</em> to <em>any</em> accelerator:</p>
+<ul>
+<li><strong>Static shapes.</strong> The encoder and decoder were compiled <em>separately</em>, each for fixed input shapes. Ahead-of-time compilers for systolic hardware want static graphs; dynamic shapes either recompile (slow) or fall back. The prefill/decode split maps naturally onto two compiled artifacts — notice this is the CTE/TKG split again.</li>
+<li><strong>Zero CPU fallbacks.</strong> Any op the compiler can't map runs on the host CPU, and one fallback inside a hot loop can erase the hardware's entire advantage. "No operations fall back" was a milestone, not a given.</li>
+<li><strong>Replicas before parallelism.</strong> Eight model replicas per instance: for a model that fits on one core, data-parallel replicas beat model parallelism — no communication, perfect scaling (the <a href="parallelism.html">Parallelism chapter's</a> first rule).</li>
+<li><strong>Custom kernels only where it pays.</strong> NKI kernels were written for the few layers called repeatedly that drive end-to-end latency — not for the whole model. Profile first, customize the top of the profile, let the compiler handle the rest.</li>
+</ul>
+<div class="formula">The accelerator port checklist:
+1. Can every op compile? (count fallbacks → fix or re-express them)
+2. Can shapes be static? (bucket/pad inputs; split phases into separate graphs)
+3. Does the model fit per-core? (replicas > parallelism when it does)
+4. What's hot? (profile → hand-write only those kernels in NKI/Pallas/etc.)
+5. Measure cost per unit of work vs the GPU baseline — not peak FLOPs.</div>
+
+<h2 id="tpu">5. Google TPU: the systolic original</h2>
+<p>The TPU bet (2015, and unchanged in spirit through v7) is that if matmul is almost all the work, the chip should be mostly one giant matmul unit. The <strong>MXU</strong> is a systolic array: a grid of multiply-accumulate cells where <em>weights are loaded once and stay put</em> ("weight-stationary"), activations march in from the left one diagonal per clock, and partial sums flow downward, each cell adding its weight×activation as data passes through. No instruction fetch, no register files between ops — data movement <em>is</em> the computation, which is why systolic arrays are so area- and power-efficient for dense matmul (and why Trainium's tensor engine is also one).</p>
+
+<div class="card">
+<h3>Animation: a 4×4 weight-stationary systolic array</h3>
+<canvas id="sysViz" class="viz" width="900" height="380"></canvas>
+<div class="controls">
+  <button class="btn" id="sysPlay">▶ Play</button>
+  <button class="btn secondary" id="sysStep">Step clock</button>
+  <button class="btn secondary" id="sysReset">Reset</button>
+</div>
+<p class="caption">Computing y = W·x for four input columns. Weights (grey, one per cell) were pre-loaded and never move. Activations (blue) enter from the left, skewed one clock per row; each cell multiplies the passing activation by its resident weight and adds it to the partial sum (green) flowing down. After the pipeline fills, one complete output column exits the bottom <em>every clock</em>. Count the clocks: for an n×n array the first result takes ~2n cycles (fill), then throughput is n MACs per cell per clock with zero memory traffic inside the array.</p>
+</div>
+
+<p>Around the MXU: a <strong>VPU</strong> (vector unit) for everything that isn't matmul, <strong>VMEM</strong> — a software-managed on-chip buffer that plays exactly SBUF's role (HBM→VMEM→MXU) — and <strong>Pallas</strong> as the kernel language, sharing its tile-based design with Triton and NKI (the plan links both the Pallas design doc and its TPU hardware model in Step 16). At pod scale, chips connect over <strong>ICI</strong> links into 2-D/3-D torus topologies; a v4 pod wires 4096 chips, and the torus shape is why TPU collective algorithms and sharding layouts differ from NVLink-tree GPU clusters — the <a href="parallelism.html">Parallelism</a> chapter's topology-awareness point, at datacenter scale.</p>
+
+<h2 id="amd">6. AMD</h2>
+<p><strong>CDNA / Instinct MI350:</strong> AMD's datacenter line is architecturally the closest thing to NVIDIA here — compute units with matrix cores, LDS where you'd expect shared memory, HBM stacks (MI350: 288&nbsp;GB, more than any contemporary NVIDIA part — the headline reason it wins deals for serving huge models single-node). The chiplet construction (XCDs on an I/O die) is the main structural difference, and the ISA is public — the plan links the CDNA 4 whitepaper and instruction set directly.</p>
+<p><strong>HIP / ROCm:</strong> HIP is deliberately CUDA-shaped — <code>hipMalloc</code>, <code>hipLaunchKernel</code>, warps of 64 (wavefronts) instead of 32 — so kernels port with a sed-script's worth of changes and then need re-tuning (different occupancy math, different LDS banking). ROCm is the full stack: compiler, libraries (rocBLAS, MIOpen), profilers.</p>
+<p><strong>The kernel libraries:</strong> <a href="https://github.com/ROCm/composable_kernel">Composable Kernel</a> is AMD's CUTLASS — tiling/layout/operator primitives for building fused GEMM-family kernels; <a href="https://github.com/ROCm/aiter">AITER</a> packages ready inference operators (attention, MoE) the way FlashInfer does for NVIDIA; <a href="https://github.com/HazyResearch/HipKittens">HipKittens</a> ports the ThunderKittens tile-DSL idea to AMD. Triton targets AMD too — often the lowest-effort path to a fast custom kernel there, which is itself a lesson in why tile-level abstractions are winning.</p>
+
+<h2 id="compare">7. The landscape in one table</h2>
+<table class="cmp">
+<tr><th></th><th>Compute unit</th><th>Software-managed memory</th><th>Kernel language</th><th>Scale-up interconnect</th><th>Where it wins</th></tr>
+<tr><td><strong>NVIDIA</strong></td><td>SMs + tensor cores</td><td>Shared memory / TMA (+ HW caches)</td><td>CUDA, Triton, CUTLASS/CuTe</td><td>NVLink / NVL72 racks</td><td>Ecosystem, kernels exist for everything first</td></tr>
+<tr><td><strong>AMD</strong></td><td>CUs + matrix cores</td><td>LDS (+ HW caches)</td><td>HIP, Triton, Composable Kernel</td><td>Infinity Fabric</td><td>HBM capacity per GPU; price/perf for serving</td></tr>
+<tr><td><strong>Google TPU</strong></td><td>MXU systolic arrays + VPU</td><td>VMEM (no general cache)</td><td>Pallas (JAX), XLA</td><td>ICI torus (pods)</td><td>Training economics at pod scale, co-design with JAX</td></tr>
+<tr><td><strong>AWS Trainium</strong></td><td>Tensor/Vector/Scalar/GpSIMD engines</td><td>SBUF + PSUM</td><td>NKI, Neuron compiler</td><td>NeuronLink</td><td>Cost per token inside AWS; capacity on demand</td></tr>
+</table>
+<p>The convergent evolution is the takeaway: every vendor landed on (1) a big matmul engine, (2) a software-managed on-chip tile buffer, (3) a Python tile-DSL to program it, and (4) a proprietary scale-up fabric. Learn the pattern once — tiles in fast memory feeding a matmul unit, overlapped with explicit data movement, measured against a roofline — and each new chip is a vocabulary lesson, not a new field.</p>
+
+<h2 id="prep">8. Studying this without the hardware</h2>
+<ul>
+<li><strong>NKI:</strong> <code>pip install</code> the Neuron tools and use <code>nki.simulate_kernel</code> — full kernel development on CPU. Do the Step 18 exercise: port your online-softmax or RoPE kernel, then diff your tiling against the <a href="https://github.com/aws-neuron/nki-library">NKI Library</a> reference.</li>
+<li><strong>Pallas:</strong> runs in interpreter mode on CPU and compiles on GPU — you can learn the TPU kernel model on your 5080.</li>
+<li><strong>Read ISA and tuning guides, not marketing:</strong> the plan's Step 16 list (Trainium architecture docs, CDNA 4 ISA, TPU v4 paper, Ironwood docs) is ordered for exactly this.</li>
+<li><strong>Rent an hour</strong> of a trn1/trn2 or TPU VM when a kernel is sim-clean; profile it the way the <a href="gpu.html">GPU chapter</a> taught — the tools differ, the method doesn't.</li>
+</ul>
+
+<h2 id="migration">9. The GPU → Trainium migration playbook</h2>
+<p>Everything above is the hardware. This section is the <em>job</em>: you are the technical lead who has to move a customer's training or inference workload from GPUs onto Trainium, prove it is as accurate and cheaper, and turn that proof into a capacity decision someone will sign. The Deepgram checklist in §4 is the compressed version; here it is unpacked into the workflow, the debugging methodology, the profiling loop, and the evidence format that actually gets a migration approved. It assumes the serving concepts of <a href="inference.html">Chapter 11</a> and the parallelism vocabulary of <a href="parallelism.html">Chapter 12</a>.</p>
+
+<h3>9.1 The workflow: four phases and two gates</h3>
+<p><strong>Phase 0 — baseline before you touch anything.</strong> A migration without a GPU baseline cannot succeed, because "parity" has no referent. Freeze one evaluation harness (the customer's real evals, not a public benchmark), one benchmark harness (fixed prompt-length distribution, fixed output lengths, fixed concurrency sweep), one checkpoint, one tokenizer. Run both on the GPU fleet and record quality scores, TTFT/TPOT/throughput, and dollars per million tokens at the concurrency the customer actually runs. Every later number is a ratio against this.</p>
+<p><strong>Phase 1 — inventory the graph.</strong> Ahead-of-time compilers for systolic hardware want static graphs. List every op (custom attention, fused kernels, sampling tricks, LoRA adapters, quantization formats) and every dynamic dimension (sequence length, batch, number of images). Dynamic lengths become <em>buckets</em>: compile for 512/1K/2K/4K/8K and pad to the next bucket; prefill and decode become separate compiled artifacts (the CTE/TKG split of §3). Anything the compiler cannot map will run on the host CPU — <strong>one fallback inside the decode loop can erase the entire cost advantage</strong>, so fallbacks are counted, not tolerated.</p>
+<p><strong>Phase 2 — compile and run.</strong> Inference: vLLM on Neuron (the <code>neuron</code> device plugin) or NeuronX Distributed Inference (NxDI) for the model classes they already support; training: NeuronX Distributed (NxD) with its tensor/pipeline/data parallel primitives. Read the compiler report, not just the exit code: it lists unsupported ops, graph partitions, and compile time per bucket.</p>
+<p><strong>Phase 3 — the two gates.</strong> <em>Accuracy gate:</em> eval scores on Neuron within the run-to-run noise of the GPU baseline (§9.2). <em>Performance gate:</em> cost per unit of work below the GPU baseline at the customer's SLOs (§9.3). Only when both pass do you write the capacity recommendation (§9.4). Teams that skip the accuracy gate ship a cheaper model that is quietly worse; teams that skip the baseline ship a benchmark nobody trusts.</p>
+<div class="formula"># Phase 1–2, inference path (illustrative flags; check the current Neuron release notes)
+pip install neuronx-cc torch-neuronx neuronx-distributed-inference vllm-neuron
+export NEURON_COMPILED_ARTIFACTS=./artifacts        # cache compiled buckets
+export NEURON_CC_FLAGS="--model-type=transformer --enable-saturate-infinity"
+
+# compile once per (tp_degree, bucket set); the report lists fallbacks
+python -m neuronx_distributed_inference.compile \
+  --model meta-llama/Llama-3.1-70B-Instruct --tp-degree 32 \
+  --max-context-length 8192 --context-buckets 512,1024,2048,4096,8192 \
+  --token-gen-buckets 512,1024,2048,4096,8192 --dtype bf16
+
+# serve with continuous batching, same client harness as the GPU baseline
+vllm serve meta-llama/Llama-3.1-70B-Instruct --device neuron \
+  --tensor-parallel-size 32 --max-num-seqs 64 --max-model-len 8192
+vllm bench serve --model meta-llama/Llama-3.1-70B-Instruct \
+  --dataset-name sharegpt --num-prompts 2000 --request-rate 8   # identical to GPU run</div>
+
+<h3>9.2 Accuracy parity: a methodology, not a vibe</h3>
+<p>The question is never "are the logits identical" — they will not be, and that is fine. BF16 matmuls accumulate in different orders on a 128×128 systolic array than on tensor cores; fused kernels round at different points; the softmax may be computed with a different max-subtraction scheme. The question is whether the <em>distribution of outputs</em> the customer cares about is unchanged. Three layers of evidence, cheapest first:</p>
+<ol>
+<li><strong>Layer-by-layer activation diff on fixed inputs.</strong> Run the same prompts through both stacks with hooks that dump every layer's output, then report per-layer max-abs and relative error. Numerics drift grows slowly and smoothly through a healthy stack; a <em>bug</em> shows up as a step change at one layer. Finding the first diverging layer turns a week of guessing into an afternoon.</li>
+<li><strong>Token-level agreement under greedy decoding.</strong> Fraction of positions where both stacks pick the same argmax, and KL between their next-token distributions. Expect &gt;99% agreement on short outputs for a clean port; long outputs diverge after the first disagreement by construction, so compare per-position distributions, not whole strings.</li>
+<li><strong>The real evals, with error bars.</strong> Run the customer's eval suite N times on each stack (sampling temperature as in production) and compare means against the run-to-run standard deviation. Parity means "within noise" — if the GPU stack itself varies ±0.4 points between runs, a 0.3-point gap is not a finding.</li>
+</ol>
+<div class="formula"># parity_harness.py — same prompt, both stacks, first diverging layer
+import torch, json
+
+def capture(model, inputs, tag):
+    acts = {}
+    hooks = []
+    for i, layer in enumerate(model.model.layers):          # HF-style decoder
+        hooks.append(layer.register_forward_hook(
+            lambda m, inp, out, i=i: acts.__setitem__(i, out[0].float().cpu())))
+    with torch.no_grad():
+        logits = model(**inputs).logits.float().cpu()
+    for h in hooks: h.remove()
+    torch.save({"acts": acts, "logits": logits}, f"dump_{tag}.pt")
+
+def compare(gpu_path, trn_path, tol_rel=2e-2):
+    g, t = torch.load(gpu_path), torch.load(trn_path)
+    rows, first_bad = [], None
+    for i in sorted(g["acts"]):
+        a, b = g["acts"][i], t["acts"][i]
+        max_abs = (a - b).abs().max().item()
+        rel = ((a - b).norm() / a.norm()).item()           # relative Frobenius error
+        rows.append((i, max_abs, rel))
+        if first_bad is None and rel > tol_rel:
+            first_bad = i
+    pg, pt = g["logits"].softmax(-1), t["logits"].softmax(-1)
+    kl = (pg * (pg.clamp_min(1e-9).log() - pt.clamp_min(1e-9).log())).sum(-1).mean().item()
+    agree = (g["logits"].argmax(-1) == t["logits"].argmax(-1)).float().mean().item()
+    print(json.dumps({"first_diverging_layer": first_bad, "argmax_agreement": agree,
+                      "mean_kl": kl, "per_layer": rows}, indent=1))
+
+# Healthy port: rel error creeps 1e-3 → 5e-3 across 80 layers, argmax agreement 0.995+.
+# Bug: rel error 2e-3 at layer 16, 1.8e-1 at layer 17, and everything after is garbage.</div>
+<p><strong>A worked example.</strong> A 70B port passed the eval gate on short prompts and failed it on 6K-token prompts by three points. The harness showed relative error flat at ~3×10⁻³ through layer 16, then 1.8×10⁻¹ at layer 17's attention output — only for prompts above 4K tokens. Cause: the attention kernel used for the 8K bucket computed softmax with FP16 intermediates for the row max, which saturated for a handful of heads with large logits once positions were far apart (RoPE angles at long range amplify a few dimensions). The fix was to force BF16/FP32 for the softmax statistics in that bucket's kernel — exactly the "exponent beats mantissa" lesson of <a href="quantization.html">Chapter 10</a>. Without the per-layer, per-bucket diff, the symptom ("long prompts are a bit worse") would have been blamed on the model.</p>
+<p>The usual suspects, in the order you should check them: <strong>tokenizer and padding</strong> (left vs right padding, BOS handling, chat template) — these are not numerics and account for half of all "parity" bugs; <strong>KV-cache dtype</strong> (a cache quantized on one stack and not the other); <strong>RoPE</strong> (theta, scaling method, precision of the rotation); <strong>fused-op rounding</strong> (RMSNorm epsilon placement, SwiGLU fusion); <strong>attention softmax statistics</strong> precision; <strong>FP8/MX formats</strong> (per-tensor vs per-block scales, E4M3 vs E5M2); <strong>BF16 accumulation order</strong> (benign drift, not a bug — only a problem if someone set an unreasonable bitwise test); <strong>sampling</strong> (temperature/top-p implementations differ, so compare greedy first).</p>
+
+<h3>9.3 Performance parity: profile, then customize only the top of the profile</h3>
+<p>On a GPU you read Nsight; on Trainium you read the Neuron profiler, and the first thing it tells you is <strong>time per engine</strong> — how busy the Tensor, Vector, Scalar, and GpSIMD engines are, and how often they wait. The diagnostic patterns are few and recognizable:</p>
+<ul>
+<li><strong>Tensor engine busy, others idle, high utilization</strong> — you are compute-bound on matmuls; this is the good case (prefill, training). Remaining wins: precision (FP8/MX) and tile shapes that fill the 128×128 array.</li>
+<li><strong>Everyone idle, DMA queues full</strong> — HBM-bound, the decode regime. Wins: batch deeper (continuous batching on Neuron behaves like vLLM's), shrink bytes (KV cache dtype, weight quantization), check that buckets aren't padding decode to a far larger length than needed.</li>
+<li><strong>Vector/Scalar engines dominate</strong> — normalization, softmax, activations, RoPE are not overlapped with matmuls. This is where the NKI Library's fused kernels (QKV projection with fused norm, RMSNorm+quantize) earn their keep, and where a hand-written NKI kernel for <em>one</em> hot layer pays.</li>
+<li><strong>SBUF pressure / spills</strong> — tiles too large for the 24 MB staging buffer; the compiler re-fetches from HBM. Fix tile sizes or let LNC sharding split the work across two physical cores presented as one logical core.</li>
+<li><strong>Host gaps between graphs</strong> — CPU fallbacks or bucket switches. Each gap is a fallback to eliminate or a bucket boundary to move.</li>
+</ul>
+<p>The decision rule for custom kernels is the Deepgram rule: <strong>write NKI only for layers that are called repeatedly and sit at the top of the profile</strong>. Every custom kernel is code the customer must maintain across compiler releases, so the bar is "this layer is ≥15% of end-to-end time and the compiler's version is &gt;1.5× off what the NKI Library reference or a hand tiling achieves." Everything else stays on the compiler. The compile-time knobs come first because they are free: tensor-parallel degree (fit the model while keeping per-layer collectives inside the instance's NeuronLink island), LNC sharding (2 cores per logical core on Trn2), bucket sets (fewer buckets = less padding waste vs more compile artifacts), and sequence-length-aware batching.</p>
+<div class="formula"># profile one bucket, then read time-per-engine before you read anything else
+neuron-profile capture -n ./artifacts/ctx_4096.neff --output profile_ctx4096.ntff
+neuron-profile view -n profile_ctx4096.ntff        # engine utilization, DMA waits, per-op timeline
+
+# the only two numbers that end a performance argument
+cost_per_M_tokens = (instance_hourly_price / tokens_per_hour) * 1e6
+goodput          = requests_per_second meeting (TTFT_SLO and TPOT_SLO)   # Chapter 11</div>
+
+<div class="card">
+<h3>Interactive: the migration dashboard</h3>
+<div class="controls">
+  <label class="ctl">GPU baseline: tokens/s per instance <input type="range" id="mgGpuTps" min="500" max="20000" step="100" value="6000"> <span id="mgGpuTpsL"></span></label>
+  <label class="ctl">GPU instance $/hour <input type="range" id="mgGpuCost" min="5" max="120" step="1" value="98"> <span id="mgGpuCostL"></span></label>
+</div>
+<div class="controls">
+  <label class="ctl">Trainium measured: tokens/s per instance <input type="range" id="mgTrnTps" min="500" max="20000" step="100" value="5200"> <span id="mgTrnTpsL"></span></label>
+  <label class="ctl">Trainium instance $/hour <input type="range" id="mgTrnCost" min="5" max="120" step="1" value="40"> <span id="mgTrnCostL"></span></label>
+</div>
+<div class="controls">
+  <label class="ctl">Op fallbacks to CPU <input type="range" id="mgFallback" min="0" max="5" step="1" value="0"> <span id="mgFallbackL"></span></label>
+  <label class="ctl">Eval gap vs GPU (points) <input type="range" id="mgParity" min="0" max="3" step="0.1" value="0.2"> <span id="mgParityL"></span></label>
+  <label class="ctl">Run-to-run noise (points) <input type="range" id="mgNoise" min="0.1" max="1.5" step="0.1" value="0.4"> <span id="mgNoiseL"></span></label>
+</div>
+<canvas id="mgViz" class="viz" width="900" height="300"></canvas>
+<p class="caption">Cost per million tokens for both stacks, the go/no-go verdict, and the Trainium throughput gap decomposed into what profiling typically finds: unsupported-op fallbacks (each one stalls the decode loop), memory-bound decode, and compute mapping. Defaults are illustrative, not vendor numbers — the point of the exercise is that a slower-per-instance accelerator can still win on $/token, and that an eval gap larger than the noise is a hard no regardless of price.</p>
+</div>
+
+<h3>9.4 From benchmark evidence to a capacity decision</h3>
+<p>The deliverable that ends a migration is not a slide of speedups; it is a table an infrastructure lead can act on, one row per workload, with the cost basis stated. Rows are workloads because the answer differs by workload: prefill-heavy summarization may migrate first, a latency-critical agent loop may stay on GPUs for a release, and training may move when the next checkpoint is due.</p>
+<table class="cmp">
+<tr><th>Workload</th><th>GPU $/1M tok</th><th>Trn $/1M tok</th><th>Parity</th><th>Migration effort</th><th>Recommendation</th></tr>
+<tr><td>Batch summarization (prefill-heavy, 8K in / 300 out)</td><td>$0.92</td><td>$0.51</td><td>Within noise (−0.1 pt)</td><td>Low: supported model class, 5 buckets</td><td><span class="pill g">Migrate now</span> — 44% saving, no SLO</td></tr>
+<tr><td>Interactive chat (TTFT &lt; 600 ms, TPOT &lt; 40 ms)</td><td>$1.40</td><td>$1.05</td><td>Within noise</td><td>Medium: needs TP=32 + bucket tuning for TTFT</td><td><span class="pill w">Pilot 20% of traffic</span> — verify P99 TTFT under load</td></tr>
+<tr><td>Coding agent (long multi-turn, prefix reuse)</td><td>$2.10</td><td>$2.30</td><td>Within noise</td><td>High: prefix caching immature on this path</td><td><span class="pill a">Hold</span> — revisit when prefix caching lands</td></tr>
+<tr><td>Continued pretraining (dense 70B, FSDP)</td><td>$3.8M / run</td><td>$2.4M / run</td><td>Loss curve matches within 0.3%</td><td>Medium: NxD recipe exists; checkpoint conversion</td><td><span class="pill g">Migrate next run</span></td></tr>
+<tr><td>RL post-training (rollouts + verifier)</td><td>—</td><td>—</td><td>Not yet measured</td><td>High: rollout engine + trainer both must move</td><td><span class="pill a">Benchmark first</span> — rollouts dominate; measure them alone</td></tr>
+</table>
+<p class="caption">Dollar figures are illustrative placeholders showing the format; replace with the customer's measured numbers and on-demand vs reserved pricing stated explicitly.</p>
+<p><strong>Instance mapping, one line each.</strong> <em>trn1</em>: Trainium1 (NeuronCore v2), 16 chips / 32 cores per trn1.32xlarge, 512 GB HBM total, NeuronLink ring in-instance, EFA across — the migration-learning generation. <em>trn2</em>: Trainium2, 16 chips per trn2.48xlarge with ~1.5 TB HBM, 2D NeuronLink torus, and UltraServer configurations that join four instances (64 chips) into one NeuronLink domain — where 70B-class TP=32 serving and MoE training live. <em>trn3</em>: the current NeuronCore generation (see §2's architecture doc) with larger per-core SBUF and higher HBM bandwidth — read its architecture page before quoting ratios. Always quote <em>per-instance</em> throughput at the parallelism degree you tested; chips-per-instance differ by generation and ratios computed per chip mislead.</p>
+<p><strong>Capacity planning in plain terms.</strong> Accelerator capacity is reserved, not summoned: once the table above says "migrate," the next conversation is how many instances, in which region, for how long, and whether capacity blocks or reservations are needed to get them. Your benchmark evidence sets the number — tokens per hour per instance at the SLO, divided into the customer's forecast tokens per hour, plus headroom for peak (×1.5–2 is typical) and for the fact that a migration always uncovers one more bucket. Say the assumptions out loud: the forecast, the SLO, the parallelism degree, and the pricing basis, because the decision will be revisited when any of them changes.</p>
+
+<h3>9.5 Working with the Neuron team</h3>
+<p>You will hit capability gaps: an op without a kernel, a model class without an NxD recipe, a compiler release that regresses a bucket. The difference between a gap that closes in a release cycle and one that lingers is the quality of the report. File it as: <strong>minimal reproduction</strong> (the smallest graph or model that shows it, not the customer's full stack), <strong>exact shapes and dtypes</strong> per bucket, <strong>compiler and SDK versions</strong> (<code>neuronx-cc --version</code>, the pip freeze of the neuron packages), the <strong>profile or compiler report</strong> that shows the symptom, and the <strong>GPU reference number</strong> it is being compared against. Read the release notes for every SDK version before upgrading a customer: they list newly supported ops and known regressions, and a bucket that compiled last release may partition differently in the next. Remember the NKI Library's versioning from the study plan — <code>neuronx-cc</code> bundles a validated copy under <code>nkilib</code>, <code>pip install nki-library</code> overrides it with a newer branch, and <code>NKILIB_FORCE_BUNDLED_LIBRARY</code> restores the bundled one; pin which you are using in the customer's environment file, because "it got faster/slower after a pip install" is a real failure mode. Feed field evidence back deliberately: the gaps you document with numbers are what move service roadmaps, and the recipes you write to close them (bucket sets, parity harness, profiling checklist) are the reusable artifacts the next engagement starts from. The cost-model side of these decisions — what a point of quality is worth against a cent per million tokens — is developed in <a href="customization.html">the customization chapter</a>.</p>
+
+<h2 id="reading">10. Where to go deeper</h2>
+<ul>
+<li><a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/programming_model.html">NKI programming model</a> and the <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/v2.24.0/general/nki/nki_perf_guide.html">NKI performance guide</a> — the primary sources for §2–3.</li>
+<li><a href="https://github.com/aws-neuron/nki-library">NKI Library</a> and the <a href="https://aws.amazon.com/blogs/machine-learning/how-deepgram-optimized-voice-ai-at-scale-with-aws-trainium/">Deepgram case study</a> — Step 16's Trainium additions, unpacked in §3–4.</li>
+<li><a href="https://research.google/pubs/in-datacenter-performance-analysis-of-a-tensor-processing-unit/">TPU v1 paper</a> (the systolic argument, still the best intro) and <a href="https://arxiv.org/abs/2304.01433">TPU v4</a>; <a href="https://docs.jax.dev/en/latest/pallas/tpu/hardware.html">Pallas TPU hardware model</a>.</li>
+<li>For §9: the <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/libraries/neuronx-distributed/index.html">NeuronX Distributed (NxD)</a> docs, <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/libraries/nxd-inference/index.html">NxD Inference</a> and vLLM on Neuron, the <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/tools/profiler/index.html">Neuron profiler</a>, the <a href="https://github.com/aws-neuron/nki-library">NKI Library</a> repo (kernel catalog and versioning), and the <a href="https://aws.amazon.com/blogs/machine-learning/how-deepgram-optimized-voice-ai-at-scale-with-aws-trainium/">Deepgram case study</a> as the worked example of the playbook.</li>
+<li>Step 16 of the <a href="../index.html">study plan</a> for AMD's CDNA 4 whitepaper/ISA, and the <a href="flashcards.html">Hardware flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="robot-learning.html">← RL &amp; Robotics</a><a href="agents.html">Agents →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function onTheme(f){new MutationObserver(f).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+
+// ---------- 2. NeuronCore dataflow ----------
+(function(){
+const cv=document.getElementById('ncViz'),ctx=cv.getContext('2d');
+const PHASES=[
+ 'Idle. A tiled matmul C = A·B is about to run: one output tile, K-loop of 3.',
+ 'DMA: A-tile k=0 and B-tile k=0 stream HBM → SBUF partitions.',
+ 'Tensor engine consumes the SBUF tiles; partial product accumulates into PSUM (k=0). DMA already fetches k=1 tiles behind it.',
+ 'K-loop continues: PSUM accumulates k=1 in place. DMA fetches k=2.',
+ 'Final K step: PSUM now holds the complete C-tile sum (k=0+1+2).',
+ 'Epilogue: vector/scalar engines apply bias + activation as PSUM copies to SBUF.',
+ 'DMA: result tile SBUF → HBM. Next output tile begins — the pipeline never drains.'];
+let ph=0,timer=null;
+function box(x,y,w,h,label,color,alpha){const bd=css('--border');ctx.globalAlpha=alpha??1;ctx.fillStyle=color;ctx.fillRect(x,y,w,h);ctx.globalAlpha=1;ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.strokeRect(x,y,w,h);if(label){ctx.fillStyle=css('--text');ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(label,x+w/2,y-8);}}
+function arrow(x1,y1,x2,y2,color,on){ctx.strokeStyle=on?color:css('--border');ctx.lineWidth=on?3:1.5;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+  const a=Math.atan2(y2-y1,x2-x1);ctx.fillStyle=on?color:css('--border');ctx.beginPath();ctx.moveTo(x2,y2);ctx.lineTo(x2-9*Math.cos(a-0.4),y2-9*Math.sin(a-0.4));ctx.lineTo(x2-9*Math.cos(a+0.4),y2-9*Math.sin(a+0.4));ctx.closePath();ctx.fill();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text');
+  // HBM
+  box(30,60,120,220,'HBM','rgba(91,140,255,0.15)');
+  ctx.fillStyle=acc;ctx.font='11px monospace';ctx.textAlign='center';
+  for(let i=0;i<3;i++){const used=ph>=1+i||ph>=2&&i<=Math.min(ph-1,2);
+    ctx.globalAlpha=(ph>=i+1)?1:0.35;
+    ctx.fillStyle=acc;ctx.fillRect(45,80+i*34,40,24);ctx.fillStyle='#fff';ctx.fillText('A k'+i,65,96+i*34);
+    ctx.fillStyle=acc2;ctx.fillRect(95,80+i*34,40,24);ctx.fillStyle='#fff';ctx.fillText('B k'+i,115,96+i*34);
+    ctx.globalAlpha=1;}
+  ctx.fillStyle=warn;ctx.globalAlpha=ph>=6?1:0.25;ctx.fillRect(60,210,60,24);ctx.fillStyle=ph>=6?'#fff':dim;ctx.fillText('C tile',90,226);ctx.globalAlpha=1;
+  // SBUF
+  box(240,50,170,240,'SBUF — 128 partitions','rgba(128,128,128,0.10)');
+  for(let p=0;p<8;p++){ctx.strokeStyle=css('--border');ctx.strokeRect(252,66+p*26,146,20);}
+  const kIn=Math.min(ph-1,2);
+  if(ph>=1){ctx.fillStyle=acc;ctx.fillRect(252,66,70,20);ctx.fillStyle='#fff';ctx.fillText('A k'+Math.min(kIn,2),287,80);
+    ctx.fillStyle=acc2;ctx.fillRect(328,66,70,20);ctx.fillStyle='#fff';ctx.fillText('B k'+Math.min(kIn,2),363,80);}
+  if(ph>=5){ctx.fillStyle=warn;ctx.fillRect(252,248,146,20);ctx.fillStyle='#fff';ctx.fillText('C (epilogued)',325,262);}
+  // engines
+  box(490,40,180,110,'Tensor engine','rgba(91,140,255,0.12)');
+  ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.fillText('128×128 systolic',580,70);
+  if(ph>=2&&ph<=4){ctx.fillStyle=acc;ctx.font='bold 12px sans-serif';ctx.fillText('MAC streaming k='+Math.min(ph-2,2),580,105);}
+  box(490,180,85,70,'Vector','rgba(56,198,160,0.12)');
+  box(585,180,85,70,'Scalar','rgba(242,166,90,0.12)');
+  if(ph===5){ctx.fillStyle=acc2;ctx.font='bold 11px sans-serif';ctx.fillText('bias+act',532,220);ctx.fillStyle=warn;ctx.fillText('exp etc.',627,220);}
+  // PSUM
+  box(740,40,130,110,'PSUM','rgba(229,96,76,0.12)');
+  const fill=ph<=1?0:ph===2?0.33:ph===3?0.66:ph>=4?1:0;
+  ctx.fillStyle='#e5604c';ctx.globalAlpha=0.8;ctx.fillRect(752,138-86*fill,106,86*fill);ctx.globalAlpha=1;
+  ctx.fillStyle=css('--text');ctx.font='11px sans-serif';ctx.fillText(fill===0?'empty':'Σ k≤'+Math.round(fill*3-1),805,95);
+  // arrows
+  arrow(152,120,238,120,acc,ph>=1&&ph<=4);           // HBM->SBUF
+  arrow(412,100,488,100,acc,ph>=2&&ph<=4);           // SBUF->Tensor
+  arrow(672,90,738,90,'#e5604c',ph>=2&&ph<=4);       // Tensor->PSUM
+  arrow(760,152,672,210,'#e5604c',ph===5);           // PSUM->Vector
+  arrow(488,215,412,240,acc2,ph===5);                // Vector->SBUF
+  arrow(238,258,152,230,warn,ph>=6);                 // SBUF->HBM
+  // caption
+  ctx.fillStyle=css('--text');ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('Step '+ph+'/6: '+PHASES[ph],30,330);
+}
+function advance(){if(ph<6){ph++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('ncPlay').textContent='▶ Play';}}
+document.getElementById('ncPlay').onclick=function(){if(timer){stop();return;}if(ph>=6)ph=0;this.textContent='⏸ Pause';timer=setInterval(advance,1400);};
+document.getElementById('ncStep').onclick=()=>{stop();advance();};
+document.getElementById('ncReset').onclick=()=>{stop();ph=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 5. systolic array ----------
+(function(){
+const cv=document.getElementById('sysViz'),ctx=cv.getContext('2d');
+const N=4;let clock=0,timer=null;
+// weights fixed; activations matrix X: N columns entering skewed
+const Wm=[[1,2,0,1],[0,1,3,1],[2,0,1,0],[1,1,0,2]];
+const Xm=[[1,2,0,1],[0,1,1,2],[3,0,2,1],[1,1,0,0]]; // x[row][col] = element of input col vector
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const cs=64,x0=300,y0=50;
+  ctx.font='12px monospace';
+  // activations waiting on the left, skewed: row r's element for col c enters at clock c + r
+  ctx.fillStyle=dim;ctx.font='bold 12px sans-serif';ctx.textAlign='center';
+  ctx.fillText('activations (skewed entry) →',150,36);
+  for(let r=0;r<N;r++)for(let c=0;c<N;c++){
+    const enter=c+r; // clock at which Xm[r][c] enters row r
+    const prog=clock-enter; // cells advanced
+    if(prog<0){ // still waiting
+      const x=x0-60-(enter-clock)*34,y=y0+r*cs+cs/2;
+      if(x>20){ctx.fillStyle=acc;ctx.globalAlpha=0.8;ctx.beginPath();ctx.arc(x,y,13,0,7);ctx.fill();ctx.globalAlpha=1;
+        ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.fillText(Xm[r][c],x,y+4);}
+    } else if(prog<N){ // inside array at column prog
+      const x=x0+prog*cs+cs/2,y=y0+r*cs+cs/2;
+      ctx.fillStyle=acc;ctx.beginPath();ctx.arc(x-14,y-14,12,0,7);ctx.fill();
+      ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.fillText(Xm[r][c],x-14,y-10);
+    }
+  }
+  // cells with resident weights
+  for(let r=0;r<N;r++)for(let cc=0;cc<N;cc++){
+    const x=x0+cc*cs,y=y0+r*cs;
+    ctx.fillStyle='rgba(128,128,128,0.15)';ctx.fillRect(x,y,cs-6,cs-6);
+    ctx.strokeStyle=bd;ctx.strokeRect(x,y,cs-6,cs-6);
+    ctx.fillStyle=dim;ctx.font='11px monospace';ctx.textAlign='center';
+    ctx.fillText('w='+Wm[r][cc],x+cs/2-3,y+16);
+  }
+  ctx.fillStyle=dim;ctx.font='bold 12px sans-serif';
+  ctx.fillText('weights stay put ("weight-stationary")',x0+2*cs,y0-14);
+  // partial sums flowing down: output col j for input col c exits bottom of array col j at clock c + j + N... compute partials
+  // psum at cell (r, j) for input col c at clock t: valid when t - (c + j) == r  → contains sum_{k<=r} W[k? ]...
+  // We display, for each array column j and input col c in flight, the partial sum at its current row.
+  for(let j=0;j<N;j++)for(let c=0;c<N;c++){
+    const row=clock-(c+j); // row position of the descending partial for (col j, input c)
+    if(row>=0&&row<N){
+      let s=0;for(let k=0;k<=row;k++)s+=Wm[j][k]*Xm[k][c]; // note: using W row j as array column j's weights transposed for display simplicity
+      const x=x0+j*cs+cs/2,y=y0+row*cs+cs/2;
+      ctx.fillStyle=acc2;ctx.beginPath();ctx.arc(x+13,y+14,13,0,7);ctx.fill();
+      ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.fillText(s,x+13,y+18);
+    } else if(row>=N){
+      // exited: show in output row if just exited recently
+      let s=0;for(let k=0;k<N;k++)s+=Wm[j][k]*Xm[k][c];
+      const y=y0+N*cs+26+(c)*22,x=x0+j*cs+cs/2;
+      if(row>=N){ctx.fillStyle=acc2;ctx.globalAlpha=0.9;ctx.font='12px monospace';ctx.fillText('y['+j+']·x'+c+'='+s,x,y);ctx.globalAlpha=1;}
+    }
+  }
+  ctx.fillStyle=dim;ctx.font='bold 12px sans-serif';ctx.textAlign='left';
+  ctx.fillText('partial sums ↓ exit one full output column per clock once the pipe fills',x0,H-14);
+  ctx.fillStyle=txt;ctx.fillText('clock: '+clock,40,H-14);
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('sysPlay').textContent='▶ Play';}}
+document.getElementById('sysPlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(()=>{clock++;if(clock>2*N+N+2)clock=0;draw();},800);};
+document.getElementById('sysStep').onclick=()=>{stop();clock++;if(clock>2*N+N+2)clock=0;draw();};
+document.getElementById('sysReset').onclick=()=>{stop();clock=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 9. migration dashboard ----------
+(function(){
+const cv=document.getElementById('mgViz');if(!cv)return;const ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+const ids=['mgGpuTps','mgGpuCost','mgTrnTps','mgTrnCost','mgFallback','mgParity','mgNoise'];
+function v(id){return parseFloat($(id).value);}
+function fmt(x){return '$'+x.toFixed(2);}
+function draw(){
+  const gTps=v('mgGpuTps'),gCost=v('mgGpuCost'),tTps0=v('mgTrnTps'),tCost=v('mgTrnCost'),fb=v('mgFallback'),gap=v('mgParity'),noise=v('mgNoise');
+  $('mgGpuTpsL').textContent=gTps.toLocaleString();$('mgGpuCostL').textContent='$'+gCost;
+  $('mgTrnTpsL').textContent=tTps0.toLocaleString();$('mgTrnCostL').textContent='$'+tCost;
+  $('mgFallbackL').textContent=fb;$('mgParityL').textContent=gap.toFixed(1);$('mgNoiseL').textContent=noise.toFixed(1);
+  // each CPU fallback in the decode loop costs ~18% of throughput (illustrative)
+  const tTps=tTps0*Math.pow(0.82,fb);
+  const gCpm=gCost/(gTps*3600)*1e6, tCpm=tCost/(tTps*3600)*1e6;
+  const saving=1-tCpm/gCpm;
+  const parityOk=gap<=noise;
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dng=css('--danger');
+  ctx.font='13px sans-serif';ctx.textAlign='left';
+  // cost bars
+  const maxC=Math.max(gCpm,tCpm)*1.15,bx=170,bw=380;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('Cost per 1M tokens',24,28);
+  [['GPU baseline',gCpm,acc],['Trainium',tCpm,parityOk?acc2:dng]].forEach(([l,c,col],i)=>{
+    const y=44+i*34;ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText(l,24,y+15);
+    ctx.fillStyle=col;ctx.fillRect(bx,y,Math.max(2,bw*c/maxC),22);
+    ctx.fillStyle=txt;ctx.font='12px monospace';ctx.fillText(fmt(c),bx+bw*c/maxC+8,y+15);
+  });
+  // verdict
+  let verdict,vcol,why;
+  if(!parityOk){verdict='NO-GO: accuracy gate failed';vcol=dng;why='eval gap '+gap.toFixed(1)+' pts > noise '+noise.toFixed(1)+' pts — price is irrelevant until parity (§9.2)';}
+  else if(fb>0){verdict=saving>0?'CONDITIONAL: remove fallbacks first':'NO-GO: fallbacks erase the advantage';vcol=warn;why=fb+' CPU fallback'+(fb>1?'s':'')+' in the loop cost '+Math.round((1-Math.pow(0.82,fb))*100)+'% of throughput — fix before deciding';}
+  else if(saving>=0.15){verdict='GO: migrate';vcol=acc2;why=Math.round(saving*100)+'% lower $/token at parity — write the capacity table (§9.4)';}
+  else if(saving>0){verdict='MARGINAL: pilot a slice';vcol=warn;why='only '+Math.round(saving*100)+'% saving — profile for NKI wins (§9.3) before committing capacity';}
+  else{verdict='NO-GO on cost';vcol=dng;why='Trainium is '+Math.round(-saving*100)+'% more expensive per token at current throughput';}
+  ctx.fillStyle=vcol;ctx.font='bold 16px sans-serif';ctx.fillText(verdict,24,142);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText(why,24,162);
+  // gap decomposition
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('Where the Trainium throughput gap vs GPU comes from (illustrative decomposition)',24,200);
+  const ratio=tTps/gTps;const totalGap=Math.max(0,1-ratio);
+  const fbPart=Math.min(totalGap,1-Math.pow(0.82,fb));const rest=totalGap-fbPart;
+  const parts=[['fallbacks',fbPart,dng],['memory-bound decode',rest*0.6,warn],['compute mapping / tiles',rest*0.4,acc]];
+  let x=170;const y=214,bwid=560;
+  parts.forEach(([l,p,col])=>{const w=bwid*p;ctx.fillStyle=col;ctx.fillRect(x,y,w,22);x+=w;});
+  ctx.strokeStyle=css('--border');ctx.strokeRect(170,y,bwid,22);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('gap '+Math.round(totalGap*100)+'%',24,y+15);
+  let lx=170;parts.forEach(([l,p,col])=>{ctx.fillStyle=col;ctx.fillRect(lx,250,12,12);ctx.fillStyle=dim;ctx.fillText(l+' '+Math.round(p*100)+'%',lx+16,261);lx+=190;});
+  ctx.fillStyle=dim;ctx.fillText(ratio>=1?'Trainium is faster per instance here; the gap is zero and the decision is pure $/token.':'A slower instance can still win: compare $/token, not tokens/s.',24,290);
+}
+ids.forEach(id=>$(id).oninput=draw);draw();onTheme(draw);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,281 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>An Analysis of SGLang Framework&#x27;s Quantization Design and Approach</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/quantization/quantization_architecture_en.md</div>
+<article class="note"><h1 id="an-analysis-of-sglang-frameworks-quantization-design-and-approach">An Analysis of SGLang Framework's Quantization Design and Approach</h1>
+<p>Editor's Note: At the beginning of 2025, this ML-SYS-Tutorial had just reached 1k GitHub stars. At that time, the series included content covering various aspects, including quantization and parallelization strategies. However, due to limited time, only the RL sys section has been occasionally updated in recent months, which indeed deviates from the original intention. Fortunately, the editor has met good friends in the community and plans to gradually review, rewrite, and publish the unpublished parts scattered throughout this blog series. To achieve excellence, we will publish on LinkedIn, Zhihu, Twitter, Xiaohongshu, and the original GitHub version. Due to time constraints, only the Chinese version on GitHub will be maintained and updated, while the other versions will be one-time LLM machine translations (though translation quality will be guaranteed). Thank you for your understanding. The editor's work and learning journey have also undergone many significant changes during this period, and we will share this journey once things settle down.</p>
+<p>[This article was written by Yao Pandeng from Baidu, with the editor assisting in certain modifications. Thank you to Teacher Yao for his support and love for SGLang. The "I" in the following text refers to Yao Pandeng.]</p>
+<p>Recently, I was deeply involved in the w4afp8 quantization project for the DeepSeek model, which forced me to gain a good understanding of SGLang's quantization components. (I also submitted a <a href="https://github.com/sgl-project/sglang/pull/9598">PR</a>, which was eventually merged into <a href="https://github.com/sgl-project/sglang/pull/8247#issuecomment-3258884128">#8247</a>).</p>
+<p>After completing the project, I've been wanting to take some time to summarize, because SGLang's design in quantization is indeed very clear and worth discussing. Hence this article. This article will use w4afp8 as an example to show how SGLang handles quantization.</p>
+<p>SGLang hides all quantization implementations in the <code>python/sglang/srt/layers/quantization/</code> directory. It uses a very clever abstraction and hook functions to organically connect three stages: model construction, weight loading, and inference execution.</p>
+<p><strong>We break down quantization into three stages: create_weights → process_weights_after_loading → apply</strong></p>
+<ul>
+<li><strong>create_weights</strong> (Establish Pipeline): Pre-allocate tensors. When the model is first being constructed, this function is responsible for allocating memory for quantization weights, scale factors, and other parameters. Similar to laying down pipes before water flows through them.</li>
+<li><strong>process_weights_after_loading</strong> (Data Conversion): After weights are loaded from files, they cannot be directly processed. This function is responsible for converting weights and scales into the optimal format and layout for computational kernels (such as CUTLASS), such as performing rearrangement optimizations, and then storing them.</li>
+<li><strong>apply</strong>: When the model runs <code>forward</code>, the <code>apply</code> function is called. It directs the underlying computational kernel (such as FP8 GEMM) to make activations and weights flow through the pipeline, completing the computation.</li>
+</ul>
+<h2 id="overall-flow">Overall Flow</h2>
+<p>Let's look at SGLang's implementation logic:</p>
+<pre><code>ModelConfig._parse_quant_hf_config → Determine quant_method (e.g., w4afp8)
+      ↓
+weight_utils.get_quant_config → Construct corresponding QuantizationConfig instance
+      ↓
+_initialize_model(...) → Pass quant_config into model/layers
+      ↓
+LinearBase.quant_method.create_weights → Register quantization weight placeholders
+      ↓
+DefaultModelLoader.load_weights_and_postprocess → First load_weights to load weights, then call quant_method.process_weights_after_loading layer by layer
+      ↓
+During inference, LinearBase.forward → quant_method.apply executes quantized GEMM
+</code></pre>
+<h3 id="class-inheritance-hierarchy">Class Inheritance Hierarchy</h3>
+<p>SGLang's abstraction and inheritance are done just right.</p>
+<pre><code>Configuration class inheritance:
+QuantizationConfig (Abstract base class, defined in base_config.py)
+  Responsibilities: Parse quantization configuration, hardware validation and activation data type validation, and return correct quantization method instances by layer
+  ├─ from_config(): Parse from configuration dictionary and instantiate
+  ├─ get_quant_method(): Return quantization method based on layer type
+  ├─ get_min_capability(): Validate hardware compatibility
+  │  Hardware validation includes:
+  │  • NVIDIA GPU: Check via CUDA capability (compute capability), such as 70 (Volta), 75 (Turing), 80 (Ampere), 90 (Hopper), etc.
+  │  • AMD GPU: Check via ROCm/HIP platform detection, some schemes check for specific GCN architectures (e.g., gfx94)
+  └─ get_supported_act_dtypes(): Return supported activation data types
+      ↓
+  W4AFp8Config (Concrete configuration class)
+      └─→ get_quant_method() returns based on layer type:
+          ├─→ LinearBase → Fp8LinearMethod
+          └─→ FusedMoE → W4AFp8MoEMethod
+
+Quantization method class inheritance:
+QuantizeMethodBase (Abstract base class, defined in base_config.py)
+  Responsibilities: Weight registration, post-loading weight processing, and forward execution
+  ├─ create_weights(): Register quantization weight placeholders (model construction stage)
+  ├─ process_weights_after_loading(): Post-process weights (after weight loading completes)
+  └─ apply(): Execute quantized computation during forward propagation (inference stage)
+      ├─→ LinearMethodBase
+      │     └─→ Fp8LinearMethod (for regular linear layers)
+      └─→ FusedMoEMethodBase
+            └─→ W4AFp8MoEMethod (for MoE layers)
+
+Quantization method registry (located in __init__.py):
+Maps native schemes (AWQ, GPTQ, FP8, W4AFp8, ModelOpt, etc.) to string identifiers
+</code></pre>
+<h3 id="create_weights-call-flow">create_weights Call Flow</h3>
+<pre><code>DeepseekV2DecoderLayer.__init__()
+      ↓
+DeepseekV2AttentionMLA.__init__()
+      ↓
+RowParallelLinear.__init__()
+      ↓
+LinearBase.__init__() (super().__init__()) # self.quant_method is set in the parent class initialization function
+      ↓
+quant_config.get_quant_method() → Returns Fp8LinearMethod
+      ↓
+RowParallelLinear.__init__() continues execution
+      ↓
+Fp8LinearMethod.create_weights()
+      ↓
+Register weight, weight_scale, input_scale and other parameter placeholders
+</code></pre>
+<h3 id="process_weights_after_loading-call-flow">process_weights_after_loading Call Flow</h3>
+<pre><code>Scheduler.__init__()
+      ↓
+TpModelWorker.__init__()
+      ↓
+ModelRunner.__init__()
+      ↓
+ModelRunner.initialize()
+      ↓
+get_model()
+      ↓
+DefaultModelLoader.load_model()
+      ↓
+DefaultModelLoader.load_weights_and_postprocess()
+      ↓
+model.load_weights() → Load weight data
+      ↓
+Iterate through layers, calling quant_method.process_weights_after_loading()
+      ↓
+Fp8LinearMethod.process_weights_after_loading()
+      └─→ or W4AFp8MoEMethod.process_weights_after_loading()
+</code></pre>
+<h3 id="apply-call-flow">apply Call Flow</h3>
+<pre><code>DeepseekV2DecoderLayer.forward()
+      ↓
+DeepseekV2AttentionMLA.forward()
+      ↓
+RowParallelLinear.forward()
+      ↓
+self.quant_method.apply()
+      ↓
+Fp8LinearMethod.apply()
+      └─→ or W4AFp8MoEMethod.apply()
+      ↓
+Call underlying kernel (CUTLASS/Marlin/torch) to execute quantized GEMM
+</code></pre>
+<h2 id="w4afp8-quantization-scheme">W4AFp8 Quantization Scheme</h2>
+<p>Below, we use the W4AFp8 (INT4 weights + FP8 activations) quantization scheme as an example to analyze SGLang's specific implementation logic in detail.</p>
+<h3 id="w4afp8config">W4AFp8Config</h3>
+<p><code>W4AFp8Config</code> inherits from <code>QuantizationConfig</code> and is responsible for clearly describing "configuration → specific quantization method".</p>
+<p><strong>Configuration Recognition</strong>: When <code>quant_algo == "MIXED_PRECISION"</code> in <code>hf_quant_config.json</code>, <code>ModelConfig</code> will map the quantization scheme to <code>w4afp8</code> and validate hardware compatibility:</p>
+<pre><code class="language-python"># ModelConfig._parse_modelopt_quant_config
+if quant_algo == &quot;MIXED_PRECISION&quot;:
+    return {&quot;quant_method&quot;: &quot;w4afp8&quot;}
+</code></pre>
+<p><strong>Object Construction</strong>: <code>weight_utils.get_quant_config</code> obtains the <code>W4AFp8Config</code> class, then calls the <code>from_config</code> method to instantiate it.</p>
+<p><strong>Key Methods</strong>:</p>
+<ul>
+<li><code>W4AFp8Config.from_config()</code>: Parse from configuration dictionary and instantiate configuration object</li>
+<li><code>W4AFp8Config.get_quant_method(layer, prefix)</code>: Core method that returns corresponding quantization method instance based on layer type:</li>
+</ul>
+<pre><code class="language-python">if isinstance(layer, LinearBase):
+    return Fp8LinearMethod(self)  # Regular layers use Fp8LinearMethod
+elif isinstance(layer, FusedMoE):
+    return W4AFp8MoEMethod(self)  # MoE layers use W4AFp8MoEMethod
+</code></pre>
+<h3 id="w4afp8moemethod-specific-flow">W4AFp8MoEMethod Specific Flow</h3>
+<p><code>W4AFp8MoEMethod</code> is the specific implementation of W4AFp8 on MoE layers. Following the three steps mentioned earlier, let's analyze the specific implementation:</p>
+<ol>
+<li><code>create_weights</code></li>
+</ol>
+<p>As mentioned earlier, this step is parameter pre-allocation. When the <code>FusedMoE</code> module is initialized, it creates parameter containers required for quantization for the MoE layer, responsible for allocating memory for quantization weights, scale factors, and other parameters.</p>
+<p>Main tasks include:</p>
+<ul>
+<li>Create quantized weight tensors: <code>w13_weight</code> (gate and up projection) and <code>w2_weight</code> (down projection), note the type is <code>int8</code></li>
+<li>Allocate weight scale factors: <code>w13_weight_scale_inv</code> and <code>w2_weight_scale_inv</code>, with each group of 128 elements sharing one scale</li>
+<li>Prepare activation scale factors: <code>w13_input_scale</code> and <code>w2_input_scale</code></li>
+<li>Initialize computation metadata: such as stride, expert offsets, etc.</li>
+</ul>
+<p>Note that at this point, parameters are empty (created using <code>torch.empty</code>), only completing memory layout initialization, without filling in actual data.</p>
+<pre><code class="language-python">def create_weights(self, layer, num_experts, hidden_size, ...):
+    # Create quantized weight containers (INT8 type)
+    layer.register_parameter(&quot;w13_weight&quot;, torch.empty(..., dtype=torch.int8))
+    layer.register_parameter(&quot;w2_weight&quot;, torch.empty(..., dtype=torch.int8))
+    # Create weight scale factors (group-wise, 128 elements per group)
+    layer.register_parameter(&quot;w13_weight_scale_inv&quot;, torch.zeros(...))
+    layer.register_parameter(&quot;w2_weight_scale_inv&quot;, torch.zeros(...))
+    # Create input scale factors (used in static quantization)
+    layer.register_parameter(&quot;w13_input_scale&quot;, torch.ones(..., dtype=torch.bfloat16))
+    # Initialize stride and other computation metadata
+    self.a_strides1 = torch.full((num_experts, 3), hidden_size, ...)
+</code></pre>
+<ol start="2">
+<li><code>process_weights_after_loading</code></li>
+</ol>
+<p>After weight data is loaded from the checkpoint, format conversion is needed to adapt to the underlying computational kernel:</p>
+<ul>
+<li><strong>Weight scale format optimization</strong>: Convert scale from float32 format to bfloat16 (reducing memory usage by 50%), and call the <code>interleave_scales</code> function to interleave and rearrange scales. (The purpose of rearrangement is to match CUTLASS kernel's memory access pattern (referencing TRT-LLM's implementation). After rearrangement, the kernel can access data more efficiently during computation, improving cache hit rate.)</li>
+<li><strong>Input scale aggregation</strong>: In static quantization mode, aggregate each expert's input scale into a single scalar, reducing inference computation.</li>
+</ul>
+<pre><code class="language-python">def process_weights_after_loading(self, layer: Module) -&gt; None:
+    # Convert weight scale to bfloat16 and rearrange to match CUTLASS layout
+    w13_weight_scale = layer.w13_weight_scale_inv.to(torch.bfloat16)
+    w13_weight_scale = interleave_scales(w13_weight_scale)
+    layer.w13_weight_scale_inv = Parameter(w13_weight_scale, requires_grad=False)
+
+    # Aggregate input scale into a single scalar (static quantization mode)
+    w13_input_scale_max = layer.w13_input_scale.max().to(torch.bfloat16).item()
+    layer.w13_input_scale = Parameter(torch.tensor([w13_input_scale_max], dtype=torch.bfloat16), requires_grad=False)
+</code></pre>
+<ol start="3">
+<li><code>apply</code></li>
+</ol>
+<p>Everything is ready, only forward remains. During the forward propagation stage, the <code>apply</code> function is called to execute quantized computation. This function collects all preprocessed data (activations, rearranged weights and scales, routing results, etc.), then calls the <code>cutlass_w4a8_moe</code> underlying kernel to execute two GEMM operations:</p>
+<ul>
+<li>GEMM1: <code>w13_weight</code> (gate and up)</li>
+<li>GEMM2: <code>w2_weight</code> (down)</li>
+</ul>
+<p><code>cutlass_w4a8_moe</code> is an underlying function that wraps the CUTLASS library, implementing mixed-precision matrix multiplication of INT4 weights and FP8 activations, fully utilizing the hardware's quantized computation capabilities.</p>
+<pre><code class="language-python">def apply(self, layer, dispatch_output) -&gt; CombineInput:
+    from sglang.srt.layers.moe.cutlass_w4a8_moe import cutlass_w4a8_moe
+
+    x = dispatch_output.hidden_states
+    topk_weights, topk_ids, _ = dispatch_output.topk_output
+
+    # Call CUTLASS kernel to execute mixed-precision MoE computation
+    output = cutlass_w4a8_moe(
+        x, layer.w13_weight, layer.w2_weight,
+        layer.w13_weight_scale_inv, layer.w2_weight_scale_inv,
+        topk_weights, topk_ids,
+        self.a_strides1, self.b_strides1, self.c_strides1,  # GEMM1 strides
+        self.a_strides2, self.b_strides2, self.c_strides2,  # GEMM2 strides
+        self.s_strides13, self.s_strides2,                  # Scale strides
+        self.expert_offsets, self.problem_sizes1, self.problem_sizes2,
+        layer.w13_input_scale, layer.w2_input_scale,
+    )
+    # Apply routing scale factor
+    if self.moe_runner_config.routed_scaling_factor is not None:
+        output *= self.moe_runner_config.routed_scaling_factor
+    return StandardCombineInput(hidden_states=output)
+</code></pre>
+<h3 id="fp8linearmethod">Fp8LinearMethod</h3>
+<p>Next, referring to the linear layer implementation, <code>W4AFp8Config</code> will assign <code>Fp8LinearMethod</code>; the logic is similar but simpler:</p>
+<ul>
+<li><code>create_weights</code>: Register <code>weight</code>, <code>weight_scale</code>, and <code>input_scale</code> placeholders.</li>
+<li><code>process_weights_after_loading</code>: Convert weights and scales according to hardware requirements (Marlin, CUTLASS, etc.).</li>
+<li><code>apply</code>: Call appropriate kernel (Marlin, CUTLASS, etc.) to execute FP8 GEMM computation.</li>
+</ul>
+<h2 id="how-to-extend-new-quantization-schemes">How to Extend New Quantization Schemes?</h2>
+<p>SGLang's extensibility and its just-right, not-too-much, not-too-little abstraction is indeed very comfortable. To integrate a new quantization scheme (e.g., W2A8), you don't need to modify the framework's core code, just follow these steps:</p>
+<ol>
+<li><strong>Implement configuration class</strong>: Inherit from <code>QuantizationConfig</code>, parse custom parameters and implement the <code>get_quant_method</code> method.</li>
+<li><strong>Implement quantization method class</strong>: Inherit from <code>LinearMethodBase</code>, <code>FusedMoEMethodBase</code>, and implement the three methods: <code>create_weights</code>, <code>process_weights_after_loading</code>, and <code>apply</code>.</li>
+<li><strong>Register scheme</strong>: Register in <code>BASE_QUANTIZATION_METHODS</code> in <code>__init__.py</code>, establishing a mapping relationship between string identifiers and configuration classes.</li>
+</ol>
+<p>SGLang's decoupled design makes all of this very simple.</p>
+<h2 id="appendix-quantization-methods-already-supported-in-sglang">Appendix: Quantization Methods Already Supported in SGLang</h2>
+<table>
+<thead>
+<tr>
+<th>Category</th>
+<th>Representative Configurations</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FP8 Series</td>
+<td><code>fp8</code>, <code>w8a8_fp8</code>, <code>modelopt_fp8</code>, <code>fbgemm_fp8</code></td>
+<td>Native FP8, W8A8-FP8 hybrid, ModelOpt/FBGEMM implementations</td>
+</tr>
+<tr>
+<td>INT8 Series</td>
+<td><code>w8a8_int8</code>, <code>blockwise_int8</code></td>
+<td>Classic 8bit weight/activation, blockwise INT8</td>
+</tr>
+<tr>
+<td>INT4/Mixed Precision</td>
+<td><code>w4afp8</code>, <code>qoq</code>, <code>moe_wna16</code></td>
+<td>4bit weight + FP8 activation, QoQ, WNA16 (W4A16/W8A16)</td>
+</tr>
+<tr>
+<td>FP4 / MXFP4</td>
+<td><code>modelopt_fp4</code>, <code>petit_nvfp4</code>, <code>mxfp4</code>, <code>quark</code></td>
+<td>FP4 / MXFP4 schemes, <code>quark</code> is ROCm-specific</td>
+</tr>
+<tr>
+<td>Pre-quantized Formats</td>
+<td><code>awq</code>, <code>awq_marlin</code>, <code>gptq</code>, <code>gptq_marlin</code>, <code>gguf</code>, <code>compressed-tensors</code>, <code>auto-round</code>, <code>modelopt</code></td>
+<td>Integration with external toolchains or compressed tensor frameworks, <code>modelopt</code> auto-detects FP8/FP4</td>
+</tr>
+<tr>
+<td>KV Cache Quantization</td>
+<td><code>BaseKVCacheMethod</code> and its subclasses in <code>kv_cache.py</code></td>
+<td>Provides scale and zero-point management for attention caches</td>
+</tr>
+</tbody>
+</table></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/quantization/quantization_architecture_en.md">sglang/quantization/quantization_architecture_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

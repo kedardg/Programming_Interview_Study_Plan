@@ -1,0 +1,64 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › training/README.md</div>
+<article class="note"><h1 id="training">Training</h1>
+<p><strong>Subsections</strong>:</p>
+<ul>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/model-parallelism">Model parallelism</a></p>
+</li>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/performance">Performance</a></p>
+</li>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/fault-tolerance">Fault Tolerance</a></p>
+</li>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/reproducibility">Reproducibility</a></p>
+</li>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/instabilities">Instabilities</a></p>
+</li>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/checkpoints">Checkpoints</a></p>
+</li>
+<li>
+<p><a href="../training/hparams.html">Training hyper-parameters and model initializations</a></p>
+</li>
+<li>
+<p><a href="../training/dtype.html">Tensor precision / Data types</a></p>
+</li>
+<li>
+<p><a href="../training/emulate-multi-node.html">Emulate a multi-node setup using just a single node</a> - instructions on how to emulate a multi-node setup using just a single node - we use the <code>deepspeed</code> launcher here.</p>
+</li>
+<li>
+<p><a href="../training/re-train-hub-models.html">Re-train HF hub models from scratch using finetuning examples</a></p>
+</li>
+<li>
+<p><a href="../training/datasets.html">Datasets</a></p>
+</li>
+</ul>
+<p><strong>Tools</strong>:</p>
+<ul>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/tools/printflock.py">printflock.py</a> - a tiny library that makes your <code>print</code> calls non-interleaved in a multi-gpu environment.</p>
+</li>
+<li>
+<p><a href="https://github.com/stas00/ml-engineering/blob/main/training/tools/multi-gpu-non-interleaved-print.py">multi-gpu-non-interleaved-print.py</a> - a <code>flock</code>-based wrapper around <code>print</code> that prevents messages from getting interleaved when multiple processes print at the same time - which is the case with <code>torch.distributed</code> used with multiple-gpus.</p>
+</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/training/README.md">training/README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

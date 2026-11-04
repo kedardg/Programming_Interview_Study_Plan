@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPU Architecture</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html" class="here">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>GPU Architecture &amp; the Execution Model</h1>
+<p class="dim">What a GPU actually is, how work and data move through it, and the one chart — the roofline — that predicts whether any kernel can go faster. This chapter is the hardware foundation for Steps 5–8 of the study plan; <a href="kernels.html">Kernels</a> builds on it.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (10:08)</h3><audio controls preload="none" src="audio/gpu.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/gpu.txt">Read the transcript</a>.</p></div>
+<h2 id="why">1. Why GPUs: latency machines vs throughput machines</h2>
+<p>A CPU is a <em>latency machine</em>. It spends most of its silicon making <strong>one</strong> instruction stream finish as soon as possible: big caches, branch predictors, out-of-order windows, prefetchers. A GPU is a <em>throughput machine</em>. It strips almost all of that out and spends the silicon on thousands of simple arithmetic lanes, then hides every stall — a memory access, a dependency — by instantly switching to another thread that is ready. The individual thread runs <em>slower</em> than on a CPU; the aggregate runs orders of magnitude faster, provided you give it enough independent work.</p>
+<p>The quantitative version is <strong>Little's law</strong>: <code>concurrency = latency × throughput</code>. An H100's HBM delivers ~3.35&nbsp;TB/s at ~500&nbsp;ns of latency, so to keep the memory system saturated the chip must have roughly 3.35&nbsp;TB/s × 500&nbsp;ns ≈ 1.7&nbsp;MB of memory requests <em>in flight at every instant</em>. No single thread can do that; tens of thousands of threads can. Everything in this chapter — warps, occupancy, coalescing — exists to manufacture and sustain that concurrency.</p>
+<ul>
+  <li><strong>CPU strategy:</strong> avoid the stall (caches, prediction).</li>
+  <li><strong>GPU strategy:</strong> tolerate the stall (switch to other warps). The hardware scheduler is the "cache".</li>
+</ul>
+
+<h2 id="hardware">2. The hardware: SMs and the memory hierarchy</h2>
+<p>A GPU is a grid of <strong>Streaming Multiprocessors</strong> (SMs) — 132 on an H100, 84 on your RTX 5080. Each SM contains:</p>
+<ul>
+  <li><strong>CUDA cores</strong> — scalar FP32/INT32 ALUs (128 per SM), executing one operation per lane per clock.</li>
+  <li><strong>Tensor cores</strong> — small matrix-multiply units (4 per SM) that compute an entire m×n×k matrix product per instruction. For FP16/FP8/FP4 math these deliver 8–16× the FLOPs of the CUDA cores, which is why every deep-learning kernel funnels work into them.</li>
+  <li><strong>Registers</strong> — 256&nbsp;KB per SM, private per thread, ~1 cycle. The fastest memory on the chip and the scarcest: a thread using many registers lowers how many threads fit (occupancy).</li>
+  <li><strong>Shared memory / L1</strong> — up to 228&nbsp;KB per SM (H100), ~20–30 cycles. This is on-chip SRAM that <em>you</em> manage explicitly from a kernel: the staging area for tiling (and the "SRAM" in the FlashAttention paper).</li>
+  <li><strong>L2 cache</strong> — 50&nbsp;MB on H100, shared by all SMs, ~200 cycles.</li>
+  <li><strong>HBM / GDDR (device memory)</strong> — 80&nbsp;GB HBM3 at 3.35&nbsp;TB/s on H100; 16&nbsp;GB GDDR7 at ~0.96&nbsp;TB/s on the 5080. ~400–600 cycles. When a paper says "memory-bound", it means bound by <em>this</em> level.</li>
+</ul>
+
+<div class="card">
+<h3>Animation: a load descends the memory hierarchy</h3>
+<canvas id="memViz" class="viz" width="900" height="320"></canvas>
+<div class="controls">
+  <button class="btn" id="memPlay">▶ Play</button>
+  <button class="btn secondary" id="memStep">Step</button>
+  <button class="btn secondary" id="memReset">Reset</button>
+  <label class="ctl">GPU <select id="memGpu"><option value="h100" selected>H100 SXM</option><option value="5080">RTX 5080</option></select></label>
+</div>
+<p class="caption">A warp issues a load. Watch it miss in each level and descend to HBM while the cycle counter runs — then see the same access hit in shared memory after a kernel stages the tile there. The ~20× latency gap between shared memory and HBM is the entire reason tiled kernels exist.</p>
+</div>
+
+<p>Two numbers per level — capacity and bandwidth — define the game: each level downward gains ~100–1000× capacity and loses ~10× bandwidth. Fast kernels move data up the pyramid <em>once</em> and reuse it many times before letting it fall back down.</p>
+
+<table class="cmp">
+<tr><th>Level</th><th>H100 SXM</th><th>RTX 5080 (sm_120)</th><th>Latency</th><th>Who manages it</th></tr>
+<tr><td>Registers</td><td>256 KB/SM × 132</td><td>256 KB/SM × 84</td><td>~1 cycle</td><td>compiler</td></tr>
+<tr><td>Shared memory</td><td>≤228 KB/SM, ~19 TB/s/SM</td><td>≤100 KB/SM</td><td>~25 cycles</td><td><strong>you</strong></td></tr>
+<tr><td>L2</td><td>50 MB</td><td>64 MB</td><td>~200 cycles</td><td>hardware</td></tr>
+<tr><td>Device memory</td><td>80 GB HBM3, 3.35 TB/s</td><td>16 GB GDDR7, ~0.96 TB/s</td><td>~500 cycles</td><td>you (allocation), hardware (caching)</td></tr>
+</table>
+
+<h2 id="simt">3. SIMT: grids, blocks, warps, and divergence</h2>
+<p>You launch a kernel as a <strong>grid</strong> of <strong>thread blocks</strong>; each block is assigned to one SM and never migrates. Inside the SM, the hardware splits the block into <strong>warps of 32 threads</strong>, and the warp — not the thread — is the real unit of execution: one instruction is fetched and issued for all 32 lanes at once. This is <em>SIMT</em> (single instruction, multiple threads): you write scalar code per thread, the machine runs it 32 lanes at a time.</p>
+<p>The model has one sharp edge: <strong>warp divergence</strong>. If threads of the same warp take different branches, the warp executes <em>both</em> paths serially, masking off the lanes that didn't take each path. A 50/50 branch inside a warp halves throughput; a 32-way switch can cost 32×. Divergence between <em>warps</em> is free — only intra-warp divergence serializes.</p>
+
+<div class="card">
+<h3>Animation: lockstep execution and divergence</h3>
+<canvas id="warpViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="warpPlay">▶ Play</button>
+  <button class="btn secondary" id="warpStep">Step</button>
+  <button class="btn secondary" id="warpReset">Reset</button>
+</div>
+<p class="caption">16 lanes of a warp (abbreviated from 32) run three straight-line instructions in lockstep, then hit <code>if (lane % 2 == 0)</code>. The warp runs the if-side with odd lanes masked (dark), then the else-side with even lanes masked, then reconverges. Count issued instructions: 3 + 2×2 + 1 instead of 3 + 2 + 1 — the masked slots are pure waste.</p>
+</div>
+
+<p><strong>Occupancy and latency hiding.</strong> Each SM holds many resident warps (up to 64). When a warp stalls on a 500-cycle HBM load, the scheduler issues from another ready warp on the very next clock — stalls are hidden, not avoided. <em>Occupancy</em> is the fraction of resident-warp slots you actually filled; it is capped by whichever per-SM resource your block exhausts first (registers per thread, shared memory per block, threads per block). High occupancy isn't a goal in itself — it's spare parallelism the scheduler can use to hide your latency. Memory-bound kernels need lots of it; register-heavy matmuls deliberately run at ~25% occupancy because each warp has so much independent work in registers.</p>
+
+<div class="card">
+<h3>Animation: latency hiding with resident warps</h3>
+<canvas id="occViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="occPlay">▶ Play</button>
+  <button class="btn secondary" id="occReset">Reset</button>
+  <label class="ctl">Resident warps <input type="range" id="occN" min="1" max="8" value="4"> <span id="occNL">4</span></label>
+</div>
+<p class="caption">Each row is a resident warp: green = issuing compute, orange = waiting on memory. With 1 warp the SM sits idle during every load; with enough warps there is always someone ready and the issue slots (top bar) stay full. Drag the slider to find the point where the memory latency is fully hidden.</p>
+</div>
+
+<h2 id="coalescing">4. Memory coalescing</h2>
+<p>DRAM moves data in large transactions (32–128&nbsp;bytes), not single words. When the 32 threads of a warp load 4-byte values from <em>consecutive</em> addresses, the hardware coalesces them into as few as one 128-byte transaction. When they load with a stride, every lane needs its own transaction: same instructions, up to <strong>32× more memory traffic</strong>. Coalescing is the first thing to check in any memory-bound kernel, and the reason matrix layouts (row-major vs column-major, who indexes what) dominate naive-kernel performance — it alone is the 6.5× jump between kernels 1 and 2 of the matmul ladder in <a href="kernels.html">Kernels</a>.</p>
+
+<div class="card">
+<h3>Animation: coalesced vs strided access</h3>
+<canvas id="coalViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="coalPlay">▶ Replay</button>
+  <label class="ctl">Pattern <select id="coalMode"><option value="0" selected>consecutive (coalesced)</option><option value="1">stride 2</option><option value="2">stride 32 (worst)</option></select></label>
+  <span class="dim" id="coalStats"></span>
+</div>
+<p class="caption">16 lanes issue one load each; the bottom strip is memory in 128-byte segments. Consecutive addresses light up one segment → one transaction. Strided addresses touch many segments → many transactions for the same useful 64 bytes. The wasted fraction of each transaction is drawn hollow.</p>
+</div>
+
+<p><strong>Shared-memory bank conflicts</strong> are the on-chip sibling: shared memory is split into 32 banks (one 4-byte word wide, interleaved). If multiple lanes of a warp hit <em>different addresses in the same bank</em>, the accesses serialize. The classic fix — pad a tile to <code>[32][33]</code> — shifts a column access off the 32-stride so every lane lands in a different bank; you'll use it in the transpose exercise.</p>
+
+<h2 id="roofline">5. The roofline model</h2>
+<p>One chart predicts the speed limit of every kernel. Define <strong>arithmetic intensity</strong> (AI) = FLOPs performed ÷ bytes moved to/from device memory. Then:</p>
+<div class="formula">attainable FLOP/s = min( peak FLOP/s , AI × memory bandwidth )</div>
+<p>Plotted on log-log axes this is a slanted roof (bandwidth-limited region) meeting a flat roof (compute-limited region). The corner — the <em>ridge point</em> — is peak&nbsp;FLOPs ÷ bandwidth: ~295&nbsp;FLOP/byte for an H100 (FP16 tensor cores), ~230 for the 5080. A kernel left of the ridge cannot be fixed with more math units; it needs to <em>move fewer bytes</em> (tiling, fusion, quantization). A kernel right of the ridge is compute-bound and needs tensor cores, not bandwidth.</p>
+<p><strong>Worked example — FP16 matmul.</strong> Multiplying two N×N FP16 matrices: <code>2N³</code> FLOPs, and at minimum <code>3 × 2N²</code> bytes (read A and B, write C). So <code>AI = 2N³ / 6N² = N/3</code>. At N=4096, AI ≈ 1365 — far right of the ridge: big matmuls are compute-bound and can hit ~peak tensor-core FLOPs. <strong>Counter-example — decode-step GEMV</strong> (batch-1 LLM decode): 2 FLOPs per weight, 2 bytes per weight → AI ≈ 1. That's ~300× left of the ridge: an H100 decoding batch-1 runs at ~0.3% of its peak FLOPs, and <em>no kernel cleverness changes that</em> — only batching (more FLOPs per byte) or quantization (fewer bytes per FLOP) moves the point. This single plot explains most of the <a href="inference.html">Inference</a> chapter.</p>
+
+<div class="card">
+<h3>Interactive: the roofline</h3>
+<canvas id="roofViz" class="viz" width="900" height="380"></canvas>
+<div class="controls">
+  <label class="ctl">GPU <select id="roofGpu"><option value="h100" selected>H100 SXM (990 TF FP16, 3.35 TB/s)</option><option value="5080">RTX 5080 (~220 TF FP16, 0.96 TB/s)</option></select></label>
+  <label class="ctl">Your kernel's AI <input type="range" id="roofAI" min="-2" max="4" step="0.05" value="0"> <span id="roofAIL"></span></label>
+</div>
+<p class="caption">Drag the slider to move your kernel (white marker) along the roof and read off its speed limit. Labeled dots: vector add (AI≈0.08), batch-1 decode GEMV (≈1), fused softmax (≈1.3), FlashAttention prefill (≈300), 4096³ FP16 matmul (≈1365). Switch GPUs and notice the ridge point barely moves — FLOPs and bandwidth scale together by design.</p>
+</div>
+
+<h2 id="profiling">6. Profiling: measure, don't guess</h2>
+<p>The roofline tells you the limit; the profiler tells you where you are. The Step 8 workflow:</p>
+<ul>
+<li><strong>Benchmark honestly first</strong> (in PyTorch: warm up, <code>torch.cuda.synchronize()</code>, CUDA events — not <code>time.time()</code> around async launches).</li>
+<li><strong>Nsight Systems</strong> (<code>nsys</code>) for the timeline: gaps between kernels, H2D copies, CPU launch overhead. Many "slow kernels" are actually launch gaps.</li>
+<li><strong>Nsight Compute</strong> (<code>ncu</code>) per kernel. Read in order:
+  <ol>
+  <li><em>Speed-of-light (SOL) section</em> — % of peak for compute and memory. Low/low means latency-bound (not enough parallelism); high memory + low compute means bandwidth-bound; the pair tells you which wall you're on.</li>
+  <li><em>Memory workload analysis</em> — achieved bandwidth, transactions per request (coalescing!), L2 hit rate.</li>
+  <li><em>Occupancy &amp; launch stats</em> — achieved vs theoretical occupancy, and what limits it (registers? shared memory?).</li>
+  <li><em>Warp state / stall reasons</em> — long scoreboard = waiting on memory; barrier = unbalanced work at <code>__syncthreads()</code>.</li>
+  </ol></li>
+<li><strong>Compute Sanitizer</strong> for correctness (<code>compute-sanitizer --tool memcheck ./app</code>) — before believing any speedup.</li>
+</ul>
+<p>On your 5080, let <code>ncu</code> read performance counters: run with sudo or set <code>NVreg_RestrictProfilingToAdminUsers=0</code> (see the RTX 5080 notes in the plan).</p>
+
+<h2 id="reading">7. Where to go deeper</h2>
+<ul>
+<li><a href="https://www.elsevier.com/books/programming-massively-parallel-processors/hwu/978-0-323-91231-0">PMPP</a> ch 1–6 — the textbook treatment of everything above.</li>
+<li>GPU MODE <strong>L1</strong> (profiling in PyTorch), <strong>L4</strong> (compute/memory architecture), <strong>L8</strong> (CUDA performance checklist) from Step 7–8 of the <a href="../index.html">plan</a>.</li>
+<li><a href="https://users.cs.duke.edu/~lkw34/papers/roofline-cacm2008.pdf">The roofline paper</a> and <a href="https://kipply.github.io/blog/transformer-inference-arithmetic/">Transformer Inference Arithmetic</a> — the model applied to transformers.</li>
+<li><a href="https://docs.nvidia.com/nsight-compute/ProfilingGuide/">Nsight Compute Profiling Guide</a>, and <a href="https://siboehm.com/articles/22/CUDA-MMM">siboehm's matmul worklog</a> — continued in <a href="kernels.html">Kernels</a>.</li>
+<li>Drill it: the <a href="flashcards.html">GPU flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="multimodal.html">← Multimodal</a><a href="kernels.html">Kernels →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+// ---------- 2. memory hierarchy ----------
+(function(){
+const cv=document.getElementById('memViz'),ctx=cv.getContext('2d');
+const GPUS={h100:{name:'H100 SXM',lv:[['Registers','256 KB/SM','~1 cy',1],['Shared mem','228 KB/SM','~25 cy',25],['L2','50 MB','~200 cy',200],['HBM3','80 GB · 3.35 TB/s','~500 cy',500]]},
+'5080':{name:'RTX 5080',lv:[['Registers','256 KB/SM','~1 cy',1],['Shared mem','100 KB/SM','~25 cy',25],['L2','64 MB','~200 cy',200],['GDDR7','16 GB · 0.96 TB/s','~500 cy',500]]}};
+// phases: 0 idle; 1..4 miss descend; 5 data returns; 6 staged in smem; 7 hit in smem
+let phase=0,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const g=GPUS[document.getElementById('memGpu').value];
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='12px sans-serif';
+  // pyramid: 4 levels
+  const x0=60,topW=200,dw=140,lh=52,y0=36;
+  g.lv.forEach((l,i)=>{
+    const w=topW+i*dw,x=x0+(3-i)*dw/2*0+ (0),y=y0+i*(lh+10);
+    const cx=330;const xx=cx-w/2;
+    const hot=(phase>=1&&phase-1===i)||(phase===5)||(phase===6&&i===1)||(phase===7&&i===1);
+    ctx.fillStyle=hot?(phase===7?acc2:acc):css('--bg-card');
+    ctx.strokeStyle=bd;ctx.lineWidth=1.5;rr(ctx,xx,y,w,lh,10);ctx.fill();ctx.stroke();
+    ctx.fillStyle=hot?'#fff':txt;ctx.textAlign='center';ctx.font='bold 13px sans-serif';
+    ctx.fillText(l[0],cx,y+22);
+    ctx.font='11px sans-serif';ctx.fillStyle=hot?'rgba(255,255,255,0.85)':dim;
+    ctx.fillText(l[1]+' · '+l[2],cx,y+40);
+  });
+  // narration + cycle counter
+  let cycles=0,msg='Press play: a warp issues a load for a tile of A.';
+  if(phase>=1){cycles=g.lv.slice(0,Math.min(phase,4)).reduce((a,l)=>a+l[3],0);}
+  if(phase===1)msg='Not in registers → check shared memory… miss.';
+  if(phase===2)msg='Shared memory miss → check L2… miss.';
+  if(phase===3)msg='L2 miss → go all the way to device memory.';
+  if(phase===4){msg='Data found in '+g.lv[3][0]+'. Total: ~'+cycles+' cycles for one load.';}
+  if(phase===5){msg='A tiled kernel now STAGES the tile into shared memory once…';cycles=g.lv.reduce((a,l)=>a+l[3],0);}
+  if(phase===6){msg='…so the next '+'32×32 accesses to it cost ~25 cycles each, not ~500.';cycles=25;}
+  if(phase===7){msg='Hit in shared memory: ~25 cycles. ~20× faster — this is why kernels tile.';cycles=25;}
+  ctx.textAlign='left';ctx.fillStyle=txt;ctx.font='bold 14px sans-serif';
+  ctx.fillText(msg,620-0,80);
+  ctx.fillStyle=warn;ctx.font='bold 26px monospace';ctx.textAlign='left';
+  ctx.fillText(phase?('~'+cycles+' cy'):'',640,130);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText(g.name,640,50);
+  wrap(ctx,'Rule of thumb: each level down is ~10× the latency. Fast kernels pay the HBM cost once per tile, then reuse from shared memory and registers.',640,170,230,16,dim);
+}
+function wrap(c,text,x,y,w,lh,color){c.fillStyle=color;c.font='12px sans-serif';const words=text.split(' ');let line='',yy=y;
+for(const wd of words){const t=line+wd+' ';if(c.measureText(t).width>w){c.fillText(line,x,yy);line=wd+' ';yy+=lh;}else line=t;}c.fillText(line,x,yy);}
+function advance(){if(phase<7){phase++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('memPlay').textContent='▶ Play';}}
+document.getElementById('memStep').onclick=()=>{stop();advance();};
+document.getElementById('memReset').onclick=()=>{stop();phase=0;draw();};
+document.getElementById('memGpu').onchange=draw;
+document.getElementById('memPlay').onclick=function(){if(timer){stop();return;}if(phase>=7)phase=0;this.textContent='⏸ Pause';timer=setInterval(advance,1100);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3a. warp lockstep + divergence ----------
+(function(){
+const cv=document.getElementById('warpViz'),ctx=cv.getContext('2d');
+const LANES=16;
+// program: I1,I2,I3 straight; then branch: IF-A,IF-B (even lanes), EL-A,EL-B (odd), RECONV
+const PROG=[{t:'I1: r0 = tid',m:null},{t:'I2: r1 = x[r0]',m:null},{t:'I3: r1 = r1*2',m:null},
+{t:'IF-A (lane%2==0)',m:'even'},{t:'IF-B (lane%2==0)',m:'even'},
+{t:'ELSE-A (lane%2==1)',m:'odd'},{t:'ELSE-B (lane%2==1)',m:'odd'},{t:'I4: reconverged',m:null}];
+let step=-1,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const lw=46,lh=34,x0=90,y0=40;
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=dim;
+  ctx.fillText('one warp (16 of 32 lanes shown)',x0,28);
+  for(let i=0;i<LANES;i++){
+    const x=x0+i*(lw+4);
+    const cur=step>=0?PROG[Math.min(step,PROG.length-1)]:null;
+    const masked=cur&&cur.m&&((cur.m==='even'&&i%2===1)||(cur.m==='odd'&&i%2===0));
+    const active=step>=0&&!masked;
+    ctx.fillStyle=active?(cur&&cur.m?acc2:acc):css('--bg-card');
+    if(masked)ctx.fillStyle='rgba(128,128,128,0.25)';
+    ctx.strokeStyle=bd;rr(ctx,x,y0,lw,lh,6);ctx.fill();ctx.stroke();
+    ctx.fillStyle=active?'#fff':dim;ctx.textAlign='center';ctx.font='11px monospace';
+    ctx.fillText(masked?'—':'L'+i,x+lw/2,y0+21);
+  }
+  // program listing
+  const py=110;ctx.textAlign='left';
+  PROG.forEach((p,i)=>{
+    const y=py+i*21;
+    ctx.fillStyle=i===step?css('--warn'):(i<step?txt:dim);
+    ctx.font=(i===step?'bold ':'')+'12px monospace';
+    ctx.fillText((i===step?'▶ ':'  ')+p.t+(p.m?'   [mask: '+p.m+' lanes only]':''),x0,y);
+  });
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  let msg='Press play. Instructions issue once for the whole warp.';
+  if(step>=0&&step<3)msg='Lockstep: 1 instruction, 16 lanes, all active.';
+  if(step>=3&&step<5)msg='Branch taken by even lanes: odd lanes are MASKED but the slots are still spent.';
+  if(step>=5&&step<7)msg='Now the else-path replays for odd lanes — the two sides run serially.';
+  if(step>=7)msg='Reconverged. Issued 8 instruction slots for 6 instructions of work: that gap is divergence cost.';
+  ctx.fillText(msg,x0+430,py+30);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText('issued slots: '+(step+1<0?0:Math.min(step+1,PROG.length)),x0+430,py+58);
+}
+function advance(){if(step<PROG.length-1){step++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('warpPlay').textContent='▶ Play';}}
+document.getElementById('warpStep').onclick=()=>{stop();advance();};
+document.getElementById('warpReset').onclick=()=>{stop();step=-1;draw();};
+document.getElementById('warpPlay').onclick=function(){if(timer){stop();return;}if(step>=PROG.length-1)step=-1;this.textContent='⏸ Pause';timer=setInterval(advance,900);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3b. latency hiding ----------
+(function(){
+const cv=document.getElementById('occViz'),ctx=cv.getContext('2d');
+const T=60,MEM=6,RUN=2; // each warp: RUN compute cycles then MEM memory cycles, repeating
+let t=0,timer=null;
+const nEl=document.getElementById('occN'),nL=document.getElementById('occNL');
+nEl.oninput=()=>{nL.textContent=nEl.value;reset();};
+let hist=[];
+function sim(){
+  const N=parseInt(nEl.value);
+  // round-robin issue: a warp is 'ready' if not in memory wait
+  const state=Array.from({length:N},()=>({phase:'ready',left:RUN}));
+  const rows=Array.from({length:N},()=>[]);const issue=[];
+  for(let cy=0;cy<T;cy++){
+    let issued=-1;
+    for(let i=0;i<N;i++){const w=state[(cy+i)%N];const idx=(cy+i)%N;
+      if(w.phase!=='mem'){issued=idx;break;}}
+    for(let i=0;i<N;i++){
+      const w=state[i];
+      if(i===issued){rows[i].push('c');w.left--;if(w.left<=0){w.phase='mem';w.left=MEM;}}
+      else if(w.phase==='mem'){rows[i].push('m');w.left--;if(w.left<=0){w.phase='ready';w.left=RUN;}}
+      else rows[i].push('.');
+    }
+    issue.push(issued>=0);
+  }
+  return {rows,issue};
+}
+let data=sim();
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text');
+  const N=data.rows.length,cw=13,x0=120;
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  // issue bar
+  ctx.fillStyle=dim;ctx.fillText('SM issue slots',16,30);
+  let busy=0;
+  for(let cy=0;cy<Math.min(t,T);cy++){
+    ctx.fillStyle=data.issue[cy]?acc2:'rgba(128,128,128,0.25)';
+    if(data.issue[cy])busy++;
+    ctx.fillRect(x0+cy*cw,18,cw-2,14);
+  }
+  if(t>0){ctx.fillStyle=txt;ctx.fillText(Math.round(100*busy/Math.min(t,T))+'% busy',x0+T*cw+8,30);}
+  for(let i=0;i<N;i++){
+    const y=52+i*24;
+    ctx.fillStyle=dim;ctx.fillText('warp '+i,16,y+12);
+    for(let cy=0;cy<Math.min(t,T);cy++){
+      const s=data.rows[i][cy];
+      ctx.fillStyle=s==='c'?acc2:s==='m'?warn:'rgba(128,128,128,0.15)';
+      ctx.fillRect(x0+cy*cw,y,cw-2,16);
+    }
+  }
+  ctx.fillStyle=dim;
+  ctx.fillText('green = computing · orange = waiting on memory ('+MEM+'-cycle loads, '+RUN+'-cycle compute bursts)',120,52+N*24+18);
+}
+function tick(){if(t<T){t++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('occPlay').textContent='▶ Play';}}
+function reset(){stop();t=0;data=sim();draw();}
+document.getElementById('occPlay').onclick=function(){if(timer){stop();return;}if(t>=T)t=0;this.textContent='⏸ Pause';timer=setInterval(tick,120);};
+document.getElementById('occReset').onclick=reset;
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4. coalescing ----------
+(function(){
+const cv=document.getElementById('coalViz'),ctx=cv.getContext('2d');
+const LANES=16,SEG=8; // 16 lanes, memory shown as segments of 8 words (=> 32B segments of 4B words scaled down)
+let anim=0,timer=null;
+function pattern(){const m=document.getElementById('coalMode').value;
+  if(m==='0')return i=>i; if(m==='1')return i=>i*2; return i=>i*SEG;}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const p=pattern();const addrs=Array.from({length:LANES},(_,i)=>p(i));
+  const maxAddr=Math.max(...addrs)+1;const nWords=Math.ceil(maxAddr/SEG)*SEG;
+  const ww=Math.min(26,820/nWords),x0=40,yM=190;
+  // lanes
+  const lw=40;
+  ctx.font='11px monospace';
+  for(let i=0;i<LANES;i++){
+    const x=x0+i*(lw+6);
+    ctx.fillStyle=acc;rr(ctx,x,40,lw,28,6);ctx.fill();
+    ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText('L'+i,x+lw/2,58);
+    // arrow to word
+    const wx=x0+addrs[i]*ww+ww/2;
+    const prog=Math.min(1,anim/20);
+    ctx.strokeStyle=dim;ctx.globalAlpha=0.6;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(x+lw/2,70);
+    ctx.lineTo(x+lw/2+(wx-x-lw/2)*prog,70+(yM-78)*prog);ctx.stroke();ctx.globalAlpha=1;
+  }
+  // memory words + segments
+  const touched=new Set(addrs.map(a=>Math.floor(a/SEG)));
+  for(let s=0;s<nWords/SEG;s++){
+    const sx=x0+s*SEG*ww;
+    ctx.strokeStyle=touched.has(s)?acc2:bd;ctx.lineWidth=touched.has(s)?2.5:1;
+    ctx.strokeRect(sx-2,yM-6,SEG*ww+2,40);
+  }
+  for(let w=0;w<nWords;w++){
+    const x=x0+w*ww;const used=addrs.includes(w);
+    ctx.fillStyle=used?acc2:'transparent';ctx.strokeStyle=bd;ctx.lineWidth=1;
+    ctx.fillRect(x,yM,ww-2,28);ctx.strokeRect(x,yM,ww-2,28);
+  }
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.font='12px sans-serif';
+  ctx.fillText('memory (boxes = 4B words, outlined groups = 32B transactions)',x0,yM+54);
+  const nTx=touched.size,useful=LANES*4,moved=nTx*SEG*4;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  ctx.fillText(nTx+' transaction'+(nTx>1?'s':'')+' · '+moved+'B moved for '+useful+'B useful ('+Math.round(100*useful/moved)+'% efficiency)',x0,yM+80);
+  document.getElementById('coalStats').textContent='';
+}
+function play(){anim=0;if(timer)clearInterval(timer);timer=setInterval(()=>{anim++;draw();if(anim>22){clearInterval(timer);timer=null;}},40);}
+document.getElementById('coalPlay').onclick=play;
+document.getElementById('coalMode').onchange=()=>{anim=22;draw();play();};
+anim=22;draw();new MutationObserver(()=>{anim=22;draw();}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 5. roofline ----------
+(function(){
+const cv=document.getElementById('roofViz'),ctx=cv.getContext('2d');
+const GPUS={h100:{peak:990e12,bw:3.35e12,name:'H100'},'5080':{peak:220e12,bw:0.96e12,name:'RTX 5080'}};
+const KERNELS=[['vector add',0.083],['decode GEMV',1],['fused softmax',1.33],['FlashAttn prefill',300],['matmul 4096³',1365]];
+const ai=document.getElementById('roofAI'),ail=document.getElementById('roofAIL');
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const g=GPUS[document.getElementById('roofGpu').value];
+  const acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const x0=70,y0=30,pw=W-110,ph=H-100;
+  // log scales: AI 0.01..10000 (x), FLOPs 1e10..2e15 (y)
+  const lx=v=>x0+ (Math.log10(v)+2)/6*pw;
+  const ly=v=>y0+ph-(Math.log10(v)-10)/5.3*ph;
+  ctx.strokeStyle=bd;ctx.lineWidth=1;ctx.font='11px sans-serif';ctx.fillStyle=dim;
+  // gridlines
+  for(let e=-2;e<=4;e++){const x=lx(Math.pow(10,e));ctx.globalAlpha=0.4;ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y0+ph);ctx.stroke();ctx.globalAlpha=1;
+    ctx.textAlign='center';ctx.fillText(e<0?Math.pow(10,e):Math.pow(10,e).toLocaleString(),x,y0+ph+16);}
+  for(let e=10;e<=15;e++){const y=ly(Math.pow(10,e));ctx.globalAlpha=0.4;ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x0+pw,y);ctx.stroke();ctx.globalAlpha=1;
+    ctx.textAlign='right';ctx.fillText('1e'+e,x0-6,y+4);}
+  ctx.textAlign='center';ctx.fillText('arithmetic intensity (FLOP / byte) →',x0+pw/2,H-8);
+  ctx.save();ctx.translate(16,y0+ph/2);ctx.rotate(-Math.PI/2);ctx.fillText('attainable FLOP/s →',0,0);ctx.restore();
+  // roof
+  const ridge=g.peak/g.bw;
+  ctx.strokeStyle=acc;ctx.lineWidth=2.5;ctx.beginPath();
+  ctx.moveTo(lx(0.01),ly(0.01*g.bw));ctx.lineTo(lx(ridge),ly(g.peak));ctx.lineTo(lx(10000),ly(g.peak));ctx.stroke();
+  ctx.fillStyle=dim;ctx.textAlign='left';
+  ctx.fillText('slope = bandwidth ('+(g.bw/1e12).toFixed(2)+' TB/s)',lx(0.02),ly(0.09*g.bw));
+  ctx.fillText('flat roof = peak FP16 ('+(g.peak/1e12).toFixed(0)+' TFLOP/s)',lx(ridge*3),ly(g.peak)-10);
+  // ridge marker
+  ctx.strokeStyle=warn;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(lx(ridge),y0+ph);ctx.lineTo(lx(ridge),ly(g.peak));ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=warn;ctx.textAlign='center';ctx.fillText('ridge ≈ '+Math.round(ridge)+' FLOP/B',lx(ridge),y0+ph-6);
+  // kernel dots
+  KERNELS.forEach(([name,a])=>{
+    const perf=Math.min(g.peak,a*g.bw);
+    ctx.fillStyle=acc2;ctx.beginPath();ctx.arc(lx(a),ly(perf),5,0,7);ctx.fill();
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.font='11px sans-serif';
+    ctx.fillText(name,lx(a)+8,ly(perf)-6);
+  });
+  // user marker
+  const a=Math.pow(10,parseFloat(ai.value));
+  const perf=Math.min(g.peak,a*g.bw);
+  ctx.fillStyle=txt;ctx.strokeStyle=txt;ctx.lineWidth=2;
+  ctx.beginPath();ctx.arc(lx(a),ly(perf),7,0,7);ctx.stroke();
+  ctx.font='bold 12px sans-serif';ctx.textAlign='left';
+  const bound=a<ridge?'bandwidth-bound':'compute-bound';
+  ail.textContent='AI='+(a>=10?Math.round(a):a.toFixed(2))+' FLOP/B → '+(perf/1e12).toFixed(1)+' TFLOP/s ('+bound+')';
+}
+ai.oninput=draw;document.getElementById('roofGpu').onchange=draw;
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

@@ -13,6 +13,8 @@ Steps 1-4 build your coding foundations, Steps 5-18 cover GPU programming and AI
 
 The [3-Month Schedule](#3-month-schedule) below turns the plan into a week-by-week routine. For a web version with every item linked and progress tracking, open [index.html](./index.html) in a browser.
 
+**New: the [Interactive Notebook](./learn/index.html)** — 14 chapters covering the whole arc (math → deep learning → transformers → GPUs & kernels → quantization → inference systems → parallelism → training → Trainium/TPU → agents → system design) as readable pages with step-through animations, calculators, and a flashcard system with spaced repetition. It also vendors Meta's 3D matmul visualizer, Sebastian Raschka's LLM Architecture Gallery data (109 models), and a [notes library](./learn/notes.html) of four open-source note collections (Stas Bekman's ML Engineering book, the SGLang/slime/verl developers' RL-systems notes, an ML system design interview guide, and an AI-engineering Q&A bank), and ships a narrated [audio course](./learn/index.html#audio) generated offline with Kokoro. Serve the repo with `python3 -m http.server` and open `learn/`, or browse it on GitHub Pages if enabled.
+
 ## 3-Month Schedule
 
 For 1 hour each weekday and 4 hours each weekend day: about 169 hours over 13 weeks, set up for an RTX 5080. It covers the core of each track and keeps the rest of the plan as reference. Every week touches every track, and no weekday repeats the day before it. In the table, `#` numbers are Blind 75 problems (Step 4), `L` numbers are GPU MODE lectures and `Ch` numbers are system design chapters (Step 21).
@@ -213,13 +215,14 @@ For 1 hour each weekday and 4 hours each weekend day: about 169 hours over 13 we
 Read these in order if you are new to the field.
 
 1. [How to Scale Your Model: Inference](https://jax-ml.github.io/scaling-book/inference/) - One request from prefill through decode, with batching, KV memory, and parallelism.
-2. [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - The transformer computation that the rest of the list optimizes.
-3. [CUDA C++ basics](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/intro-to-cuda-cpp.html) - The shortest official introduction to the CUDA execution model.
-4. [Programming Massively Parallel Processors](https://www.elsevier.com/books/programming-massively-parallel-processors/hwu/978-0-323-91231-0) - The main textbook for GPU programming, memory, and kernel design.
-5. [Roofline: An Insightful Visual Performance Model](https://users.cs.duke.edu/~lkw34/papers/roofline-cacm2008.pdf) - The compute, memory-bandwidth, and arithmetic-intensity model.
-6. [Transformer Inference Arithmetic](https://kipply.github.io/blog/transformer-inference-arithmetic/) - FLOPs, parameter bytes, KV bytes, and communication for transformer inference.
-7. [Efficiently Scaling Transformer Inference](https://proceedings.mlsys.org/paper_files/paper/2023/file/c4be71ab8d24cdfb45e3d06dbfca2780-Paper-mlsys2023.pdf) - Latency, memory, and parallelism costs for large-model inference.
-8. [Etalon](https://arxiv.org/html/2407.07000) - TTFT, TPOT, goodput, and latency SLOs for generative-model serving.
+2. [AI Engineer Roadmap: The Five Optimization Techniques](https://faradawnyang.substack.com/p/ai-engineer-roadmap-the-five-optimization) - Faradawn Yang's roadmap through the core LLM inference optimizations, with a matching [video series](https://www.youtube.com/playlist?list=PLuOtX1AplgcvdjCK-tk4TPiYOGsKkil6J) that walks through each one (part 2 covers tensor, data, and expert parallelism).
+3. [Attention Is All You Need](https://arxiv.org/abs/1706.03762) - The transformer computation that the rest of the list optimizes.
+4. [CUDA C++ basics](https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/intro-to-cuda-cpp.html) - The shortest official introduction to the CUDA execution model.
+5. [Programming Massively Parallel Processors](https://www.elsevier.com/books/programming-massively-parallel-processors/hwu/978-0-323-91231-0) - The main textbook for GPU programming, memory, and kernel design.
+6. [Roofline: An Insightful Visual Performance Model](https://users.cs.duke.edu/~lkw34/papers/roofline-cacm2008.pdf) - The compute, memory-bandwidth, and arithmetic-intensity model.
+7. [Transformer Inference Arithmetic](https://kipply.github.io/blog/transformer-inference-arithmetic/) - FLOPs, parameter bytes, KV bytes, and communication for transformer inference.
+8. [Efficiently Scaling Transformer Inference](https://proceedings.mlsys.org/paper_files/paper/2023/file/c4be71ab8d24cdfb45e3d06dbfca2780-Paper-mlsys2023.pdf) - Latency, memory, and parallelism costs for large-model inference.
+9. [Etalon](https://arxiv.org/html/2407.07000) - TTFT, TPOT, goodput, and latency SLOs for generative-model serving.
 
 ## Step 7 - Learn CUDA & GPU Fundamentals
 
@@ -525,6 +528,7 @@ Verified on **2026-08-23** in Wafer's list. These change quickly, so check for n
 - Follow the [CUDA matmul worklog](https://siboehm.com/articles/22/CUDA-MMM) one kernel at a time and record your own numbers
 - Check every kernel against the PyTorch version for correctness, then benchmark it against PyTorch
 - Profile every kernel with [Nsight Compute](https://docs.nvidia.com/nsight-compute/ProfilingGuide/) and check it with [Compute Sanitizer](https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/)
+- Port one kernel you already wrote (online softmax or RoPE is a good fit) to [NKI](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/nki/programming_model.html) and run it with `nki.simulate_kernel`, which needs no Trainium hardware; then compare your tiling and engine mapping against the matching [NKI Library](https://github.com/aws-neuron/nki-library) reference kernel
 - Try problems from [KernelBench](https://proceedings.mlr.press/v267/ouyang25a.html) to practice turning PyTorch operators into faster kernels
 - Share your work and get feedback on the [GPU MODE Discord](https://discord.gg/gpumode)
 

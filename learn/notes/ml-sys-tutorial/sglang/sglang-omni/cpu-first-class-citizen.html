@@ -1,0 +1,233 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisiting CPU Resources as a First-Class Citizen in Speech Model Serving</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/sglang-omni/cpu-first-class-citizen.md</div>
+<article class="note"><h1 id="revisiting-cpu-resources-as-a-first-class-citizen-in-speech-model-serving">Revisiting CPU Resources as a First-Class Citizen in Speech Model Serving</h1>
+<p>Ever since the SGLang project started back in 2023, we have invested heavily in long context inference. In the beginning, the long context we talked about was something like Llama 3's 8K, or the 16K and 32K context lengths of early long-text approaches. Then, in January 2025, the arrival of DeepSeek R1 pushed both context length and the real demand for context to a new height. And this year, the explosion of coding agents drove the demand for context length up even further; in an earlier podcast from our team, we also discussed terrifying models with 1M context windows such as K3 and DeepSeek V4.</p>
+<p>PS: You are welcome to listen to the podcasts <a href="https://mp.weixin.qq.com/s/KydWDORAkByannmR9jt5ZQ">《详解 Kimi K3：强到冲击 Anthropic 估值的模型什么样？》</a> and <a href="https://www.xiaoyuzhoufm.com/episode/69f2e8ef0694c843e7cd91b6?s=eyJ1IjogIjYyNDkxYjY4ZWRjZTY3MTA0YTk0MzljNSJ9">《详解DeepSeekV4：Infra巨鲸、百万上下文走进现实、极致效率优化》</a></p>
+<p>There are many methods we use for long context inference, which we will not expand on here, but everyone is welcome to read our related blog posts. Today's topic, however, has nothing to do with long context; instead, we want to share some cognitive blind spots that came from the nature of our long-term work. Specifically, the vast majority of our time goes into optimizing GPU efficiency, especially under long context, where we have to handle terrifying long prefill and long decoding. This led us to carry a preconceived optimization objective into inference scenarios like ASR/TTS with short requests and high request rates, madly optimizing the GPU Runtime while overlooking the CPU compute resources that are equally critical during inference. On that basis, this article reviews the CPU bottleneck the SGLang Omni project team discovered while running CI, along with the corresponding experimental observations we made and the optimization results we ended up with, in the hope of prompting everyone to take another look at CPU resources.</p>
+<h2 id="the-cpu-bottleneck-found-while-running-ci">The CPU Bottleneck Found While Running CI</h2>
+<p>At the very start of the <a href="https://github.com/sgl-project/sglang-omni/issues/188">V1 refactor</a> of the SGLang Omni project, we established an extremely strict CI policy. Put simply, our CI requires that both performance and correctness only move forward, never backward. To give a concrete example, suppose Qwen3 ASR scores 108 requests per second on the Seed TTS reverse-transcription task at commit A; then every commit after commit A may only push that score higher, no regression is permitted, and correctness must not degrade at all. This sounds entirely trivial, but how do we get our CI to catch every possible regression? Let me give an example: suppose at commit A, Qwen3 ASR scores 108 requests per second, then at commit B it reaches 130 requests per second, and then the next commit C slightly lowers performance, bringing Qwen3 ASR back to the level of 120 requests per second. If we do not raise the CI threshold to 130 right at commit B, and instead keep the threshold of 108 from commit A out of inertia, then the performance regression that occurred between commit B and commit C is very hard for us to detect automatically. To handle this, our approach is actually very simple: right after a commit produces a performance improvement, we immediately run 5 repetitions and take the minimum of those 5 repetitions as the updated CI threshold. We call this process calibration. So, returning to the A B C example I gave earlier, as long as calibration at commit B raises the threshold to 130, we are guaranteed to catch the regression that arises between B and C. This process sounds very simple, but in practice requiring calibration for every PR that improves performance is an extremely painful thing for developers. That said, our consistent view has always been that we would rather make life hard for developers than deny our users the best possible framework. As for how calibration is actually performed, you can refer to the calibration skill in the sglang-omni repo at <code>.claude/skills/tune-ci-thresholds</code>.</p>
+<p>Given this CI setup of ours, our CI can basically pick up precise regressions on the major models for the tasks we care about with great sensitivity. Conversely, if a regression does appear, it immediately puts our team on alert and we investigate the cause. There is a very interesting example here: two months ago, when we migrated CI from H20 to H100, a larger-than-expected regression occurred (see <a href="https://github.com/sgl-project/sglang-omni/issues/907">Issue 907</a>). You could say that our almost pathological obsession with CI is what gives us the most direct observability into performance.</p>
+<p>Likewise, our discovery of the CPU problem also came from a CI regression. Specifically, after <a href="https://github.com/sgl-project/sglang-omni/pull/1183">PR 1183</a> updated the SGL version, we ran a full round of calibration on CI through <a href="https://github.com/sgl-project/sglang-omni/pull/1260">PR 1260</a>, and Fun-ASR's speed gate floor went up from 115.3 to 128.2 req/s, while the five repetitions in that calibration round landed in the 128 to 139 req/s band. But over the next few days, CI began failing the throughput bar on a broad scale, even though those PRs appeared to have nothing to do with ASR itself. Even more extreme, for the same commit, one run only produced about 92 req/s. We then re-ran that PR's CI 12 times in a row, and the worst round came in at only 36 req/s. Code dependencies, GPU, and load-testing scripts were all identical, yet throughput differed by nearly 4× across rounds.</p>
+<p>Our standard for ourselves has always been this: any anomalous phenomenon either means our understanding is insufficient, or a strange bug has appeared. If we do not resolve it now, it is certain to cause a bigger problem later. After observing such an extreme throughput gap between different CI runs, we resolved to investigate the cause.</p>
+<ol>
+<li>the calibration mechanism itself is flawed;</li>
+<li>flashinfer or some other dependency was silently upgraded, causing a performance regression;</li>
+<li>some PR made Runtime performance extremely unstable, greatly amplifying performance variance;</li>
+</ol>
+<p>Given our finding in <a href="https://github.com/sgl-project/sglang-omni/issues/907">Issue 907</a> about the host-bound nature of the workload, we suspected these problems might be related to CPU resources, so we ran some simple controlled experiments. Keeping every other condition identical, we varied only the CPU load on this machine. The result was very interesting: as the CPU load from handling other processes increased, the throughput of the ASR process kept dropping, and at the heaviest load only about 27 req/s remained, with GPU utilization down to single digits. So we went back to check the machine and found that the five calibration rounds of PR 1260 happened to fall entirely inside CI's idle window, when only 0 to 7 jobs were starting per hour; from the next day onward, that same machine was starting 13 to 27 jobs per hour.</p>
+<blockquote>
+<p>note: Note that in order to keep the calibration and CI environments consistent, we actually perform calibration on the very machine that will ultimately run CI. In other words, calibration and CI are really two sides of the same coin. Calibration's only job is to faithfully execute CI 5 times and take the worst performance and correctness result as the threshold. As for CI itself, it is in fact also measuring end to end the performance and correctness of the things we care about. CI is likewise just faithfully running our Benchmark evaluation system; in other words, we have built a three-tier pipeline of Benchmark evaluation, CI test, and calibration, and the components the three can share are numerous.</p>
+</blockquote>
+<p>The final conclusion is that the root cause of the severe ASR CI decline lies in fluctuations of host CPU resources: GPU memory has a budgeting mechanism such as <a href="../../sglang/kvcache-code-walk-through/mem-fraction-static-en.html"><code>mem_fraction_static</code></a>, and GPU compute gets allocated automatically by CI's scheduling, but the CPU has no management mechanism whatsoever. At the same time we found that flashinfer JIT compilation imposes an enormous CPU burden. Under the old flow, a CI cold start would trigger a whole-machine recompilation; we measured this during the validation of <a href="https://github.com/sgl-project/sglang-omni/pull/1343">PR 1343</a>, and one such compilation can knock a co-located ASR service from 122 qps down to 41. To make the mechanism clear, flashinfer kernels are JIT-compiled: when a kernel is first used, if a compiled artifact already exists in the cache it is simply loaded within milliseconds; only when no artifact is found does an on-the-spot compilation of tens of minutes kick in. So a whole-machine recompilation really means a cache miss, and at the time the cache could miss for three reasons. First, the CI image did prewarm a set of compiled artifacts, but the cutlass MOE kernel family was not covered. Second, the image prewarmed its artifacts with Python 3.12, while CI created a separate Python 3.11 venv inside each job, and the version mismatch invalidated all the prewarmed artifacts. Third, whatever got compiled on the spot was written inside the job container and vanished when the container was destroyed, so the next PR had to compile from scratch again. The eventual fix made the cache always hit: the new image prewarms everything including the cutlass MOE family, and <a href="https://github.com/sgl-project/sglang-omni/pull/1343">PR 1343</a> aligned the CI environment with the image's Python 3.12, reusing the image's Torch and FlashInfer directly. With the artifacts complete and the versions aligned, every kernel loads straight from the image and on-the-spot compilation simply no longer happens. After the fix, the first call into fused_moe went from a 481 s compilation to a 1.4 s load.</p>
+<h3 id="the-cpu-cost-of-speech-model-serving">The CPU Cost of Speech Model Serving</h3>
+<p>To describe this problem further, we simplify the inference process of speech models. After a request enters SGLang Omni's serving stack, the CPU host side decomposes the request and schedules it across the <a href="../../sglang/sglang-omni/why-sglang-omni-en.html">multiple stages we designed</a>. Most of these stages are GPU compute; the host/CPU repeatedly dispatches compute tasks to the GPU and, once results come back, immediately relays them to the host to prepare the next step. Every request is very short while concurrency is very high, and a single-step kernel is often only a few microseconds, so a large amount of time goes into inter-stage scheduling and request construction.</p>
+<p>As we mentioned at the beginning of this article, unlike the long decoding and long prefill workloads that LLMs depend on, speech models themselves depend more strongly on the CPU. <a href="https://github.com/sgl-project/sglang-omni/issues/907">#907</a> ran a non-rigorous profiling pass on H100, in which the GPU was idle 94.3% of the time (the gap between two adjacent kernels is roughly 17× the duration of the kernel itself); cutting the server's host CPU to about one quarter dropped throughput by about 70%, while dropping the SM clock to 0.455× cost only 10% of throughput. (PS: our runtime fusion is of course better now than it was at the time of Issue 907, so such extreme idling naturally no longer exists)</p>
+<div align="center"><img src="images/cpu-blog-gpu-waiting-meme.png" width="640"/></div>
+
+<h3 id="why-does-the-cpu-matter-so-much">Why Does the CPU Matter So Much?</h3>
+<p>The earlier experiments only told us that throughput drops as CPU load increases, but did not answer why. In fact, Linux by default allows any process to run on any CPU core; once there are many tasks on a machine, the scheduler places threads from different processes onto the same set of cores, where they compete for execution units, for cache, and for the power budget, and that is contention. It does not require a fully loaded machine to happen: as soon as two CPU-hungry processes happen to land on the same physical core, they start slowing each other down. The earlier example of throughput falling from 139 to 27 is contention showing up at the macro level.</p>
+<div align="center"><img src="images/cpu-blog-three-cuts.svg" width="780"/></div>
+
+<p>To see its microscopic mechanism clearly, we ran two independent sets of experiments to analyze two questions: which dimension of CPU resource does this service actually depend on, and through what pathway does contention cause harm?</p>
+<h3 id="how-cpu-resource-contention-happens">How CPU Resource Contention Happens</h3>
+<p>CPU resources have at least three dimensions: the number of cores, the CPU time usable per second (managed via cgroup quota), and how fast each cycle is (frequency). A very natural reaction might be that if there is not enough CPU, we should add cores, which obviously only considers the most obvious dimension of CPU resources. For the Higgs TTS pipeline, we limited one resource at a time and observed the effect on throughput. Restricting cores from 32 down to 2 barely moved throughput; restricting CPU time to 25% via cgroup quota left only 16% of throughput (recorded in <a href="https://github.com/sgl-project/sglang-omni/issues/921">Issue 921</a>). As a GPU-side control, halving the GPU frequency cost only 20% of throughput; as for the CPU frequency dimension, we did not measure it in isolation.</p>
+<p>A server process easily has several hundred threads, which looks quite terrifying, but in our scenario those several hundred threads together occupy only about one core, and these threads may be serial, so adding cores can hardly improve processing efficiency linearly. There are two intuitive solutions. The first is to turn a single chain into multiple chains, genuinely using more cores through multiple processes and multiple replicas, which is the path taken by same-GPU DP + MPS and the multi-process router. Second, try to protect the server process's CPU time per second from being preempted by other tasks on the machine, which is the thinking behind the core pinning and allocator that follow. And note that if we adopt the first solution aggressively, then the more replicas and the more processes there are, the more severe the preemption among them on the same core becomes.</p>
+<div align="center"><img src="images/cpu-blog-one-core-digging-meme.png" width="640"/></div>
+
+<h3 id="contention-makes-each-request-cost-more-cpu">Contention Makes Each Request Cost More CPU</h3>
+<p>The first experiment proved that contention hurts the performance of all conflicting processes; we then thought further about why this effect occurs:</p>
+<p>One possibility is that there are not enough CPU cores to go around and threads frequently cannot get a core; if that were the case, the number of CPU milliseconds each request needs would stay the same and only the waiting time would grow, and waiting is recorded by PSI (PSI is a Linux kernel pressure metric that measures how much time tasks are forced to wait because they cannot get a CPU). Another possibility is that threads always have a core available, but the SMT sibling on the same physical core is occupied by someone else, and combined with all-core frequency being suppressed, fewer instructions actually make progress per cycle. Less work gets done per millisecond, so the number of core-milliseconds needed to finish the same request goes up. Distinguishing them is simple: look at how PSI and per-request CPU milliseconds each change. Queueing can be alleviated by adding capacity; the latter requires isolating a fixed amount of CPU resource.</p>
+<p>We ran an experiment in the same way, comparing Fun-ASR under the same request load: once with exclusive ownership of its own core region, and once sharing the core region with a group of interference processes saturating the CPU. The results show that in the shared-core-region arm, PSI stayed below 0.01 throughout, meaning almost no task was waiting for a core; but the core-milliseconds per request went from 51 to 52 up to 72 to 83, so the same work costs about 1.5× the CPU time, and throughput also went from about 82 down to 48 to 58 req/s. In other words, pinning plus isolation retains about 92% of the quiet baseline throughput, while not pinning retains only 55% to 62%. The relevant data is recorded in <a href="https://github.com/sgl-project/sglang-omni/issues/1296">Issue 1296</a> and <a href="https://github.com/sgl-project/sglang-omni/issues/1308">Issue 1308</a>.</p>
+<p>Contention makes less work possible per millisecond rather than making tasks queue, so adding capacity cannot solve contention. We therefore chose to use cpuset to grant whole physical cores (together with both of their SMT siblings) exclusively to the service; cgroup quota can only cap the total amount and cannot stop two processes from crowding onto the same physical core.</p>
+<h2 id="fixing-cpu-resource-contention-on-ci">Fixing CPU Resource Contention on CI</h2>
+<p>We did the following things to fix CPU resource contention on CI:</p>
+<ol>
+<li>pin the performance-test processes to the cpuset reserved for each GPU lane (<a href="https://github.com/sgl-project/sglang-omni/pull/1321">PR 1321</a> introduces <code>OMNI_CI_CPUSET</code>, and <a href="https://github.com/sgl-project/sglang-omni/pull/1388">PR 1388</a> propagates it into the ASR/TTS/Qwen3-Omni CI containers);</li>
+<li>detect CPU contention, sampling foreign CPU occupancy on the core region every round during calibration, and when occupancy is detected, treat that measurement as contaminated and re-run it (<a href="https://github.com/sgl-project/sglang-omni/pull/1415">PR 1415</a>, with the follow-up <a href="https://github.com/sgl-project/sglang-omni/pull/1423">PR 1423</a> switching to per-CPU counters to make occupancy accounting more accurate);</li>
+<li>pin unit tests, environment-preparation scripts, and the runner process tree into their respective core regions, and make calibration reuse exactly the same pinned CPU condition as CI (<a href="https://github.com/sgl-project/sglang-omni/pull/1405">PR 1405</a>, <a href="https://github.com/sgl-project/sglang-omni/pull/1417">PR 1417</a>);</li>
+<li>adjust the machine usage policy. Previously this H100 machine reserved two cards for development, while the other six cards ran CI in three groups, and development tasks and CI tasks shared the same set of CPU core regions, which is itself a major source of contention; in the end we converted the whole machine to CI-only and moved development work to other machines.</li>
+</ol>
+<p>Through these measures, we successfully added a CPU budget to the CI machine. Put simply, before our changes, the CI machine would launch a new CI job as long as it detected sufficient GPU resources. After the changes, we brought CPU resources into the CI machine's consideration as well. When insufficient CPU resources are detected, no new CI job is launched even if GPU resources are sufficient.</p>
+<p>Even so, considering that CPU contention can still occur in production environments, we want to build some CPU contention detectors into SGLang Omni ahead of time, at the very least to signal to users that CPU contention is happening, so that users can reasonably adjust the CPU workload to improve overall SGLang Omni throughput efficiency.</p>
+<h2 id="from-manual-core-pinning-to-a-cpu-allocator">From Manual Core Pinning to a CPU Allocator</h2>
+<p>The CI fix relies on manually carving out a CPU core region for each CI runner, an approach that works in a fixed environment like CI. Next we wanted to organize CPU isolation into a general mechanism and validate its effect in more contention scenarios.</p>
+<h3 id="reusing-the-optimization">Reusing the Optimization</h3>
+<p>In the previous section, our fix for CI relied on manually assigning and carving out the CPU core region for each CI runner. Naturally, when the environment is fixed and the variety of tasks is limited, we can draw the core regions in advance, but development scenarios can be far more complex. Let us start with this H100 mixed development/CI machine: suppose there are serving tasks running on the cluster, and at the same time there are tens of thousands of Python tasks, 97% of which have no CPU affinity (CPU core binding). Linux by default allows a process to use any core on the machine, so these tasks can perfectly well occupy the cores the serving process is using.</p>
+<p>Manually managing the CPU core regions of tens of thousands of processes is unrealistic, for three reasons. First, methods like <code>taskset</code> can only constrain the current process, and other processes on the same machine can still run into the current process's core region, so the isolation is one-sided. Second, server topology is not as simple as core numbering; a single physical core usually has two hyperthreads, and as soon as a pair of siblings is handed to two different processes, contention is manufactured. Third, the topology of the serving process itself is highly flexible and varied: the <a href="https://sgl-project.github.io/sglang-omni/basic_usage/mps_dp.html">DP + MPS approach</a>, as well as the later <a href="https://github.com/sgl-project/sglang-omni/issues/1307">process-level replicas</a>, both require fine-grained core division per stage and per replica, and the number and ownership of cores change with configuration, making full manual configuration very difficult. A manual scheme cannot cover the full real serving topology, nor can it control the other tasks on the same machine.</p>
+<p>We ran another non-rigorous comparison experiment: two DP replicas of Qwen3-ASR on the same GPU, with an additional group of CPU-saturating interference tasks on the machine, comparing three approaches:</p>
+<table>
+<thead>
+<tr>
+<th>condition</th>
+<th>Qwen3-ASR qps (two rounds)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>default, today's status quo, no cpu resource management at all</td>
+<td>107 / 115</td>
+</tr>
+<tr>
+<td>lock fixed CPU cores for the two DP2 replicas, without restricting other tasks</td>
+<td>110 to 128</td>
+</tr>
+<tr>
+<td>lock fixed CPU cores for the two DP2 replicas, and also restrict other tasks</td>
+<td>280 / 278</td>
+</tr>
+</tbody>
+</table>
+<p>Constraining only our own process yields a gain of just 10% to 15%; constraining the co-located load as well gives 2.5× the throughput. This shows that to obtain the benefit of isolation, there must be a plan that covers the whole machine, enforced uniformly by a serving flag. To close this gap, we built a topology-aware CPU allocator (<a href="https://github.com/sgl-project/sglang-omni/pull/1463">PR 1463</a>, still open at the time of writing). Its positioning should be stated up front: what actually moves throughput is "confining co-located load into a bounded set of cores", not "letting the serial loop hold cores exclusively". Comparing the plan generated by the allocator against hand-written CORE_BLOCKS, five models under DP measure only 0.92 to 1.02×, which is a wash. So what it buys is an automatic, correct placement plan covering the entire process tree plus an interface that makes contention visible, rather than extra throughput on top of masks someone already tuned by hand.</p>
+<p>Specifically, host overhead varies a great deal across models. Profiling shows that Fun-ASR pays about 45 ms of host orchestration per request, which breaks down into the pre-LM encoder service thread at 45%, the scheduler loop at 28%, request construction at 17%, and the router at 9%, while the actual fbank audio preprocessing is only 3.2 ms (for Qwen3-ASR this cost is about 35 ms); the higher the share of host processing time, the more sensitive the model is to contention. At saturation for Fun-ASR, ASR's host processing uses about 4.2 cores (pre-LM encoder + scheduler), which is rounded up in the configuration to a final declaration of 5 exclusive physical cores. The allocator is responsible for reading the declaration, pairing physical cores with hyperthreads from sysfs, and isolating those 5 physical cores together with both hyperthreads on each core so that ASR owns them exclusively, while the remaining processes in the serve process tree go into the shared pool.</p>
+<div align="center"><img src="images/cpu-blog-allocator-flow.svg" width="780"/></div>
+
+<h3 id="validating-the-effect-under-contention">Validating the Effect Under Contention</h3>
+<p>More experiments prove that the CPU allocator is highly effective when contention is present. PR #1463 ran on 1× H200 with one 16-physical-core lane per model, alternating the allocator on and off for several rounds each (A-B-A-B) to cancel out drift in machine state over time. Every value in the table represents the ratio of throughput with the allocator on versus off, at a given load level.</p>
+<table>
+<thead>
+<tr>
+<th>model</th>
+<th>no load</th>
+<th>moderate load</th>
+<th>heavy load</th>
+<th>heavy-load retention</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fun-ASR</td>
+<td>1.00×</td>
+<td>1.04×</td>
+<td>3.54×</td>
+<td>98%</td>
+</tr>
+<tr>
+<td>Qwen3-ASR</td>
+<td>0.99×</td>
+<td>1.00×</td>
+<td>2.50×</td>
+<td>98%</td>
+</tr>
+<tr>
+<td>Higgs TTS</td>
+<td>0.95× (1.01× on an isolated re-run)</td>
+<td>1.22×</td>
+<td>1.63×</td>
+<td>92% to 97%</td>
+</tr>
+<tr>
+<td>MOSS-TTS-Local</td>
+<td>1.01×</td>
+<td>1.10×</td>
+<td>1.44×</td>
+<td>~100%</td>
+</tr>
+<tr>
+<td>Fish S2-Pro</td>
+<td>1.00×</td>
+<td>1.15×</td>
+<td>2.18×</td>
+<td>98%</td>
+</tr>
+<tr>
+<td>dots.tts</td>
+<td>0.99×</td>
+<td>1.11×</td>
+<td>1.88×</td>
+<td>96%</td>
+</tr>
+</tbody>
+</table>
+<p>Take Fun-ASR as an example: the heavy-load column reads 3.54×, meaning that when contention is severe, the throughput obtained with the allocator on is 3.54× the throughput without it. The last column shows the throughput ratio under heavy load with the allocator on relative to the no-load case. For Fun-ASR it is 98%, which means that no matter how fierce the contention, turning on the allocator protects throughput performance almost perfectly, whereas leaving it off degrades throughput significantly.</p>
+<h2 id="bringing-the-cpu-isolation-mechanism-into-production">Bringing the CPU Isolation Mechanism into Production</h2>
+<p>Since isolation is so effective under contention, we naturally expected a decent gain on the production side too, so we measured the CPU isolation mechanism in a production configuration: same-GPU DP + MPS, no external CPU load on the machine, with the only variable being whether the allocator is on. Unfortunately, our gain was essentially zero.</p>
+<ul>
+<li>scenario: single-node DP with MPS enabled</li>
+<li>external CPU load: none</li>
+<li>concurrency: 3, 6, 12, 24, 48, 96</li>
+<li>only variable: allocator off (baseline) vs on (static)</li>
+<li>repetitions: 3 per group</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>concurrency</th>
+<th>baseline req/s</th>
+<th>static req/s</th>
+<th>paired change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3</td>
+<td>36.398</td>
+<td>36.809</td>
+<td>+1.26%</td>
+</tr>
+<tr>
+<td>6</td>
+<td>69.604</td>
+<td>69.337</td>
+<td>-0.39%</td>
+</tr>
+<tr>
+<td>12</td>
+<td>118.453</td>
+<td>116.789</td>
+<td>-1.42%</td>
+</tr>
+<tr>
+<td>24</td>
+<td>177.795</td>
+<td>180.382</td>
+<td>+1.49%</td>
+</tr>
+<tr>
+<td>48</td>
+<td>200.867</td>
+<td>211.556</td>
+<td>+5.34%</td>
+</tr>
+<tr>
+<td>96</td>
+<td>100.997</td>
+<td>97.025</td>
+<td>-3.68%</td>
+</tr>
+</tbody>
+</table>
+<p>The unweighted average over 18 paired points is +0.43%. The change at each level falls between -3.68% and +5.34%, with no stable positive trend. A design that reached 3.54× under heavy load earlier yields essentially zero gain in the production configuration.</p>
+<h3 id="what-is-different-about-production">What Is Different About Production</h3>
+<p>It is actually easy for everyone to see why the gain from CPU isolation drops to essentially zero on the production side. The reason is simple: CPU resources are not a scarce resource in production. A real production deployment usually has a dedicated machine to itself, with no other tasks on it. On the development / CI shared machine we mentioned, contention is the norm. But on the production side, we found contention to be genuinely rare.</p>
+<p>In the first set of experiments, there was an additional group of CPU-saturating interference tasks on the machine, and the gain came mainly from keeping external contention outside the serving process tree. In the second set of experiments, there was no external CPU load on the machine (which in fact reverts to the no-load case of the first experiment), and the only remaining variable is whether the static allocator inside the server is off or on, that is, how cores are divided among stages. With no external contention, this variable barely affects throughput. So the conclusion is clear: the benefit of isolation comes from restricting external processes' CPU usage, not from how cores are divided among stages inside serving.</p>
+<p>The same hand that made it also unmade it. Both the hypothesis about the CPU and the allocator itself are effective, and on a machine with severe contention the gain is significant. But the task workload on a CI machine is more complex, with dozens of jobs per hour and whole-machine recompilations happening readily, so contention occurs frequently. Production is exactly the opposite: there are only a few services on a machine, each model's host processing uses at most two to five cores, and even if we deploy aggressively in parallel with the MPS DP approach, we would only consume 20-30 cores, while a server CPU has hundreds of cores. CPU is therefore no longer a scarce resource, and protection designed for a high-contention environment naturally shows no measurable gain when moved into an environment with no contention.</p>
+<p>Even more unfortunately, the static allocator is also hard to make a stable production solution:</p>
+<ol>
+<li>after warmup completes, the number of CPU-sensitive processes is limited and so are the cores they occupy, so sustained contention is unlikely to form inside the server. When available cores are plentiful, OS scheduling is already good enough.</li>
+<li>when available cores are plentiful but the partitioning strategy is poor, performance can actually degrade, and quite a few corner cases were found during implementation.</li>
+</ol>
+<h2 id="revisiting-the-importance-of-cpu-resources">Revisiting the Importance of CPU Resources</h2>
+<p>Having been through this, we have come to fully appreciate the importance of CPU resources:</p>
+<ol>
+<li><strong>Use multiple processes to fully exploit multiple cores.</strong> A single host chain cannot saturate even one core, so more processes are needed to use more cores. The combination of DP and MPS has already validated this, and we are also working on finer-grained DP: process-level replicas.</li>
+<li><strong>Optimize every link to fully exploit a single core.</strong> Every request pays a fixed host processing cost: encoder service, inter-stage scheduling, request construction, and kernel launch, of which the first three total about 45 ms on Fun-ASR and about 35 ms on Qwen3-ASR. For kernel launch we have already squeezed out the bulk with <a href="../../torch/cuda-graph/readme_en.html">CUDA Graph</a>, so scheduling and request construction are next. Bringing this cost down benefits both throughput and resistance to contention.</li>
+<li><strong>Avoid external contention when deploying.</strong> The lesson from CI still holds: what really takes down a service is the external tasks on the same machine. Solving this requires approaching it from container deployment and task management, estimating CPU load properly and avoiding CPU contention among tasks, rather than relying on fine-grained control inside the framework.</li>
+</ol>
+<p>This experience also made us realize more deeply that for high-concurrency, low-intensity serving scenarios like speech, the CPU has always been an overlooked resource. It is just that for those of us accustomed to optimizing long context inference, "madly optimizing against the GPU" is a habit, and it blinded us to another resource that is equally decisive for throughput. Any optimization must suit the specific circumstances, start from the essence of the task and the environment, and find and exploit the fundamental limiting factor in order to solve the problems encountered in the system.</p>
+<p>Acknowledgements: Jiaxin Deng, Yuhao Chen, Kaige Li, Huapeng Zhou, Ratish P, Chenchen Hong, Ao Sun, Yueying Li, Chenyang Zhao</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/sglang-omni/cpu-first-class-citizen.md">sglang/sglang-omni/cpu-first-class-citizen.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

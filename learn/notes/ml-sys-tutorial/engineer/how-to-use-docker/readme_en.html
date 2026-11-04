@@ -1,0 +1,168 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download image</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › engineer/how-to-use-docker/readme_en.md</div>
+<article class="note"><h2 id="1-what-is-docker-why-use-docker">1. What is Docker? Why Use Docker?</h2>
+<p>Docker is a software tool that packages environments into <strong>images</strong>. Users can run these images in <strong>containers</strong>, ensuring an identical environment without the need for manual configuration.</p>
+<ul>
+<li>By using the official PyTorch image, you no longer need to worry about version compatibility issues between Python, CUDA, and cuDNN when running deep learning code.</li>
+</ul>
+<h2 id="2-installing-docker">2. Installing Docker</h2>
+<p>Please note that the development environment for sglang is a Linux system.</p>
+<ul>
+<li>Typically, server administrators pre-install Docker, so manual installation is not required. You do not need sudo privileges to install the software.</li>
+<li>If Docker is not found on the server, <code>nerdctl</code> may be used as a replacement. <code>nerdctl</code> is fully compatible with Docker commands; simply replace the command with <code>nerdctl xxx</code>.</li>
+<li>If manual installation is necessary, refer to <a href="https://docs.docker.com/engine/install/">Install | Docker Docs</a> or consult GPT.</li>
+</ul>
+<h2 id="3-downloading-docker-images">3. Downloading Docker Images</h2>
+<p>Most Docker images are published on <a href="https://hub.docker.com/">Docker Hub</a>.</p>
+<p>Please use the official sglang image: <a href="https://hub.docker.com/r/lmsysorg/sglang/tags">lmsysorg/sglang Tags | Docker Hub</a>.</p>
+<pre><code># Download image
+# docker pull &lt;image-name&gt;
+docker pull lmsysorg/sglang:latest
+</code></pre>
+<h2 id="4-running-docker-images-in-containers">4. Running Docker Images in Containers</h2>
+<p>A downloaded <strong>image</strong> is like a compressed package, which must be extracted into a <strong>container</strong> to run. The <strong>host machine</strong> refers to the server.</p>
+<p>The command format for running a container is:</p>
+<pre><code>docker run [OPTIONS] IMAGE [COMMAND]
+</code></pre>
+<ul>
+<li><strong>OPTIONS</strong>: Additional parameters when running the container.</li>
+<li><strong>IMAGE</strong>: The name of the image.</li>
+<li><strong>COMMAND</strong>: The command executed when the container starts.</li>
+<li><strong>Notice</strong>: The image name <code>IMAGE</code> must be placed after <code>OPTIONS</code> and before <code>COMMAND</code>.</li>
+</ul>
+<h3 id="41-common-options-must-read">4.1 Common OPTIONS (Must-Read)</h3>
+<ul>
+<li><code>-it</code> Interactive terminal</li>
+<li>This option allows interactive terminal usage within Docker.</li>
+<li><code>--name &lt;container-name&gt;</code> Container name</li>
+<li>Helps identify ownership of the container.</li>
+<li>Follow server naming conventions; otherwise, administrators may delete it as an orphaned container.</li>
+<li><code>--shm-size &lt;shared-memory-size&gt;</code> Shared memory size</li>
+<li>Deep learning frameworks require large memory. The default 64MB may cause crashes. It is recommended to set it to at least 16GB.</li>
+<li><code>--gpus all</code> Allow access to GPUs</li>
+<li>Set to <code>all</code> unless specific GPU allocation is needed.</li>
+<li><code>-v &lt;host-path&gt;:&lt;container-path&gt;</code> Volume mounting</li>
+<li>Mounts the entire content of <code>&lt;host-path&gt;</code> from the host machine to <code>&lt;container-path&gt;</code> in the container. Files and directories in the mounted path are shared between the host and container, with modifications reflected on both sides.</li>
+<li>This option can be used multiple times, commonly for mapping workspaces, datasets, model files, and configuration files.</li>
+<li>You can map the working directory to the container, run code inside the container, and develop on the host machine.</li>
+<li>Example: <code>-v ~/.cache/huggingface:/root/.cache/huggingface</code> mounts the Hugging Face cache from the host, allowing the container to reuse downloaded models without redownloading.</li>
+<li>On Linux, the <code>pwd</code> command outputs the current directory path. Use <code>-v $(pwd):&lt;container-path&gt;</code> to mount the directory where <code>docker run</code> is executed.</li>
+</ul>
+<p>A complete command might look like this:</p>
+<pre><code>docker run -it --name &lt;container-name&gt; --shm-size 16g --gpus all -v &lt;host-path&gt;:&lt;container-path&gt; IMAGE
+</code></pre>
+<h3 id="42-optional-options">4.2 Optional OPTIONS</h3>
+<ul>
+<li><code>-p &lt;host-port&gt;:&lt;container-port&gt;</code> Port mapping</li>
+<li>Maps <code>&lt;container-port&gt;</code> inside the container to <code>&lt;host-port&gt;</code> on the host, enabling external access.</li>
+<li>Can be used multiple times.</li>
+<li><code>--network host</code> Network sharing</li>
+<li>Allows the container to use the host’s network directly, sharing IP addresses, ports, and network resources.</li>
+<li>If the server is located in China, add <code>--network host</code> to share the network proxy.</li>
+<li>When using <code>--network host</code>, the <code>-p</code> option is ignored.</li>
+<li><code>-e &lt;env-name&gt;=&lt;env-value&gt;</code> Environment variables</li>
+<li>Sets the container’s environment variable <code>&lt;env-name&gt;</code> to <code>&lt;env-value&gt;</code>.</li>
+<li>Can be used multiple times.</li>
+<li><code>--ipc=host</code> Inter-process communication namespace sharing</li>
+<li>Can be used instead of <code>--shm-size</code>.</li>
+<li><code>-d</code> Runs the container in the background; the container does not stop when exiting the terminal.</li>
+<li><code>--rm</code> Automatically removes the container upon exit.</li>
+</ul>
+<h3 id="43-image">4.3 IMAGE</h3>
+<ul>
+<li><strong>For users</strong>: <code>docker pull lmsysorg/sglang:latest</code></li>
+<li><strong>For developers</strong>: <code>docker pull lmsysorg/sglang:dev</code></li>
+<li>Some development issues may require different images; contact the issue owner if needed.</li>
+</ul>
+<h3 id="44-command">4.4 COMMAND</h3>
+<p>You can specify commands to run or restart within the container.</p>
+<p>Some common cases:</p>
+<ul>
+<li>Start a session inside the container. The container acts like a virtual machine where you can enter commands and manage files.</li>
+</ul>
+<pre><code>docker run -it [other OPTIONS] &lt;image-name&gt; bash
+</code></pre>
+<ul>
+<li>Start the <code>sglang</code> server inside the container (running on port 30000) and map it to port 30000 on the host for external access.</li>
+<li>Define the environment variable <code>HF_TOKEN</code> to specify the model token.</li>
+</ul>
+<pre><code>docker run -p 30000:30000 --env &quot;HF_TOKEN=hf_xxx&quot; [other OPTIONS] &lt;image-name&gt; python3 -m sglang.launch_server [other parameters]
+</code></pre>
+<h2 id="5-container-management">5. Container Management</h2>
+<h3 id="51-viewing-containers">5.1 Viewing Containers</h3>
+<ul>
+<li><code>docker ps</code> View running containers.</li>
+<li><code>docker ps -a</code> View all containers.</li>
+</ul>
+<h3 id="52-stopping-containers">5.2 Stopping Containers</h3>
+<p>Exit the session and stop the container:</p>
+<ul>
+<li>Enter <code>exit</code></li>
+<li>Or press <code>Ctrl + D</code></li>
+</ul>
+<p>Exit the session while keeping the container running in the background:</p>
+<ul>
+<li>Press <code>Ctrl + P</code>, then <code>Ctrl + Q</code>. (May not work in some IDEs due to shortcut conflicts.)</li>
+<li>Or add <code>-d</code> when running <code>docker run</code>; the container remains running after exiting.</li>
+<li>Or simply close the terminal.</li>
+</ul>
+<p>Stop a running container:</p>
+<ul>
+<li><code>docker stop &lt;container-name&gt;</code></li>
+</ul>
+<p><strong>Note</strong>: A container automatically stops when the <code>COMMAND</code> finishes execution.</p>
+<h3 id="53-restarting-containers">5.3 Restarting Containers</h3>
+<ul>
+<li><code>docker restart &lt;container-name&gt;</code></li>
+</ul>
+<h3 id="54-attaching-to-a-container">5.4 Attaching to a Container</h3>
+<p>A container must be running before attaching.</p>
+<ul>
+<li><code>docker exec -it &lt;container-name&gt; bash</code> Start an interactive session inside the container.</li>
+<li>The <code>exec</code> command runs a command inside a running container and can also modify environment variables.</li>
+</ul>
+<h3 id="55-deleting-a-container">5.5 Deleting a Container</h3>
+<p>The container must be stopped first:</p>
+<ul>
+<li><code>docker rm &lt;container-name&gt;</code></li>
+<li>Or add <code>--rm</code> when running <code>docker run</code>, so the container is automatically deleted upon exit.</li>
+</ul>
+<h2 id="6-building-images">6. Building Images</h2>
+<p>TODO</p>
+<h2 id="7-uploading-images">7. Uploading Images</h2>
+<p>TODO</p>
+<h2 id="use-docker-in-vscode">Use docker in VSCode</h2>
+<p>Please make sure to install the Devcontainer extension in VSCode.</p>
+<p>In the folder you want to open inside the docker container create a folder <code>.devcontainer</code>.
+In the <code>.devcontainer</code> create a <code>devcontainer.json</code> like so:</p>
+<pre><code>{
+  &quot;name&quot;: &quot;simon&quot;,
+  &quot;build&quot;: {
+    &quot;dockerfile&quot;: &quot;../docker/cuda_new.Dockerfile&quot;
+  },
+  &quot;runArgs&quot;: [
+    &quot;--gpus&quot;,
+    &quot;device=7&quot;
+  ]
+}
+</code></pre>
+<p>Make sure to point with the path to the docker file you want to use.
+You can than use 
+<code>ctrl + shift + p</code> and type <code>Devcontainers: Open Folder in Container</code> and select the folder where you created the subfolder <code>.devcontainer</code>. You will be able to use all the features of VSCode while developing inside the container..</p>
+<p>For more details see <a href="https://code.visualstudio.com/docs/devcontainers/containers">here</a>.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/engineer/how-to-use-docker/readme_en.md">engineer/how-to-use-docker/readme_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,199 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Friends/Follower recommendation (People you may know)</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-pymk.md</div>
+<article class="note"><h1 id="friendsfollower-recommendation-people-you-may-know">Friends/Follower recommendation (People you may know)</h1>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<p>Recommend a list of users that you may want to connect with 
+* Clarifying questions
+  * What is the primary business objective of the system? 
+  * What's the primary use case of the system?
+  * Are there specific factors needs to be considered for recommendations?
+  * Are friendships/connections symmetrical?
+  * What is the scale of the system? (users, connections)
+  * can we assume the social graph is not very dynamic?
+  * Do we need continual training? 
+  * How do we collect negative samples? (not clicked, negative feedback). 
+  * How fast the system needs to be? 
+  * Is personalization needed? Yes </p>
+<h2 id="_1"></h2>
+<ul>
+<li>Use case(s) and business goal</li>
+<li>use case: PYMMK: recommend a list of users to connect with on social media app (e.g. facebook, linkedin)</li>
+<li>
+<p>business objective: maximize number of formed connections </p>
+</li>
+<li>
+<p>Requirements;</p>
+<ul>
+<li>Scalability: 1 B total users, on avg. 10000 connection per user     </li>
+</ul>
+</li>
+<li>
+<p>Constraints:</p>
+<ul>
+<li>Privacy and compliance with data protection regulations.</li>
+</ul>
+</li>
+<li>
+<p>Data: Sources and Availability:</p>
+</li>
+<li>
+<p>Assumptions:</p>
+<ul>
+<li>symmetric firendships</li>
+</ul>
+</li>
+<li>
+<p>ML Formulation:</p>
+<ul>
+<li>Objective: </li>
+<li>maximize number of formed connections </li>
+<li>I/O: I: user_id, O: ranked list of recommended users sorted by the relevance to the user </li>
+<li>ML Category: two options: </li>
+<li>Ranking problem: <ul>
+<li>pointwise LTR - binary classifier (user_i, user_j) -&gt; p(connection)</li>
+<li>cons: doesn't capture social connections </li>
+</ul>
+</li>
+<li>Graph representation (edge prediction)<ul>
+<li>supplement with graph info (nodes, edges)</li>
+<li>input: social graph, predict edge b/w nodes </li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<ul>
+<li>Offline </li>
+<li>GNN model: binary classification -&gt; ROC-AUC </li>
+<li>
+<p>Recommendation system: binary relationships -&gt; mAP </p>
+</li>
+<li>
+<p>Online </p>
+</li>
+<li>No of friend requests sent over X time </li>
+<li>No of friend requests accepted over X time </li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<ul>
+<li>High level architecture </li>
+<li>Node-level predictions </li>
+<li>Edge-level predictions </li>
+</ul>
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<ul>
+<li>Data Sources</li>
+<li>Users, <ul>
+<li>demographics, edu and work backgrounds, skills, etc</li>
+<li>note: standardized data (e.g. cs / computer science)</li>
+</ul>
+</li>
+<li>User-user connections,  </li>
+<li>
+<p>User-user interactions, </p>
+</li>
+<li>
+<p>Labelling</p>
+</li>
+</ul>
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<ul>
+<li>
+<p>Feature selection</p>
+</li>
+<li>
+<p>User: </p>
+<ul>
+<li>ID, username</li>
+<li>Demographics (Age, gender, location)</li>
+<li>Account/Network info: No of connections, followers, following, requests, etc, account age</li>
+<li>Interaction history (No of likes, shares, comments)</li>
+<li>Context (device, time of day, etc)</li>
+</ul>
+</li>
+<li>
+<p>User-user connections: </p>
+<ul>
+<li>Connection: IDs(user1, user2), connection type, timestamp, location </li>
+<li>edu and work affinity: major similarity, companies in common, industry similarity, etc </li>
+<li>social affinity: No. mutual connections (time discounted)</li>
+</ul>
+</li>
+<li>User-user interactions:  <ul>
+<li>IDs(u user1, user2), interaction type, timestamp </li>
+</ul>
+</li>
+</ul>
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<ul>
+<li>Model selection </li>
+<li>
+<p>We choose GNN </p>
+<ul>
+<li>operate on graph data </li>
+<li>predict prob of edge </li>
+<li>input: graph (node and edge features)</li>
+<li>output: embedding of each node</li>
+<li>use similarities b/w node embeddings for edge prediction </li>
+</ul>
+</li>
+<li>
+<p>Model Training </p>
+</li>
+<li>snapshot of G at t. model predict connections at t+1</li>
+<li>Dataset <ul>
+<li>create a snapshot at time t</li>
+<li>compute node and edge features </li>
+<li>create labels using snapshot at t + 1 (if connection formed, positive) </li>
+</ul>
+</li>
+<li>Model eval and HP tuning </li>
+<li>Iterations </li>
+</ul>
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<ul>
+<li>Prediction pipeline </li>
+<li>Candidate generation <ul>
+<li>Friends of Friends (FoF) - rule based - from 1B to 1K.1K = 1M candidates -&gt; FoF service  </li>
+</ul>
+</li>
+<li>Scoring service (using GNN model -&gt; embeddings -&gt; similarity scores)</li>
+<li>sort by score </li>
+<li>pre-compute PYMK tables for each / active users and store in DB </li>
+<li>re-rank based on business logic </li>
+</ul>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<ul>
+<li>A/B Test </li>
+<li>Deployment and release </li>
+</ul>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3>
+<ul>
+<li>Scaling (SW and ML systems)</li>
+<li>Monitoring </li>
+<li>Updates </li>
+</ul>
+<h3 id="10-other-topics">10. Other topics</h3>
+<ul>
+<li>add a lightweight ranker </li>
+<li>bias problem </li>
+<li>delayed feedback problem (user accepts after days)</li>
+<li>personalized random walk (for baseline)</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-pymk.md">src/MLSD/mlsd-pymk.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

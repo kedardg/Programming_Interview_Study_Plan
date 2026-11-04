@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Customization Strategy</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+.ladder { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; margin: 10px 0; }
+.rung { background: var(--bg-inset); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: .8rem; opacity: .55; transition: all .2s; }
+.rung.pick { opacity: 1; border-color: var(--accent2); box-shadow: 0 0 0 2px rgba(56,198,160,.25); }
+.rung.consider { opacity: .9; border-color: var(--warn); }
+.rung .n { font-size: .7rem; color: var(--text-dim); }
+.reason { background: var(--bg-inset); border-left: 3px solid var(--accent2); padding: 10px 14px; border-radius: 8px; margin-top: 10px; font-size: .92rem; }
+</style>
+</head>
+<body>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html" class="here">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<main>
+<h1>Model Customization Strategy, Data &amp; Evaluation</h1>
+<p class="dim">The chapter for the person who has to <em>decide</em>: a customer wants a model that is better, faster, or cheaper at their task — which of a dozen techniques do you reach for, what data makes it work, and how do you prove it worked? This is the technical-lead counterpart of the <a href="training.html">training</a> and <a href="inference.html">inference</a> chapters: less about how the machinery runs, more about choosing the machinery and making the choice defensible.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (14:20)</h3><audio controls preload="none" src="audio/customization.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/customization.txt">Read the transcript</a>.</p></div>
+<h2 id="framing">1. Framing the problem: from a business ask to an eval bar</h2>
+<p>Customization engagements fail at the start, not the end. The failure mode is beginning with a technique ("we want to fine-tune Llama") instead of a target. A technical lead's first job is to turn an ambiguous ask into three numbers that an executive and an engineer both accept, and to agree on how those numbers will be measured <em>before</em> any model is touched. The three numbers are always the same triad:</p>
+<ul>
+<li><strong>Quality</strong> — a task-specific metric on a held-out set the customer trusts: pass rate on their own test cases, exact-match on their forms, win-rate against the current system as judged by their reviewers. Never a public benchmark alone; public benchmarks tell you about the base model, not about their problem.</li>
+<li><strong>Latency</strong> — percentiles, not averages, split into TTFT and TPOT (see <a href="inference.html#two-phases">Ch. 11</a>), measured at the <em>load</em> they expect, because a model that meets p50 at batch 1 can miss p95 at batch 64.</li>
+<li><strong>Cost</strong> — dollars per unit of business work (per resolved ticket, per 1K requests, per accepted pull request), which folds in model size, precision, hardware, and utilization. Cost per token is an input to this, not the answer.</li>
+</ul>
+<div class="card">
+<h3>Worked example: "we want a coding assistant for our codebase"</h3>
+<table class="cmp">
+<tr><th>Vague ask</th><th>Measurable target</th><th>How it is measured</th></tr>
+<tr><td>"It should understand our code"</td><td>pass@1 ≥ 55% on a 400-task internal suite (bug fixes and small features with hidden tests), up from 31% with the current prompted frontier model</td><td>Suite built from the last 12 months of merged PRs with their CI tests; held out from all training data; re-run nightly</td></tr>
+<tr><td>"It should feel fast"</td><td>p95 TTFT ≤ 800 ms for 8K-token prompts; p95 TPOT ≤ 25 ms; at 40 concurrent developers</td><td>Load test with replayed real prompts against the serving endpoint (vLLM bench), weekly</td></tr>
+<tr><td>"It can't cost a fortune"</td><td>≤ $0.012 per completion request, all-in (GPU hours ÷ requests), i.e. ≤ $9K/month at projected volume</td><td>Measured from billing + request logs; projected from tokens/sec per replica × hourly price</td></tr>
+</table>
+<p class="caption">Notice how each row forces a design question: the pass@1 target decides whether prompting can possibly suffice; the latency target at 40 concurrent users bounds the model size and precision; the cost target decides whether a distilled small model is required. The eval bar is the spec.</p>
+</div>
+<p>Two more habits of leads who succeed: write down the <strong>baseline</strong> (what the current system or a prompted frontier model scores on the same suite — surprisingly often it already clears the bar, and the engagement becomes a serving problem) and write down the <strong>regression budget</strong> (what general capabilities must not degrade, and by how much, measured on a small general suite). Customization that gains 20 points on the task and silently loses instruction following is a failure the customer discovers in production.</p>
+
+<h2 id="ladder">2. The customization ladder</h2>
+<p>Every technique is a rung on a ladder ordered by how much it changes the model, how much data and compute it needs, and how much it can go wrong. The discipline is to <strong>climb only as high as the eval demands</strong>: each rung is justified by a measured gap the rung below could not close. The most common expensive mistake is starting at rung five because it is the interesting one.</p>
+<div class="card">
+<h3>Interactive: which rung?</h3>
+<div class="controls">
+  <label class="ctl">Labeled task examples <select id="qData"><option value="0">≈ none</option><option value="1">hundreds</option><option value="2" selected>thousands</option><option value="3">100K+</option></select></label>
+  <label class="ctl">Main gap <select id="qGap"><option value="format">format / style / tool-calling</option><option value="knowledge" selected>domain knowledge</option><option value="reasoning">multi-step reasoning / agentic</option><option value="preference">judgment / preferences</option></select></label>
+  <label class="ctl">Verifiable reward? <select id="qVerif"><option value="yes">yes (tests, checkers)</option><option value="no" selected>no</option></select></label>
+</div>
+<div class="controls">
+  <label class="ctl">Latency/cost vs frontier prompting <select id="qCost"><option value="ok">acceptable as is</option><option value="tight" selected>must be ≥3× cheaper/faster</option></select></label>
+  <label class="ctl">Domain changes <select id="qDrift"><option value="fast">weekly (prices, tickets, docs)</option><option value="slow" selected>slowly (years)</option></select></label>
+  <label class="ctl">Base model already at the bar? <select id="qBase"><option value="yes">yes with prompting</option><option value="close" selected>close (within ~10 pts)</option><option value="far">far</option></select></label>
+</div>
+<div class="ladder" id="ladder"></div>
+<div class="reason" id="reason"></div>
+<p class="caption">A heuristic, not an oracle: it encodes the reasoning a lead should be able to say out loud. Green = recommended path; amber = rungs to combine with it. Change one input at a time and watch which assumption moves the recommendation — that sensitivity is exactly what to probe in a design review.</p>
+</div>
+<table class="cmp">
+<tr><th>Rung</th><th>Data needed</th><th>Compute</th><th>Regression risk</th><th>Latency / cost effect</th><th>Fails when</th></tr>
+<tr><td>Prompting, few-shot</td><td>Dozens of examples</td><td>None</td><td>None</td><td>Longer prompts → more prefill; prefix caching helps</td><td>Gap is knowledge the model never saw, or reasoning beyond its class</td></tr>
+<tr><td>RAG</td><td>A corpus + chunking/eval set</td><td>Index build</td><td>None to the model</td><td>Adds retrieval latency and prefill tokens</td><td>Answers need synthesis across many documents or procedural skill, not lookup</td></tr>
+<tr><td>SFT with adapters (LoRA)</td><td>1K–50K demonstrations</td><td>Hours on one node</td><td>Low–medium</td><td>Zero if merged; small if served unmerged</td><td>Demonstrations are inconsistent or the gap is knowledge-scale</td></tr>
+<tr><td>Full SFT</td><td>10K–1M+</td><td>Node-days</td><td>Medium (forgetting)</td><td>None</td><td>Same as LoRA but data too small to justify the risk</td></tr>
+<tr><td>Preference optimization (DPO/KTO)</td><td>5K–100K pairs</td><td>Hours–days</td><td>Medium (length bias, over-optimization)</td><td>None</td><td>Preferences are inconsistent; no clear "better"</td></tr>
+<tr><td>RL with verifiable rewards (GRPO)</td><td>Prompts + checkers, few labels</td><td>Days, rollout-heavy</td><td>Medium–high (reward hacking)</td><td>Often longer outputs (reasoning) → more decode</td><td>No reliable verifier; reward is gameable</td></tr>
+<tr><td>Distillation into a smaller model</td><td>Teacher + prompts (unlabeled)</td><td>Teacher inference + student training</td><td>Low on task; general ability bounded by student</td><td><strong>The big win</strong>: 5–20× cheaper serving</td><td>Student capacity too small for the task's reasoning depth</td></tr>
+<tr><td>Continued pre-training</td><td>1B–200B+ domain tokens</td><td>Weeks, multi-node</td><td>High without replay</td><td>None</td><td>Gap is format, not knowledge; data is thin</td></tr>
+<tr><td>Domain foundation model</td><td>Trillions of tokens</td><td>Months, cluster</td><td>Starts from zero</td><td>You pick the size</td><td>Almost always: an open-weight base plus CPT beats it on cost and quality</td></tr>
+</table>
+
+<h2 id="distillation">3. Distillation: the technique that pays for itself</h2>
+<p>Most engagements end with a cost target the frontier model cannot meet. Distillation is how you keep the frontier model's behavior on <em>your</em> task while serving something a tenth the size: a <strong>teacher</strong> (a large model, possibly one you first fine-tuned or RL-trained) supervises a <strong>student</strong>. There are three ways to do it, and the choice matters more than the student size:</p>
+<ul>
+<li><strong>Sequence-level distillation</strong> (also "hard distillation"): generate teacher outputs for your prompts, SFT the student on them. Simple, works with API-only teachers, and is what most teams mean by distillation. Its weakness is exposure bias — the student learns to continue teacher text, not its own.</li>
+<li><strong>Logit (soft-label) distillation</strong>: match the student's next-token distribution to the teacher's with a KL loss at every position (Hinton et al., 2015). Soft targets carry "dark knowledge" — that <code>return</code> was plausible even where <code>yield</code> was chosen — and typically beat hard labels for the same data. Needs white-box teacher logits and a shared tokenizer (or a vocabulary mapping).</li>
+<li><strong>On-policy distillation</strong>: the student generates, the teacher scores the student's own tokens (per-token log-probs or reverse-KL), and the student is updated toward the teacher on the states <em>it actually visits</em> (MiniLLM, Gu et al. 2023; GKD, Agarwal et al. 2024). This fixes exposure bias, needs far fewer teacher tokens than RL needs rollouts, and in 2025 reports it matched RL-trained reasoning quality at a fraction of the compute for mid-size students. It is the modern default when you own the teacher.</li>
+</ul>
+<div class="card">
+<h3>Animation: hard labels vs soft targets</h3>
+<canvas id="kdViz" class="viz" width="900" height="280"></canvas>
+<div class="controls">
+  <label class="ctl">Temperature τ <input type="range" id="kdTemp" min="5" max="40" value="20"> <span id="kdTempL">2.0</span></label>
+  <button class="btn secondary" id="kdNext">Next position</button>
+</div>
+<p class="caption">For one token position, the teacher's distribution (blue) over a 12-token slice of the vocabulary vs the one-hot hard label (grey). Raising τ flattens the teacher's distribution and exposes the second- and third-best tokens the student should also learn to rate highly; the student (green) is trained to match the blue bars, not just the tall one. The hard label throws away everything but the argmax.</p>
+</div>
+<div class="formula"># Knowledge-distillation losses (PyTorch). logits: [B, T, V] for teacher and student.
+import torch, torch.nn.functional as F
+
+def kd_forward_kl(student_logits, teacher_logits, tau=2.0, mask=None):
+    """Hinton-style: KL(teacher || student) on temperature-softened distributions.
+    Mode-covering: student spreads mass over everything the teacher finds plausible."""
+    p_t = F.softmax(teacher_logits / tau, dim=-1)                  # soft targets
+    log_p_s = F.log_softmax(student_logits / tau, dim=-1)
+    kl = (p_t * (torch.log(p_t + 1e-9) - log_p_s)).sum(-1)          # [B, T]
+    if mask is not None: kl = kl * mask
+    return kl.sum() / (mask.sum() if mask is not None else kl.numel()) * tau**2
+
+def kd_reverse_kl(student_logits, teacher_logits, tau=1.0, mask=None):
+    """MiniLLM-style: KL(student || teacher). Mode-seeking: student commits to the
+    teacher's high-probability modes instead of smearing over its tail — better for
+    generation quality when the student is much smaller."""
+    log_p_s = F.log_softmax(student_logits / tau, dim=-1)
+    log_p_t = F.log_softmax(teacher_logits / tau, dim=-1)
+    p_s = log_p_s.exp()
+    kl = (p_s * (log_p_s - log_p_t)).sum(-1)
+    if mask is not None: kl = kl * mask
+    return kl.sum() / (mask.sum() if mask is not None else kl.numel())
+
+# On-policy variant: sample sequences FROM THE STUDENT, run the teacher forward on those
+# sequences to get teacher_logits at the student's own states, then apply kd_reverse_kl.
+# That single change (whose text we score) is what removes exposure bias.</div>
+<p>When does distillation beat RL for a cost target? When the teacher already does the task well. RL discovers behavior; distillation transfers it. The sequencing that works in practice: <em>make one strong model great</em> (SFT → preference → RL if there is a verifier), <em>then</em> distill it into the size the cost target demands, and re-run the eval suite on the student — the student's ceiling is the student's capacity, and the suite will tell you if you went too small.</p>
+
+<h2 id="cpt">4. Continued pre-training and domain foundation models</h2>
+<p>Fine-tuning teaches <em>format and behavior</em>; it is bad at teaching <em>knowledge</em>. If the eval gap is "the model doesn't know our 40,000-page regulatory corpus", SFT on Q&amp;A pairs will overfit the pairs and still hallucinate the regulations. Two honest options exist for knowledge gaps: RAG (rung two, and it should be tried first because it is cheap and always current) or <strong>continued pre-training (CPT)</strong> — resuming next-token training of the base model on billions of domain tokens.</p>
+<p>CPT's known hazard is <strong>catastrophic forgetting</strong>: train on medical text only and the model gets worse at code, instruction following, and sometimes at medicine-as-asked-by-users. The fix is <em>replay</em>: mix a slice of general pre-training-like data (10–30% is typical) into the domain stream, and keep the learning rate well below the original peak with a short re-warmup. The animation shows the trade: more replay protects general ability but dilutes domain gain per token.</p>
+<div class="card">
+<h3>Animation: forgetting vs replay ratio</h3>
+<canvas id="cptViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <label class="ctl">Replay fraction <input type="range" id="cptReplay" min="0" max="50" value="20"> <span id="cptReplayL">20%</span></label>
+  <button class="btn" id="cptPlay">▶ Train</button>
+  <button class="btn secondary" id="cptReset">Reset</button>
+</div>
+<p class="caption">Stylized but faithful to what CPT papers report: with 0% replay the domain score (green) climbs fastest while the general score (orange) collapses; around 20–30% replay the general score holds within a few points and the domain score still reaches most of its gain. The right fraction is an empirical knob set by your regression budget — which is why the budget had to be written down in Section 1.</p>
+</div>
+<p><strong>Tokenizer extension.</strong> Domain text (code, chemistry, legal citations, non-English languages) often tokenizes badly — more tokens per word, so more compute per document and a shorter effective context. Adding a few thousand domain tokens to the vocabulary and initializing their embeddings from the mean of their old sub-token embeddings is cheap and recovers 10–30% tokens/word in specialized domains; it must be done before CPT so the new embeddings get trained.</p>
+<div class="formula"># The compute arithmetic (same 6ND rule as training.html), CPT of a 70B model on 200B domain tokens
+FLOPs ≈ 6 × 70e9 × 200e9 = 8.4e22
+H100 at ~40% MFU of 989 TFLOP/s (BF16 dense) ≈ 4.0e14 FLOP/s sustained
+GPU-hours ≈ 8.4e22 / 4.0e14 / 3600 ≈ 58,000 H100-hours  → 256 H100s for ~9.5 days, ~$150–250K at typical cloud prices
+Compare: LoRA SFT of the same model on 50K examples (~50M tokens) ≈ 0.001× of that.</div>
+<p><strong>Domain foundation models from scratch</strong> — training a new base on trillions of tokens — are the top rung and almost never the right call. BloombergGPT (2023) trained a 50B model on 363B financial tokens plus 345B general tokens, at a cost that today buys CPT of a far stronger open-weight base several times over; subsequent comparisons found general frontier models matching or beating it on finance tasks within a year. The honest bar for a domain FM is: the domain's data is enormous and unlike web text (genomics, molecules, time series), <em>and</em> the tokenization or architecture itself needs to change. Code models are the one place where "domain FM" and "general FM" have converged: every frontier model is now also a code model, so the customer pattern is CPT + SFT + RL on their codebase, not a new base.</p>
+
+<h2 id="data">5. Data strategy</h2>
+<p>Model quality is downstream of data quality in every published ablation, and the technical lead owns the data decisions because they are the ones with legal and product consequences. The pipeline that works:</p>
+<ol>
+<li><strong>Audit</strong>: what exists, who owns it, what license or consent covers it, what it covers and what it misses relative to the eval suite's task distribution. A coverage matrix (task type × data source × count) is a one-afternoon artifact that prevents month-long surprises.</li>
+<li><strong>Deduplicate</strong>: exact duplicates with hashes, near-duplicates with MinHash + locality-sensitive hashing (LSH). Near-dupes inflate effective epochs on boilerplate, and — critically — duplicate text that also appears in the eval set is contamination. Deduplication consistently improves downstream quality per token (Lee et al., 2022).</li>
+<li><strong>Filter for quality</strong>: heuristics (length, symbol ratio, perplexity under a small model) then a learned classifier trained on a few thousand hand-labeled good/bad examples; FineWeb-Edu's "educational value" classifier is the template.</li>
+<li><strong>Decontaminate</strong>: remove any training document sharing long n-grams (13-grams is the GPT-3 convention) with any eval item. Do it <em>both</em> ways — the public base model may already be contaminated on public benchmarks, which is one more reason to build private suites.</li>
+<li><strong>Tune the mixture</strong>: domain vs replay vs instruction data, and ordering (curriculum); treat mixture weights as hyperparameters validated on the eval suite, not as taste.</li>
+</ol>
+<div class="card">
+<h3>Animation: MinHash + LSH near-duplicate detection</h3>
+<canvas id="dedupViz" class="viz" width="900" height="320"></canvas>
+<div class="controls">
+  <button class="btn" id="dedupStep">Step</button>
+  <button class="btn secondary" id="dedupReset">Reset</button>
+  <span class="dim" id="dedupMsg"></span>
+</div>
+<p class="caption">Six documents become shingle sets (word 3-grams), each set is compressed to a short MinHash signature whose matching rows estimate Jaccard similarity, and LSH bands bucket signatures so only candidates sharing a band are compared. Two near-duplicates (docs 2 and 5, light edits of the same paragraph) collide in a band and are flagged; the others never get compared — which is how this scales to billions of documents.</p>
+</div>
+<p><strong>The data flywheel.</strong> Production traffic is the best training signal you will ever get: real prompts, real failures, real corrections. Capturing it requires a privacy design decided with the customer up front — consent and retention policies, PII redaction before storage, aggregation rather than raw replay where possible — and a labeling loop that routes low-confidence or thumbs-down interactions to reviewers. Teams that build this in month one are still improving in month twelve; teams that skip it plateau at their initial dataset.</p>
+
+<h2 id="synthetic">6. Synthetic data</h2>
+<p>You will never have enough human-written demonstrations for the long tail of a domain. Synthetic data closes the gap, and since 2023 nearly every strong open model's post-training mix is majority synthetic. The methods, from simple to the current default:</p>
+<ul>
+<li><strong>Self-Instruct / Evol-Instruct</strong> (Wang et al. 2022; Xu et al. 2023): seed a strong model with a few hundred tasks and have it generate instructions and answers; "evolve" them (add constraints, deepen reasoning, broaden) to raise difficulty and diversity.</li>
+<li><strong>Rejection sampling with verifiers</strong> (STaR, Zelikman et al. 2022; RFT): sample k candidate solutions per prompt, keep only those a <em>verifier</em> accepts — unit tests for code, a checker for math, a schema validator for structured outputs — and SFT on the survivors. This is the single highest-leverage technique in domains with verifiers, and it is the SFT-side twin of RL with verifiable rewards (<a href="rl-systems.html">Ch. 15</a>).</li>
+<li><strong>Model-as-judge filtering</strong> where there is no verifier: a strong model scores candidates against a rubric. It works only after you <em>calibrate</em> the judge against a few hundred human labels (agreement rate, bias checks) — an uncalibrated judge silently teaches the student the judge's quirks.</li>
+<li><strong>Seeded diversity</strong>: condition generation on personas, documents, or code files so the outputs cover the distribution rather than the model's favorite phrasing (Persona Hub; "ground every synthetic example in a real artifact" is the robust rule).</li>
+</ul>
+<div class="card">
+<h3>Animation: rejection sampling funnel — and the collapse you avoid</h3>
+<canvas id="rsViz" class="viz" width="900" height="320"></canvas>
+<div class="controls">
+  <button class="btn" id="rsPlay">▶ Run generations</button>
+  <button class="btn secondary" id="rsReset">Reset</button>
+  <label class="ctl"><input type="checkbox" id="rsFilter" checked> verifier filter on</label>
+  <span class="dim" id="rsStats"></span>
+</div>
+<p class="caption">Top: each round samples 16 candidates (dots) for a prompt; a verifier keeps the passing ones (green) and discards failures (red); survivors join the SFT set and the model's pass rate (bar) climbs. Bottom: the diversity of the model's outputs across generations. Untick the filter to train on unfiltered self-generated data — the pass rate drifts and the diversity collapses, the model-collapse failure documented when models recursively train on their own outputs (Shumailov et al., 2024).</p>
+</div>
+<div class="formula"># Rejection-sampling fine-tuning (RFT) data pipeline — the shape every verifier-domain project shares.
+import hashlib, json, subprocess, tempfile, os
+
+def run_tests(code: str, tests: str, timeout=10) -> bool:
+    with tempfile.TemporaryDirectory() as d:
+        open(f"{d}/sol.py", "w").write(code); open(f"{d}/test_sol.py", "w").write(tests)
+        r = subprocess.run(["python", "-m", "pytest", "-q", "-x", "test_sol.py"], cwd=d,
+                           capture_output=True, timeout=timeout)   # sandbox this for real
+        return r.returncode == 0
+
+def rft_round(prompts, generate, k=16):
+    """generate(prompt, n) -> list[str] from the current policy (vLLM with n=k, temperature ~0.8)."""
+    kept, seen = [], set()
+    for p in prompts:
+        for cand in generate(p["prompt"], k):
+            if not run_tests(cand, p["tests"]): continue            # verifier gate
+            h = hashlib.sha1(" ".join(cand.split()).encode()).hexdigest()
+            if h in seen: continue                                 # dedup identical solutions
+            seen.add(h); kept.append({"prompt": p["prompt"], "completion": cand})
+    return kept   # -> SFT (Axolotl dataset), then re-generate with the improved model (STaR loop)</div>
+
+<h2 id="evals">7. Evaluation methodology</h2>
+<p>Evaluation is where engagements are won or lost in review: a result the customer's engineers cannot reproduce or whose confidence interval you cannot state is not a result. Build the harness before the first fine-tune and treat it as production code.</p>
+<h3>Offline metrics</h3>
+<p><strong>Exact match / accuracy</strong> for closed-form answers; <strong>pass@k</strong> for anything with a verifier. pass@k is <em>not</em> "fraction of problems solved in k tries" computed naively (that estimator is biased when you sample more than k). Chen et al. (2021) give the unbiased form: sample n ≥ k candidates per problem, count c correct, and estimate</p>
+<div class="formula">pass@k = E_problems[ 1 − C(n − c, k) / C(n, k) ]
+
+worked example, one problem: n = 10 samples, c = 3 correct, k = 1
+  1 − C(7,1)/C(10,1) = 1 − 7/10 = 0.30          (matches c/n, as it must for k=1)
+same problem, k = 5:
+  1 − C(7,5)/C(10,5) = 1 − 21/252 = 0.917        (five tries almost surely include a correct one)</div>
+<p><strong>Rubric scoring</strong> for open-ended outputs: a written rubric with 3–5 binary criteria beats a 1–10 "quality" score for both humans and judge models, because binary criteria can be audited.</p>
+<h3>LLM-as-judge, used carefully</h3>
+<p>Judge models (Zheng et al., 2023, MT-Bench) make open-ended evaluation affordable, with known failure modes you must control for: <strong>position bias</strong> (prefers the first answer in pairwise comparisons — randomize or evaluate both orders), <strong>length bias</strong> (prefers longer — report length-controlled win rates), <strong>self-preference</strong> (a model family favors its own style — use a judge from a different family than the models under test), and <strong>rubric drift</strong> (fix the prompt and the judge version for the life of the suite). Pairwise judging is more reliable than pointwise scoring for ranking systems; pointwise is needed for absolute gates. Always report the judge's agreement with a human-labeled calibration set (a few hundred items); below ~80% agreement, the judge is measuring something other than what you care about.</p>
+<h3>Statistical significance</h3>
+<p>Eval differences are noisy, and the noise is dominated by the number of items. The bootstrap gives confidence intervals without assumptions: resample the item set with replacement a few thousand times, recompute the metric, take the 2.5th and 97.5th percentiles. For planning, the calculator below answers the question every roadmap needs: <em>how many eval items do I need to detect the improvement I am claiming?</em></p>
+<div class="card">
+<h3>Interactive: eval sample-size calculator</h3>
+<div class="controls">
+  <label class="ctl">Baseline accuracy <input type="range" id="ssBase" min="10" max="90" value="55"> <span id="ssBaseL">55%</span></label>
+  <label class="ctl">Improvement to detect <input type="range" id="ssDelta" min="1" max="15" value="2"> <span id="ssDeltaL">2 pts</span></label>
+  <label class="ctl">Paired items (same prompts both systems) <input type="checkbox" id="ssPaired" checked></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="ssN">–</div><div class="l">items needed (80% power, α=0.05)</div></div>
+  <div class="box"><div class="v" id="ssCI">–</div><div class="l">±95% CI half-width at 400 items</div></div>
+</div>
+<p class="caption">A 2-point improvement on a 55%-accuracy suite needs on the order of thousands of items to detect reliably with independent samples; pairing (running both systems on the same prompts and counting discordant items) cuts that several-fold, which is why eval suites are always paired. Conversely, a 400-item suite has a ±5-point interval — so a "3-point gain" measured on it is noise until replicated. Say this out loud in reviews.</p>
+</div>
+<h3>Online evaluation and release gates</h3>
+<p>Offline suites predict; production decides. Ship behind an <strong>A/B test</strong> on the business metric (task completion, accepted suggestions, deflection rate) with <strong>guardrail metrics</strong> (latency percentiles, refusal rate, safety flags) that halt the rollout automatically. <strong>Interleaving</strong> — showing both systems' outputs to the same user and recording preference — detects small quality differences with far fewer users than A/B. Formalize a <strong>release gate</strong>: a model ships only if the task suite improves beyond the CI, no regression-suite metric drops beyond its budget, latency and cost targets hold under load test, and the safety suite passes. Then <strong>monitor drift</strong>: input distribution shift (prompt-embedding drift, new intents), output quality on a sampled, judged slice, and verifier pass rates where available.</p>
+<div class="formula"># Minimal eval harness: cached generations, pluggable scorers, bootstrap CIs. Build this first.
+import json, hashlib, random, statistics, pathlib
+
+CACHE = pathlib.Path(".evalcache"); CACHE.mkdir(exist_ok=True)
+
+def cached_generate(model_id, prompt, generate):
+    key = hashlib.sha1(f"{model_id}\0{prompt}".encode()).hexdigest()
+    f = CACHE / f"{key}.json"
+    if f.exists(): return json.loads(f.read_text())["out"]
+    out = generate(prompt); f.write_text(json.dumps({"out": out})); return out
+
+def evaluate(model_id, tasks, generate, score):
+    """tasks: [{'prompt':..., 'ref':...}], score(out, ref) -> float in [0,1]. Returns per-item scores."""
+    return [score(cached_generate(model_id, t["prompt"], generate), t["ref"]) for t in tasks]
+
+def bootstrap_ci(scores, iters=5000, seed=0):
+    rng = random.Random(seed); n = len(scores); means = []
+    for _ in range(iters):
+        means.append(statistics.fmean(scores[rng.randrange(n)] for _ in range(n)))
+    means.sort(); return statistics.fmean(scores), means[int(.025*iters)], means[int(.975*iters)]
+
+def paired_delta_ci(a, b, iters=5000, seed=0):
+    """Paired bootstrap on per-item differences — the right test when both systems saw the same items."""
+    d = [x - y for x, y in zip(a, b)]; return bootstrap_ci(d, iters, seed)
+# Usage: a = evaluate("candidate", suite, gen_a, pass_tests); b = evaluate("baseline", suite, gen_b, pass_tests)
+#        mean_gain, lo, hi = paired_delta_ci(a, b)   # ship only if lo > 0 and the regression suite holds</div>
+<p><strong>Task-specific suites</strong> you should know the shape of: SWE-bench (resolve a real GitHub issue so hidden tests pass — the coding-agent standard; its Verified subset fixes broken tasks), τ-bench (agents following policies with tools and simulated users — measures consistency across trials with pass^k), and domain exam sets (bar exams, USMLE-style, internal certification questions) for vertical models. Build your customer's suite in the same shape as the public one closest to their task so results are interpretable to outsiders.</p>
+
+<h2 id="production">8. Production patterns</h2>
+<h3>Multi-adapter serving</h3>
+<p>Once customization is cheap, every team, tenant, or task wants its own model — and you cannot afford a GPU per LoRA. <strong>Multi-adapter serving</strong> (S-LoRA, Sheng et al. 2023; Punica, Chen et al. 2023) keeps one base model's weights resident and batches requests that use <em>different</em> adapters together: the shared base matmul runs once for the whole batch, and the small per-request LoRA products (x·A·B with per-row adapter selection — a "segmented gather matmul") run as a custom kernel. Adapter weights are paged in and out of GPU memory like KV blocks. The trade: unmerged adapters add a few percent latency per token versus a merged single model, but one replica serves hundreds of adapters. vLLM exposes this as <code>--enable-lora --max-loras N --max-lora-rank R</code>, with adapters selected per request by name.</p>
+<div class="card">
+<h3>Animation: heterogeneous adapters in one batch</h3>
+<canvas id="loraViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="loraPlay">▶ Play</button>
+  <button class="btn secondary" id="loraReset">Reset</button>
+</div>
+<p class="caption">Requests arrive tagged with adapter IDs (colors). The decode step runs the shared base weights once over the whole batch (grey), then each row applies only its own low-rank delta (colored) — the segmented matmul. Two requests sharing an adapter share its weights; a cold adapter is paged in from host memory (flash) before its first step.</p>
+</div>
+<h3>Coding agents and vertical models as engagement patterns</h3>
+<p>The two most common customer patterns in 2025–26 combine everything above. A <strong>coding agent</strong> for an internal codebase: CPT on the repository history and docs (knowledge), SFT on agent trajectories (format and tool use), RL with the customer's own test suite as the verifiable reward (reasoning and reliability — <a href="rl-systems.html">Ch. 15</a>), distillation into a size that meets the IDE latency budget, served with prefix caching because every agent turn re-sends the same context (<a href="agents.html">Ch. 18</a>). A <strong>vertical foundation model</strong> (finance, legal, health): CPT with replay on the domain corpus, tokenizer extension, SFT on expert-written tasks, preference tuning with domain reviewers, multi-adapter serving for sub-specialties, and an exam-style suite plus a regression suite as the release gate. In both, the eval suite is the deliverable the customer keeps using after you leave.</p>
+
+<h2 id="cost">9. Cost and capacity</h2>
+<p>Capacity decisions are made from benchmark evidence, so the lead must be able to turn measured tokens/sec into dollars. The model: a replica (one GPU or TP group) achieves some sustained throughput in prefill tokens/sec and decode tokens/sec at the latency targets; divide the replica's hourly price by throughput to get $ per million tokens of each kind; weight by your workload's input:output ratio; divide by requests. Everything else — model size, precision, adapters, batching — enters through the measured throughput.</p>
+<div class="card">
+<h3>Interactive: dollars per million tokens</h3>
+<div class="controls">
+  <label class="ctl">Replica $/hour <input type="number" id="cHour" value="24" step="1" min="1" style="width:80px"></label>
+  <label class="ctl">Prefill tok/s (sustained) <input type="number" id="cPre" value="40000" step="1000" min="100" style="width:100px"></label>
+  <label class="ctl">Decode tok/s (sustained, all users) <input type="number" id="cDec" value="2500" step="100" min="10" style="width:100px"></label>
+</div>
+<div class="controls">
+  <label class="ctl">Avg input tokens <input type="number" id="cIn" value="6000" step="500" min="1" style="width:90px"></label>
+  <label class="ctl">Avg output tokens <input type="number" id="cOut" value="400" step="50" min="1" style="width:90px"></label>
+  <label class="ctl">Requests / day <input type="number" id="cReq" value="50000" step="5000" min="1" style="width:100px"></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="cPreCost">–</div><div class="l">$ per 1M prefill tokens</div></div>
+  <div class="box"><div class="v" id="cDecCost">–</div><div class="l">$ per 1M decode tokens</div></div>
+  <div class="box"><div class="v" id="cPerReq">–</div><div class="l">$ per request</div></div>
+  <div class="box"><div class="v" id="cReplicas">–</div><div class="l">replicas needed (avg load ×2 peak)</div></div>
+  <div class="box"><div class="v" id="cMonth">–</div><div class="l">$ / month</div></div>
+</div>
+<p class="caption">Defaults sketch an 8×H100 TP=8 replica serving a 70B model (≈ $24/h on-demand). Decode is 15–20× more expensive per token than prefill because it is bandwidth-bound (<a href="inference.html">Ch. 11</a>) — so output length dominates cost even when inputs are 15× longer. Now halve the hourly price and the throughput to model a Trainium2 instance from a benchmark (<a href="hardware.html">Ch. 17</a>), or raise decode throughput 4× to model a distilled 13B student: that is the TCO argument for distillation in one number.</p>
+</div>
+<p>The TCO comparison every customer asks for — <em>prompt the frontier API</em> vs <em>fine-tune and self-host a smaller model</em> — comes down to volume and output length: API pricing is linear in tokens with zero fixed cost; self-hosting has a fixed replica floor and a steep volume discount. Below a few million tokens a day the API almost always wins; above it, a distilled model on reserved hardware wins by 3–10× — <em>if</em> the eval suite says the student clears the bar, which is why Sections 3 and 7 come before this one.</p>
+
+<h2 id="reading">10. Where to go deeper</h2>
+<ul>
+<li>Distillation: Hinton et al., <em>Distilling the Knowledge in a Neural Network</em> (2015); Gu et al., <em>MiniLLM</em> (2023); Agarwal et al., <em>On-Policy Distillation of Language Models (GKD)</em> (2024).</li>
+<li>Synthetic data and self-improvement: Wang et al., <em>Self-Instruct</em> (2022); Xu et al., <em>WizardLM / Evol-Instruct</em> (2023); Zelikman et al., <em>STaR</em> (2022); Yuan et al., <em>Scaling Relationship… Rejection Sampling Fine-Tuning</em> (2023); Shumailov et al. on model collapse (Nature, 2024).</li>
+<li>Data: Lee et al., <em>Deduplicating Training Data Makes Language Models Better</em> (2022); the Dolma and FineWeb/FineWeb-Edu dataset papers; Hoffmann et al., <em>Chinchilla</em> (2022) for the compute arithmetic.</li>
+<li>Evaluation: Chen et al., <em>Evaluating LLMs Trained on Code</em> (2021) for pass@k; Zheng et al., <em>Judging LLM-as-a-Judge with MT-Bench</em> (2023); Liang et al., <em>HELM</em>; the lm-evaluation-harness; SWE-bench and SWE-bench Verified; τ-bench.</li>
+<li>Serving: Sheng et al., <em>S-LoRA</em> (2023); Chen et al., <em>Punica</em> (2023); vLLM's LoRA documentation.</li>
+<li>In this notebook: <a href="training.html">Training</a> for the mechanics of each rung, <a href="rl-systems.html">RL Systems</a> for verifiable-reward RL harnesses, <a href="inference.html">Inference</a> and <a href="hardware.html">Hardware</a> for the throughput numbers that feed the cost model; the study plan's Axolotl and vLLM hands-on steps; the Customization flashcard deck.</li>
+</ul>
+<div class="footer-nav"><a href="training.html">← Training</a><a href="rl-systems.html">RL Systems →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+const $=id=>document.getElementById(id);
+function onTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+
+// ---------- 2. ladder decision tool ----------
+(function(){
+const RUNGS=['Prompting / few-shot','RAG','SFT with adapters','Full SFT','Preference optimization','RL w/ verifiable rewards','Distillation','Continued pre-training','Domain foundation model'];
+const el=$('ladder');RUNGS.forEach((r,i)=>{const d=document.createElement('div');d.className='rung';d.id='rung'+i;d.innerHTML='<div class="n">rung '+(i+1)+'</div>'+r;el.appendChild(d);});
+function decide(){
+  const data=+$('qData').value,gap=$('qGap').value,verif=$('qVerif').value==='yes',tight=$('qCost').value==='tight',fast=$('qDrift').value==='fast',base=$('qBase').value;
+  let pick=[],consider=[],why=[];
+  if(base==='yes'){pick=[0];why.push('The base model already clears the quality bar with prompting — do not fine-tune for quality. ');
+    if(tight){pick=[6];consider=[0];why.push('The cost/latency target is the real problem, so distill the prompted behavior into a smaller student and re-run the suite.');}
+    else why.push('Spend the engagement on serving (prefix caching, batching) and on the eval harness.');}
+  else{
+    if(gap==='knowledge'){
+      if(fast){pick=[1];why.push('The gap is knowledge and the domain changes weekly: weights cannot keep up, retrieval can. RAG first; evaluate retrieval quality separately from generation.');
+        if(data>=2)consider.push(2),why.push(' Add a LoRA SFT on thousands of examples to teach the model to cite and use retrieved context well.');}
+      else{pick=[1];why.push('Knowledge gap, slow-moving domain: start with RAG because it is cheap and measurable. ');
+        if(base==='far'){pick=[7];consider=[1,2];why.push('But the base is far from the bar, which points to a true knowledge deficit RAG will not close: continued pre-training with 10–30% replay, then SFT on top, with RAG kept for freshness.');}
+        else if(data>=2)consider.push(2),why.push('If RAG stalls within ~10 points, a LoRA SFT on your examples usually closes format and grounding issues.');}
+    } else if(gap==='format'){
+      pick=[data>=1?2:0];why.push(data>=1?'Format, style, and tool-calling gaps are what SFT is for: a LoRA on hundreds to thousands of clean demonstrations is fast, cheap, and low-risk. Merge it for zero serving overhead.':'With almost no examples, start with few-shot prompting and constrained decoding; collect demonstrations from production to earn the SFT rung.');
+      if(data>=3)pick=[3],why.push(' With 100K+ examples full SFT is justified and usually beats adapters slightly.');
+    } else if(gap==='reasoning'){
+      if(verif){pick=[5];consider=[2];why.push('Multi-step reasoning with a verifiable reward (tests, checkers) is the textbook case for RL with verifiable rewards (GRPO-style), after a short SFT warm-start on trajectories so the policy has non-zero success to reinforce.');}
+      else{pick=[2];consider=[4];why.push('Reasoning gap but no reliable verifier: SFT on high-quality reasoning traces (rejection-sampled from a strong teacher and judged against a calibrated rubric), then preference optimization; RL without a verifier risks reward hacking.');}
+    } else if(gap==='preference'){
+      pick=[data>=1?4:0];consider=[2];why.push(data>=1?'Judgment and preference gaps are what DPO/KTO target: collect pairwise preferences from domain reviewers; run SFT first so the policy is in-distribution, then preference-optimize and watch length bias.':'Without preference data, start with prompting and a rubric; collect pairwise labels from reviewers to earn the preference rung.');
+    }
+    if(tight){if(!pick.includes(6))consider.push(6);why.push(' Your cost/latency target is ≥3× tighter than frontier prompting, so plan to distill the final model into a smaller student — make one model great, then shrink it.');}
+  }
+  RUNGS.forEach((_,i)=>{const d=$('rung'+i);d.className='rung'+(pick.includes(i)?' pick':consider.includes(i)?' consider':'');});
+  $('reason').textContent=why.join('');
+}
+['qData','qGap','qVerif','qCost','qDrift','qBase'].forEach(id=>$(id).onchange=decide);decide();
+})();
+
+// ---------- 3. KD soft vs hard ----------
+(function(){
+const cv=$('kdViz'),ctx=cv.getContext('2d');
+const VOC=['return','yield','raise','pass','await','self','def','if','for','print','None','break'];
+const POS=[[6,4.5,1.5,1,0.5,0.2,0.1,0.8,0.3,0.1,0.4,0.6],[0.5,0.3,0.2,0.1,0.2,5.5,0.4,0.3,0.2,0.1,3.8,0.1],[0.2,0.1,0.1,0.2,0.1,0.3,0.2,5.2,4.9,0.2,0.1,3.1]];
+let pos=0;
+function softmax(a,t){const m=Math.max(...a);const e=a.map(x=>Math.exp((x-m)/t));const s=e.reduce((x,y)=>x+y);return e.map(x=>x/s);}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const tau=+$('kdTemp').value/10;$('kdTempL').textContent=tau.toFixed(1);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const logits=POS[pos],p=softmax(logits,tau),hard=logits.indexOf(Math.max(...logits));
+  const student=softmax(logits.map((x,i)=>x*0.7+(i%3)*0.3),tau*1.2); // slightly off distribution
+  const bw=56,x0=50,y0=H-60,ph=H-110;
+  ctx.font='11px sans-serif';
+  VOC.forEach((v,i)=>{const x=x0+i*(bw+10);
+    ctx.fillStyle='rgba(128,128,128,0.35)';if(i===hard)ctx.fillRect(x,y0-ph,14,ph);
+    ctx.fillStyle=acc;ctx.fillRect(x+16,y0-ph*p[i],14,ph*p[i]);
+    ctx.fillStyle=acc2;ctx.fillRect(x+32,y0-ph*student[i],14,ph*student[i]);
+    ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText(v,x+28,y0+16);
+    if(p[i]>0.04){ctx.fillStyle=txt;ctx.fillText((p[i]*100).toFixed(0)+'%',x+23,y0-ph*p[i]-4);}
+  });
+  ctx.textAlign='left';ctx.fillStyle='rgba(128,128,128,0.6)';ctx.fillRect(x0,18,12,12);ctx.fillStyle=dim;ctx.fillText('hard label (one-hot)',x0+18,28);
+  ctx.fillStyle=acc;ctx.fillRect(x0+170,18,12,12);ctx.fillStyle=dim;ctx.fillText('teacher soft targets at τ='+tau.toFixed(1),x0+188,28);
+  ctx.fillStyle=acc2;ctx.fillRect(x0+420,18,12,12);ctx.fillStyle=dim;ctx.fillText('student (being pulled toward blue)',x0+438,28);
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.fillText('position '+(pos+1)+' of 3 — context: "    ... <'+['end of function body','attribute access','loop header'][pos]+'>"',x0,50);
+}
+$('kdTemp').oninput=draw;$('kdNext').onclick=()=>{pos=(pos+1)%POS.length;draw();};draw();onTheme(draw);
+})();
+
+// ---------- 4. CPT forgetting vs replay ----------
+(function(){
+const cv=$('cptViz'),ctx=cv.getContext('2d');let t=0,timer=null;const T=60;
+function curves(replay){const r=replay/100;const dom=[],gen=[];for(let i=0;i<=T;i++){const s=i/T;
+  dom.push(40+45*(1-Math.exp(-3*s*(1-0.6*r))));
+  gen.push(70-(1-r)*(1-r)*32*(1-Math.exp(-2.5*s))-r*2);}return{dom,gen};}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const replay=+$('cptReplay').value;$('cptReplayL').textContent=replay+'%';
+  const {dom,gen}=curves(replay);const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const x0=60,y0=H-40,pw=W-200,ph=H-80;
+  ctx.strokeStyle=bd;for(let v=30;v<=90;v+=20){const y=y0-ph*(v-20)/70;ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(x0+pw,y);ctx.stroke();ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='right';ctx.fillText(v,x0-6,y+4);}
+  function line(arr,color){ctx.strokeStyle=color;ctx.lineWidth=2.5;ctx.beginPath();for(let i=0;i<=Math.min(t,T);i++){const x=x0+pw*i/T,y=y0-ph*(arr[i]-20)/70;i?ctx.lineTo(x,y):ctx.moveTo(x,y);}ctx.stroke();}
+  line(dom,css('--accent2'));line(gen,css('--warn'));
+  const i=Math.min(t,T);ctx.textAlign='left';ctx.font='12px sans-serif';
+  ctx.fillStyle=css('--accent2');ctx.fillText('domain eval: '+dom[i].toFixed(1),x0+pw+12,y0-ph*(dom[i]-20)/70);
+  ctx.fillStyle=css('--warn');ctx.fillText('general eval: '+gen[i].toFixed(1),x0+pw+12,y0-ph*(gen[i]-20)/70+14);
+  ctx.fillStyle=dim;ctx.fillText('domain tokens trained →',x0,H-10);
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.fillText('replay '+replay+'%  —  regression: '+(70-gen[i]).toFixed(1)+' pts',x0,22);
+}
+function tick(){if(t<T){t++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;$('cptPlay').textContent='▶ Train';}}
+$('cptPlay').onclick=function(){if(timer){stop();return;}if(t>=T)t=0;this.textContent='⏸ Pause';timer=setInterval(tick,60);};
+$('cptReset').onclick=()=>{stop();t=0;draw();};$('cptReplay').oninput=draw;draw();onTheme(draw);
+})();
+
+// ---------- 5. MinHash / LSH ----------
+(function(){
+const cv=$('dedupViz'),ctx=cv.getContext('2d');
+const DOCS=['the quick brown fox jumps over the lazy dog near the river bank','a model trained on duplicated data wastes compute on the same tokens','the quick brown fox leaps over the lazy dog near the river bank today','evaluation suites must be decontaminated against training corpora','our tokenizer extension adds domain vocabulary before continued pretraining','a model trained on duplicated data wastes compute on identical tokens'];
+const K=6;let step=0;
+function shingles(s){const w=s.split(' ');const out=new Set();for(let i=0;i+2<w.length;i++)out.add(w.slice(i,i+3).join(' '));return out;}
+function hash(str,seed){let h=2166136261^seed;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}return h;}
+const SH=DOCS.map(shingles);
+const SIG=SH.map(set=>Array.from({length:K},(_,s)=>Math.min(...[...set].map(x=>hash(x,s*7919+13)))%997));
+function jacc(a,b){let i=0;a.forEach(x=>{if(b.has(x))i++;});return i/(a.size+b.size-i);}
+const bands=[[0,1],[2,3],[4,5]];
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2'),bd=css('--border');
+  ctx.font='11px sans-serif';ctx.textAlign='left';
+  const msgs=['Six documents. Step to shingle them.','Step 1: each doc → set of word 3-grams (shingles). Counts shown.','Step 2: MinHash — for each of '+K+' hash functions keep the minimum hash over the doc\'s shingles → a '+K+'-number signature.','Step 3: LSH — split signatures into 3 bands of 2; docs that agree on any band share a bucket (candidates).','Step 4: compare only candidates exactly. Docs 2 & 5 and 1 & 3 are near-duplicates (Jaccard shown); the rest were never compared.'];
+  $('dedupMsg').textContent=msgs[Math.min(step,4)];
+  DOCS.forEach((d,i)=>{const y=30+i*46;
+    ctx.fillStyle=txt;ctx.font='bold 11px sans-serif';ctx.fillText('doc '+(i+1),20,y);
+    ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.fillText(d.slice(0,46)+'…',20,y+13);
+    if(step>=1){ctx.fillStyle=acc;ctx.fillText(SH[i].size+' shingles',310,y+6);}
+    if(step>=2){SIG[i].forEach((v,j)=>{const bx=400+j*42;const bi=Math.floor(j/2);
+      ctx.fillStyle=step>=3?['rgba(91,140,255,.25)','rgba(56,198,160,.25)','rgba(242,166,90,.25)'][bi]:css('--bg-card');
+      ctx.fillRect(bx,y-10,38,22);ctx.strokeStyle=bd;ctx.strokeRect(bx,y-10,38,22);
+      ctx.fillStyle=txt;ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText(v,bx+19,y+5);ctx.textAlign='left';});}
+  });
+  if(step>=3){const pairs=[];for(let a=0;a<6;a++)for(let b=a+1;b<6;b++){const hit=bands.some(([p,q])=>SIG[a][p]===SIG[b][p]&&SIG[a][q]===SIG[b][q]);if(hit)pairs.push([a,b]);}
+    ctx.font='11px sans-serif';ctx.fillStyle=txt;ctx.fillText('candidate pairs from LSH:',680,30);
+    pairs.forEach(([a,b],i)=>{const j=jacc(SH[a],SH[b]);ctx.fillStyle=step>=4?(j>0.5?acc2:dim):acc;ctx.fillText('doc '+(a+1)+' ~ doc '+(b+1)+(step>=4?'  J='+j.toFixed(2)+(j>0.5?'  ← dup':'  (false candidate)'):''),680,50+i*18);});
+    if(!pairs.length){ctx.fillStyle=dim;ctx.fillText('(none)',680,50);}
+    if(step>=4){ctx.fillStyle=dim;ctx.fillText('comparisons made: '+pairs.length+' of 15 possible',680,50+pairs.length*18+14);}}
+}
+$('dedupStep').onclick=()=>{step=Math.min(step+1,4);draw();};$('dedupReset').onclick=()=>{step=0;draw();};draw();onTheme(draw);
+})();
+
+// ---------- 6. rejection sampling + collapse ----------
+(function(){
+const cv=$('rsViz'),ctx=cv.getContext('2d');let round=0,pass=0.25,div=1.0,timer=null,last=[];const hist=[];
+function run(){
+  const filter=$('rsFilter').checked;round++;
+  last=Array.from({length:16},()=>Math.random()<pass);
+  if(filter){const kept=last.filter(Boolean).length;pass=Math.min(0.95,pass+0.045*kept/16*(1-pass)*4);div=Math.max(0.55,div-0.01);}
+  else{pass=Math.max(0.05,pass+(Math.random()-0.6)*0.06);div=Math.max(0.05,div*0.86);}
+  hist.push({pass,div});if(hist.length>24)hist.shift();draw();if(round>=24)stop();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc2=css('--accent2'),bd=css('--border');
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';
+  ctx.fillText('round '+round+': 16 candidates → verifier',20,24);
+  last.forEach((ok,i)=>{ctx.fillStyle=ok?acc2:'#e5604c';ctx.beginPath();ctx.arc(30+i*22,46,7,0,7);ctx.fill();});
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText($('rsFilter').checked?'green survivors → SFT set':'ALL candidates → SFT set (no filter)',400,50);
+  // pass-rate bar
+  ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.fillText('model pass rate',20,90);ctx.strokeStyle=bd;ctx.strokeRect(140,78,400,16);ctx.fillStyle=acc2;ctx.fillRect(140,78,400*pass,16);ctx.fillStyle=txt;ctx.fillText((pass*100).toFixed(0)+'%',550,91);
+  // diversity history
+  ctx.fillStyle=txt;ctx.fillText('output diversity across rounds',20,130);
+  const x0=20,y0=H-24,pw=W-60,ph=H-160;ctx.strokeStyle=bd;ctx.strokeRect(x0,y0-ph,pw,ph);
+  ctx.strokeStyle=css('--accent');ctx.lineWidth=2.5;ctx.beginPath();hist.forEach((h,i)=>{const x=x0+pw*i/23,y=y0-ph*h.div;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+  ctx.strokeStyle=acc2;ctx.beginPath();hist.forEach((h,i)=>{const x=x0+pw*i/23,y=y0-ph*h.pass;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();ctx.lineWidth=1;
+  ctx.fillStyle=css('--accent');ctx.fillText('diversity',x0+pw-70,y0-ph+14);ctx.fillStyle=acc2;ctx.fillText('pass rate',x0+pw-70,y0-ph+28);
+  $('rsStats').textContent=round?('after '+round+' rounds: pass '+(pass*100).toFixed(0)+'%, diversity '+(div*100).toFixed(0)+'%'):'';
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('rsPlay').textContent='▶ Run generations';}}
+$('rsPlay').onclick=function(){if(timer){stop();return;}if(round>=24){round=0;pass=0.25;div=1;hist.length=0;}this.textContent='⏸ Pause';timer=setInterval(run,350);};
+$('rsReset').onclick=()=>{stop();round=0;pass=0.25;div=1;hist.length=0;last=[];draw();};draw();onTheme(draw);
+})();
+
+// ---------- 7. sample size ----------
+(function(){
+function upd(){
+  const p=+$('ssBase').value/100,d=+$('ssDelta').value/100,paired=$('ssPaired').checked;
+  $('ssBaseL').textContent=Math.round(p*100)+'%';$('ssDeltaL').textContent=Math.round(d*100)+' pts';
+  const z=1.96+0.84; // alpha .05 two-sided + 80% power
+  let n;
+  if(!paired){const p2=p+d;n=z*z*(p*(1-p)+p2*(1-p2))/(d*d);}
+  else{ // McNemar-style: discordant rate ~ 2*min(p,1-p)*0.35 (systems agree often); need discordant count
+    const disc=Math.max(0.08,2*Math.min(p,1-p)*0.35);const nd=z*z*disc/(d*d);n=nd;}
+  $('ssN').textContent=Math.round(n).toLocaleString();
+  $('ssCI').textContent='±'+(1.96*Math.sqrt(p*(1-p)/400)*100).toFixed(1)+' pts';
+}
+['ssBase','ssDelta','ssPaired'].forEach(id=>$(id).oninput=upd);upd();
+})();
+
+// ---------- 8. multi-adapter batch ----------
+(function(){
+const cv=$('loraViz'),ctx=cv.getContext('2d');const COL=['#5b8cff','#38c6a0','#f2a65a','#b07cff','#e5604c'];
+let reqs=[],t=0,timer=null,loaded=new Set([0,1]),flash=null;
+function tick(){t++;if(reqs.length<6&&Math.random()<0.7){const a=Math.floor(Math.random()*5);reqs.push({a,left:4+Math.floor(Math.random()*6)});if(!loaded.has(a)){loaded.add(a);flash={a,t};}}
+  reqs.forEach(r=>r.left--);reqs=reqs.filter(r=>r.left>0);draw();if(t>60)stop();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.fillText('batch (one decode step)',20,22);ctx.fillText('shared base weights W',380,22);ctx.fillText('per-row LoRA delta  B·A',560,22);ctx.fillText('adapters resident on GPU',720,22);
+  reqs.forEach((r,i)=>{const y=40+i*32;ctx.fillStyle=COL[r.a];ctx.fillRect(20,y,180,22);ctx.fillStyle='#fff';ctx.font='11px sans-serif';ctx.fillText('req '+(i+1)+'  adapter '+String.fromCharCode(65+r.a)+'  ('+r.left+' tok left)',26,y+15);
+    ctx.fillStyle='rgba(128,128,128,0.35)';ctx.fillRect(380,y,150,22);ctx.fillStyle=COL[r.a];ctx.fillRect(560,y,120,22);
+    ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(200,y+11);ctx.lineTo(380,y+11);ctx.moveTo(530,y+11);ctx.lineTo(560,y+11);ctx.stroke();});
+  if(reqs.length){const y=40,h=reqs.length*32-10;ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('x·W once for all rows',380,y+h+16);ctx.fillText('segmented matmul, row i uses adapter(i)',560,y+h+16);}
+  for(let a=0;a<5;a++){const y=40+a*32;const on=loaded.has(a);ctx.fillStyle=on?COL[a]:'transparent';ctx.strokeStyle=on?COL[a]:bd;ctx.fillRect(720,y,22,22);ctx.strokeRect(720,y,22,22);ctx.fillStyle=txt;ctx.font='11px sans-serif';ctx.fillText('adapter '+String.fromCharCode(65+a)+(on?'':'  (host memory)'),750,y+15);
+    if(flash&&flash.a===a&&t-flash.t<3){ctx.fillStyle=css('--warn');ctx.fillText('← paged in',860,y+15);}}
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('loraPlay').textContent='▶ Play';}}
+$('loraPlay').onclick=function(){if(timer){stop();return;}if(t>60){t=0;reqs=[];loaded=new Set([0,1]);}this.textContent='⏸ Pause';timer=setInterval(tick,500);};
+$('loraReset').onclick=()=>{stop();t=0;reqs=[];loaded=new Set([0,1]);flash=null;draw();};draw();onTheme(draw);
+})();
+
+// ---------- 9. cost calculator ----------
+(function(){
+function upd(){
+  const hr=+$('cHour').value,pre=+$('cPre').value,dec=+$('cDec').value,inn=+$('cIn').value,out=+$('cOut').value,req=+$('cReq').value;
+  const cPre=hr/(pre*3600)*1e6,cDec=hr/(dec*3600)*1e6;
+  const perReq=inn*cPre/1e6+out*cDec/1e6;
+  const secPerReq=inn/pre+out/dec;const avgLoadReplicas=req*secPerReq/86400;const replicas=Math.max(1,Math.ceil(avgLoadReplicas*2));
+  $('cPreCost').textContent='$'+cPre.toFixed(2);$('cDecCost').textContent='$'+cDec.toFixed(2);$('cPerReq').textContent='$'+perReq.toFixed(4);
+  $('cReplicas').textContent=replicas;$('cMonth').textContent='$'+Math.round(replicas*hr*24*30).toLocaleString();
+}
+['cHour','cPre','cDec','cIn','cOut','cReq'].forEach(id=>$(id).oninput=upd);upd();
+})();
+</script>
+</body>
+</html>

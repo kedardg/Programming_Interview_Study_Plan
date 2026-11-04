@@ -1,0 +1,188 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Things to add / integrate</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › stabs/incoming.md</div>
+<article class="note"><h1 id="things-to-add-integrate">Things to add / integrate</h1>
+<h1 id="pdf-book-notes">pdf book notes</h1>
+<p>ideas from Sam: https://github.com/saforem2: https://github.com/stas00/ml-engineering/pull/17#discussion_r1439912709
+https://quarto.org/, https://quarto.org/docs/gallery/, https://kevinheavey.github.io/modern-polars/, https://quarto.org/docs/output-formats/pdf-basics.html</p>
+<h1 id="performance">Performance</h1>
+<p>https://pytorch.org/tutorials/recipes/recipes/tuning_guide.html</p>
+<p>Dirk Groeneveld's Script that checks node pairs for speed https://github.com/allenai/OLMo/commit/f91cebdfa299bf55e815d496c367de8b59881c2e</p>
+<pre><code>#!/bin/bash
+
+NCCL_LIB_DIR=/var/lib/tcpxo/lib64 source /var/lib/tcpxo/lib64/nccl-env-profile.sh
+
+set -euxo pipefail
+
+HOST_VARS=$(sed 's/ \{1,\}/ -x /g' &lt;&lt;&lt;&quot;${!NCCL*} LD_LIBRARY_PATH&quot;)
+FIRST_HOST=$(( echo &quot;$1&quot; &amp;&amp; echo &quot;$2&quot; ) | sort | head -1)
+mpirun \
+  --mca btl self,tcp \
+  --mca btl_tcp_if_include enp0s12 \
+  --mca orte_base_help_aggregate 0 \
+  -H $1,$2 \
+  -np 2 \
+  --bind-to none \
+  -npernode 1 \
+  -tag-output \
+  -x ${HOST_VARS} \
+  -x NCCL_NET=FasTrak \
+  -x GLOO_SOCKET_IFNAME=enp0s12 \
+  -x CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+  -x OMP_NUM_THREADS=16 \
+  bash -c &quot;source ~/venv/OLMo/bin/activate &amp;&amp; torchrun --nproc_per_node 8 --nnodes=2 --rdzv-backend=c10d --rdzv-endpoint=$FIRST_HOST ~/OLMo/scripts/augusta/all_reduce_bench.py&quot;
+</code></pre>
+<p>and to run:</p>
+<pre><code># checking all node pairs for reduce perf
+fgrep -hv \# ~/hostfiles/hosts | \
+parallel -N2 'echo {} $(./check_node_pair.sh {} 2&gt;&amp;1 | fgrep busbw)'
+</code></pre>
+<h1 id="storage-chapter">Storage chapter</h1>
+<h3 id="storage-benchmarks">Storage benchmarks:</h3>
+<p>https://github.com/argonne-lcf/dlio_benchmark</p>
+<p>Incoming suggestions from Ross Wightman to integrate:</p>
+<ul>
+<li>
+<p>I'd try to separate volumes by workload, so keep the 'lots of small files', high churn like environments, code separate from bulk storage like datasets, checkpoints. Possibly even split those too since datasets are largely static and checkpoints are being rotated all the time</p>
+</li>
+<li>
+<p>One also cannot expect to treat a distributed filesystem like their local disk. If you separated volumes by workload you'd probably be able to utilize much higher % of the total storage. Don't mix high churn, small files with low churn large files.</p>
+</li>
+</ul>
+<h1 id="debug">Debug</h1>
+<ul>
+<li>integrate debug_utils.py</li>
+</ul>
+<h1 id="model-parallelism">model parallelism</h1>
+<p>a good table here Scaling equations of each type of parallelism.
+https://www.cerebras.net/blog/cerebras-sets-record-for-largest-ai-models-ever-trained-on-single-device#summary</p>
+<h1 id="network">Network</h1>
+<p>Make a new benchmark section:</p>
+<ol>
+<li>nccl-tests</li>
+<li><code>all_reduce_bench.py</code></li>
+<li>https://github.com/deepspeedai/DeepSpeedExamples/tree/master/benchmarks/communication</li>
+<li>like nccl-tests, another common set of benchmarks used at HPC sites are the OSU microbenchmarks like osu_lat, osu_bw, and osu_bibw.</li>
+</ol>
+<p>https://mvapich.cse.ohio-state.edu/benchmarks/</p>
+<p>Those are MPI-based benchmarks.  Those can be run using GPUDirect RDMA so you can measure MPI performance between GPUs, either on the same node or between nodes.</p>
+<h2 id="infiniband">Infiniband</h2>
+<p>References:
+- <a href="https://tin6150.github.io/psg/infiniband.html">Sys Admin Pocket Survival Guide - InfiniBand</a></p>
+<h3 id="diagnostics">Diagnostics</h3>
+<p>The fabric scope of these tools is done: <a href="../network/debug/README.html#how-to-diagnose-nccl-multi-gpu-and-multi-node-connectivity-issues">How to diagnose NCCL multi-gpu and multi-node connectivity issues</a> explains which ones query the subnet manager and therefore answer only on InfiniBand, and which ask the local adapter and answer on any RDMA fabric. Marked <code>scope: done</code> below. What's still open for those is per-tool usage - what to run and what to look for in the output.</p>
+<p>Not-IB specific
+- <code>ifconfig</code> - display the status of the currently active interfaces
+- <code>ip addr show</code> - display the addresses for every link configured on the system</p>
+<p>Display the local Host’s IB device status (3 different views).
+- <code>ibstat</code> - scope: done
+- <code>ibstatus</code> - scope: done
+- <code>ibv_devinfo</code> - scope: done</p>
+<p>Scan IB network:
+- <code>ibnetdiscover</code> - scan topology - scope: done
+- <code>ibroute</code> - display the unicast and multicast forwarding tables for the switches
+- <code>ibdiagnet</code> - IB diagnostic net</p>
+<p>Check for network errors:
+- <code>ibcheckerrors</code> - check if the error counters of a port/node are within predefined thresholds
+- <code>ibchecknet</code> - perform port/node/errors check on the subnet.</p>
+<p>Test IB network configuration:
+- <code>ibcheckport</code> - perform some basic tests on the specified port
+- <code>ibchecknode</code> - perform some basic tests on the specified node
+- <code>ibclearcounters</code> - clear port counters for the InfiniBand subnet</p>
+<p>Other checks:
+- <code>iblinkinfo</code> - scope: done
+- <code>ibcheck</code>
+- <code>wwibcheck</code>
+- <code>ibswitch</code> - verify that an IB-QNEM is installed in the shelf
+- <code>ibhosts</code> - list all hosts in the IB network. - scope: done
+- <code>ibswitches</code> - list all ib switches - scope: done</p>
+<p>Tracing:
+- <code>ibping</code> - ping/pong between InfiniBand nodes
+- <code>ibsysstat</code> - obtain basic information for remote nodes (hostname, cpus, memory, utilization)
+- <code>ibswitches</code> - scan the net or use existing net topology file and list all switches - scope: done
+- <code>ibhosts</code> - scan the net or use existing net topology file and list all hosts - scope: done</p>
+<p>Display network topology:
+- <code>iblinkinfo -R</code> - scope: done</p>
+<p>Use <code>ifconfig</code> to discover <code>IPoIB</code> networks, e.g. if you get <code>ib0</code> device with <code>inet addr:100.1.1.102</code>, you can connect to it - e.g. <code>ping 100.1.1.102</code></p>
+<p>Find the controller:
+<code>lspci | grep Mellanox</code></p>
+<p>Print driver configuration (interface name comes from <code>ifconfig</code>):
+<code>ethtool -i enP49239s1</code></p>
+<h3 id="performance_1">Performance</h3>
+<p><code>perftest</code> Package includes:
+- <code>ib_send_bw</code>
+- <code>ib_send_lat</code>
+- <code>ib_write_bw</code> - done: <a href="../network/README.html#measuring-the-inter-node-fabric-on-its-own">Measuring the inter-node fabric on its own</a>
+- <code>ib_write_lat</code>
+- <code>ib_read_bw</code>
+- <code>ib_read_lat</code>
+- <code>ib_atomic_bw</code>
+- <code>ib_atomic_lat</code></p>
+<p>example: <code>ib_send_bw -a address</code> - test bandwidth</p>
+<p><code>qperf</code> measures bandwidth and latency between two nodes (TCP/IP and RDMA transports)</p>
+<p>If the network is much slower than it should be, might have to specify which HCAs to use (<code>ibv_devinfo</code> to get HCAs)</p>
+<pre><code>export NCCL_IB_HCA=mlx5
+</code></pre>
+<p>see <a href="../network/debug/README.html#how-to-diagnose-nccl-multi-gpu-and-multi-node-connectivity-issues">How to diagnose NCCL multi-gpu and multi-node connectivity issues</a> for the in-depth discussion, including the per-port <code>=mlx5_0:1</code> form and the <code>^=</code> syntax for excluding an adapter.</p>
+<p>might need to install ib packages on the vms:</p>
+<pre><code>sudo apt-get install -y automake dh-make git libcap2 libnuma-dev libtool make pkg-config udev curl librdmacm-dev rdma-core \
+    libgfortran5 bison chrpath flex graphviz gfortran tk dpatch quilt swig tcl ibverbs-utils infiniband-diags
+sudo sed -i -e 's/# OS.EnableRDMA=y/OS.EnableRDMA=y/g' /etc/waagent.conf
+</code></pre>
+<ul>
+<li>Verbs: allow command to be executed on feature-rich IB switch.</li>
+</ul>
+<h1 id="slurm">SLURM</h1>
+<p>repos to explore:
+https://github.com/OleHolmNielsen/Slurm_tools</p>
+<h1 id="testing">Testing</h1>
+<ul>
+<li>integrate the features from testing_utils.py</li>
+</ul>
+<h1 id="from-adam-moodys-team-at-llnl">From Adam Moody's team at LLNL</h1>
+<ul>
+<li>NUMA affinities</li>
+</ul>
+<p>https://github.com/LLNL/mpibind/tree/master/python
+mpibind for Python enables the use of the mpibind algorithm in arbitrary Python programs.</p>
+<ul>
+<li>Training hanging detection tool:</li>
+</ul>
+<p>This is to expand:
+https://github.com/stas00/ml-engineering/tree/master/fault-tolerance#is-job-hanging-watchdog</p>
+<p>notes from Adam:</p>
+<p>https://github.com/LLNL/STAT - the Stack Trace Analysis Tool
+https://hpc.llnl.gov/software/development-environment-software/stat-stack-trace-analysis-tool</p>
+<p>https://github.com/grondo/io-watchdog</p>
+<p>And you can see how we integrated STAT a ways down on this page:</p>
+<p>https://hpc.llnl.gov/software/development-environment-software/stat-stack-trace-analysis-tool</p>
+<p>There are some "action" scripts one has to write, which io-watchdog executes when it detects a hang.  The contents of those aren't shown on the page, but I could look that up if you're curious.  The user would create a config file like:</p>
+<pre><code>search /usr/local/tools/io-watchdog/actions
+timeout = 20m
+actions = STAT, kill
+</code></pre>
+<p>This configured io-watchdog to assume the job was stuck if it saw no output for 20 minutes (from rank 0), and then to run "STAT" to collect a stack trace and run "kill" to scancel the job.  We had a couple others, like one to email the user that io-watchdog detected a hang.  One then launches with:</p>
+<pre><code>srun --io-watchdog mpi_application
+</code></pre>
+<p>a quick demo of SCR.  The python to use it is pretty clean.</p>
+<p>Install the SCR library (C + MPI)
+https://scr.readthedocs.io/en/v3.0/users/build.html#cmake</p>
+<p>Install the scr.py module:
+https://github.com/LLNL/scr/tree/develop/python#installing-the-scr-python-module</p>
+<p>Example checkpoint in python:
+https://github.com/LLNL/scr/blob/1878de8756c2b51882a7cda7b97b142eae4e3995/python/scr_example.py#L64-L105</p></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/stabs/incoming.md">stabs/incoming.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

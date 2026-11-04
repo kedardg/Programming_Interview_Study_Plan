@@ -1,0 +1,388 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RL System Deep Thinking: Weight Update Mechanisms</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/sys-design/readme-1-EN.md</div>
+<article class="note"><h1 id="rl-system-deep-thinking-weight-update-mechanisms">RL System Deep Thinking: Weight Update Mechanisms</h1>
+<p>I recently had the opportunity to once again delve into and reflect upon the system design of mainstream RL frameworks. We hope to share our thoughts through a series of documents and receive feedback, collaborating with like-minded friends to build a better open-source RLHF framework. We're calling this series "RL System Deep Thinking." This is the first article in the series, focusing on various weight update mechanisms. We will start by analyzing the weight update method in <code>verl</code> under a co-located strategy, where I first understood from scratch how weight updates are implemented by reconstructing tensors from handle tuples. Next, we will dissect the weight update model in the <code>slime</code> framework, focusing on its ingenious bucket update strategy. Finally, we will conduct a horizontal comparison of three weight update methods and briefly share some of my personal thoughts. All feedback and corrections are welcome.</p>
+<p>As is customary, I'd like to thank all the friends who participated in the discussion and writing of this document:</p>
+<p>Zhuoran Yin (CMU), Changyi Yang (CMU), Ji Li (Ant Group), Chengxi Li (CMU), Biao He (LinkedIn), Junrong Lin (Qwen), Shan Yu (UCLA), Xinyuan Tong (Chenyang's little minion), Chenyang Zhao (Amazon)</p>
+<p>(The order is based on the member list in our WeChat group 😂)</p>
+<h2 id="weight-update-in-verls-co-located-strategy">Weight Update in verl's co-located strategy</h2>
+<p>Logically, weight updates under a co-located strategy are all similar. We'll use the FSDP training backend as an example to provide a simplified and general update process. The core is this <a href="https://github.com/volcengine/verl/blob/0508af25b66e839772fba8e79d97896bf0d843d3/verl/workers/sharding_manager/fsdp_sglang.py#L160">code snippet</a>:</p>
+<pre><code class="language-python">def _preprocess_tensor_for_update_weights(tensor: torch.Tensor):
+    if isinstance(tensor, DTensor):
+        return tensor.full_tensor()
+    return tensor
+
+async def update_weights(self, params):
+    named_tensors = [(k, v) for k, v in params.items()]
+    load_format = None
+    for tensor_index, (name, tensor) in enumerate(named_tensors):
+        serialized_tensor = MultiprocessingSerializer.serialize(_preprocess_tensor_for_update_weights(tensor))
+
+        if self.device_mesh[&quot;infer_tp&quot;].get_local_rank() == 0:
+            gathered_serialized_tensors = [None for _ in range(self.device_mesh[&quot;infer_tp&quot;].mesh.size()[0])]
+        else:
+            gathered_serialized_tensors = None
+        dist.gather_object(
+            obj=serialized_tensor,
+            object_gather_list=gathered_serialized_tensors,
+            dst=self.device_mesh[&quot;infer_tp&quot;].mesh.tolist()[0],
+            group=self.device_mesh[&quot;infer_tp&quot;].get_group(),
+        )
+
+        if self.device_mesh[&quot;infer_tp&quot;].get_local_rank() == 0:
+            await self.inference_engine.update_weights_from_tensor(
+                named_tensors=[
+                    (
+                        name,
+                        LocalSerializedTensor(values=gathered_serialized_tensors),
+                    )
+                ],
+                load_format=load_format,
+                flush_cache=tensor_index == len(named_tensors) - 1,
+            )
+</code></pre>
+<p>Parameters are gathered and updated one by one. After one parameter is updated, it's released, and the loop continues. Let's take a single parameter as an example. Assume its size is <code>[1024, 1024]</code>, FSDP's TP size is 4, and SGLang's TP size is 2. Therefore, before the update begins, each rank in the FSDP engine has a tensor of size <code>[256, 1024]</code>, while the SGLang engine has a tensor of size <code>[512, 1024]</code>.</p>
+<ol>
+<li><strong>Weight Export</strong>: Each rank calls <code>_preprocess_tensor_for_update_weights()</code> to gather the full tensor for the current parameter. This effectively aggregates the parameter shards from various GPUs onto each rank, so every rank holds a complete copy of the current parameter's tensor. At this point, there will be three copies of this parameter: the first two are the <code>[512, 1024]</code> and <code>[256, 1024]</code> tensors that FSDP and SGLang already have, and the third is a <code>[1024, 1024]</code> tensor allocated specifically for the aggregation.</li>
+<li><strong>Tensor Serialization</strong>: <code>MultiprocessingSerializer.serialize()</code> is called to serialize the aggregated parameter on each rank, yielding a serialized handle tuple, referred to as <code>serialized_tensor</code>. Note that although the input to serialization is the aggregated <code>[1024, 1024]</code> tensor, the return value is only the serialized handle tuple. A handle tuple is akin to a pointer to the tensor's actual storage, containing information like virtual address, stripe, size, etc., as well as the CUDA IPC handler needed for tensor reconstruction on the SGLang engine side.</li>
+<li><strong>Gather Handle Tuples to FSDP TP 0</strong>: Although every rank has aggregated the full tensor for the current parameter, only <code>tp 0</code> collects the handle tuples from all ranks via <code>gather_object</code>.</li>
+<li><strong>Inter-Process Transfer</strong>: FSDP TP rank 0 packs the collected list of handle tuples into a <code>LocalSerializedTensor</code> object for subsequent reconstruction. It then transfers it to the SGLang Engine via inter-process communication. Only the serialized handle tuples are transferred, not the actual data.</li>
+<li><strong>SGLang Engine Tensor Reconstruction</strong>: Each TP rank in SGLang calls <code>_unwrap_tensor()</code>, which in turn calls <code>LocalSerializedTensor.get -&gt; MultiprocessingSerializer.deserialize</code>. This deserializes and recovers the handle tuple of the full tensor that was aggregated on the FSDP side. Next, a new Python tensor object is constructed, and the just-recovered handle tuple is assigned as its handle tuple. The new tensor object and the aggregated full tensor on the FSDP side share the same handle tuple and all metadata, thus pointing to the same block of GPU memory, completing the tensor reconstruction process.</li>
+<li><strong>SGLang Engine Loads Weights</strong>: The reconstructed tensor is passed to <code>ModelRunner.load_weights</code>, which replaces the original tensor for that parameter with the new one, completing the entire parameter update process.</li>
+</ol>
+<p>Through this process, on any given TP rank, only a temporary <code>[1024, 1024]</code> tensor is created. After the original handler is replaced, the unused half of this <code>[1024, 1024]</code> tensor is released. The old tensor pointed to by the original SGLang engine handler is also freed, preventing any memory leaks.</p>
+<div style="text-align: center;">
+<img src="./pics/update_weights.jpg" alt="Update Weights Diagram" style="width:50%;">
+</div>
+
+<h3 id="weight-export">Weight Export</h3>
+<p>Weight export and handle tuple serialization are done in a single line:</p>
+<pre><code class="language-python">def _preprocess_tensor_for_update_weights(tensor: torch.Tensor):
+    if isinstance(tensor, DTensor):
+        return tensor.full_tensor()
+    return tensor
+
+serialized_tensor = MultiprocessingSerializer.serialize(_preprocess_tensor_for_update_weights(tensor))
+</code></pre>
+<p>After the training phase concludes, weights are first exported using FSDP <code>state_dict</code>. Generally, <code>state_dict</code> is a <code>param name -&gt; tensor</code> dictionary. In FSDP, the value in the <code>state_dict</code> depends on the <code>StateDictType</code> mode. FSDP has three built-in modes: <code>FULL_STATE_DICT</code>, <code>SHARDED_STATE_DICT</code>, and <code>LOCAL_STATE_DICT</code>. Let's examine these three modes assuming a 4-rank FSDP training with a parameter shape of <code>[1024, 1024]</code>, where each rank is responsible for 1/4 of the parameters:</p>
+<ol>
+<li>
+<p><code>FULL_STATE_DICT</code></p>
+<p>```python</p>
+<h1 id="each-rank-gets-the-complete-parameters">Each rank gets the complete parameters</h1>
+<p>{
+    'layer1.weight': tensor([1024, 1024]),  # Full tensor, identical on each rank
+    'layer1.bias': tensor([1024]),          # Full tensor, identical on each rank
+    # ... all parameters are complete
+}
+```</p>
+</li>
+<li>
+<p><code>LOCAL_STATE_DICT</code></p>
+<p>```python</p>
+<h1 id="each-rank-only-gets-the-shard-it-is-responsible-for">Each rank only gets the shard it is responsible for</h1>
+<p>{
+    'layer1.weight': tensor([256, 1024]),  # Shard for the current rank (1/4)
+    'layer1.bias': tensor([256]),          # Shard for the current rank (1/4)
+    # ... only the parameter shards for the current rank
+}
+```</p>
+</li>
+<li>
+<p><code>SHARDED_STATE_DICT</code></p>
+<p>```python</p>
+<h1 id="each-rank-gets-a-shard-object-containing-metadata">Each rank gets a shard object containing metadata</h1>
+<p>{
+    'layer1.weight': ShardedTensor {
+        metadata: {
+            "world_size": 4,           # Total number of shards
+            "rank": 1,                 # Current shard index (0-3)
+            "shape": [1024, 1024],     # Shape of the full tensor
+            "dtype": torch.float16,    # Data type
+        },
+        local_shard: tensor([256, 1024]),  # Shard data for the current rank
+    },
+    'layer1.bias': ShardedTensor {
+        metadata: { "world_size": 4, "rank": 1, "shape": [1024], "dtype": torch.float16 },
+        local_shard: tensor([256]),    # Shard data for the current rank
+    }
+}
+```</p>
+</li>
+</ol>
+<p>Among these, <code>FULL_STATE_DICT</code> is the most straightforward implementation. <code>LOCAL_STATE_DICT</code> only saves the part stored by the current rank without slicing information, while <code>SHARDED_STATE_DICT</code> builds upon <code>LOCAL_STATE_DICT</code> by additionally storing metadata about the parameter shard and slicing. A tensor in the <code>SHARDED_STATE_DICT</code> state can be aggregated using <code>full_tensor()</code>:</p>
+<pre><code class="language-python">if isinstance(tensor, DTensor):
+    return tensor.full_tensor()
+</code></pre>
+<h3 id="tensor-serialization">Tensor Serialization</h3>
+<p>Serialization is performed by <code>MultiprocessingSerializer.serialize</code>. As mentioned earlier, the return value from serializing a tensor is actually a serialized handler, or more precisely, a handle tuple. Let's look at the return value of the <code>reduce_tensor()</code> function, which is called deep within the serialization process:</p>
+<pre><code class="language-python"> return (
+            rebuild_cuda_tensor, # Reconstruction function
+            (
+                type(tensor), # Tensor type
+                tensor.size(), # Tensor size
+                tensor.stride(), # Tensor stride
+                tensor_offset,  # Tensor offset in storage
+                type(storage), # Storage type
+                tensor.dtype, # Tensor data type
+                device, # Tensor device
+                handle,  # Identifier for which CUDA allocation the storage is in
+                storage_size_bytes,  # Storage size
+                storage_offset_bytes,  # Storage offset in CUDA allocation
+                tensor.requires_grad, # Whether the tensor requires grad
+                ref_counter_handle, # Reference counter handle
+                ref_counter_offset, # Reference counter offset
+                event_handle, # Event handle
+                event_sync_required, # Whether event sync is required
+            ),
+        )
+</code></pre>
+<p>As you can see, calling <code>reduce_tensor</code> on a CUDA Tensor returns a Python Tuple containing everything needed to reconstruct the Tensor, but absolutely none of the actual stored data itself. This handle tuple is then passed to the receiving party via inter-process communication (e.g., zmq). The receiver, naturally, does not get the data itself but a set of handlers that help find (reconstruct) this tensor. We will refer to this as the handle tuple hereafter.</p>
+<h3 id="gathering-handles">Gathering Handles</h3>
+<p>Note that during the process of gathering and serializing the tensor, no distinction is made between different TP ranks. This means that for the parameter being updated, each TP rank will allocate an additional piece of GPU memory, gather the complete tensor, and serialize it to get its handle tuple. Given that a single parameter is not very large, this approach is still safe. Next, after each TP rank obtains a handle tuple, the handle tuples themselves are also gathered:</p>
+<pre><code class="language-python">if self.device_mesh[&quot;infer_tp&quot;].get_local_rank() == 0:
+    gathered_serialized_tensors = [None for _ in range(self.device_mesh[&quot;infer_tp&quot;].mesh.size()[0])]
+else:
+    gathered_serialized_tensors = None
+dist.gather_object(
+    obj=serialized_tensor,
+    object_gather_list=gathered_serialized_tensors,
+    dst=self.device_mesh[&quot;infer_tp&quot;].mesh.tolist()[0],
+    group=self.device_mesh[&quot;infer_tp&quot;].get_group(),
+)
+</code></pre>
+<p>Here, <code>dist.gather_object</code> is used to gather the handle tuples from all TP ranks. Unlike <code>all_gather</code>, <code>gather_object</code> is a one-way gathering operation:</p>
+<ul>
+<li>All TP ranks participate in sending: Each rank calls <code>dist.gather_object</code> to send its <code>serialized_tensor</code>.</li>
+<li>Only the destination rank receives: Only the rank specified by <code>dst</code> (here, TP rank 0) will receive the complete list of handle tuples.</li>
+<li>Other ranks do not receive: For non-destination ranks, <code>gathered_serialized_tensors</code> remains <code>None</code>.</li>
+</ul>
+<p>The advantage of this design is that only TP rank 0 needs to pass the collected handle tuples to the SGLang Engine, avoiding the memory overhead of each rank holding a complete list of handle tuples.</p>
+<h3 id="sglang-completes-tensor-reconstruction">SGLang Completes Tensor Reconstruction</h3>
+<p>Next, the gathered list of handle tuples is passed to the SGLang Engine, and the <code>update_weights_from_tensor</code> interface is called.</p>
+<pre><code class="language-python">if self.device_mesh[&quot;infer_tp&quot;].get_local_rank() == 0:
+    await self.inference_engine.update_weights_from_tensor(
+        named_tensors=[
+            (
+                name,
+                LocalSerializedTensor(values=gathered_serialized_tensors),
+            )
+        ],
+        load_format=load_format, # Actually passes None
+        flush_cache=tensor_index == len(named_tensors) - 1,
+    )
+</code></pre>
+<p>The code then moves to the SGLang side. Let's look at the source code for <a href="https://github.com/sgl-project/sglang/blob/392e441ad17c78b68638f2d959fcf592d19b4834/python/sglang/srt/model_executor/model_runner.py#L774">ModelRunner.update_weights_from_tensor</a>. Note that for SGLang, <code>ModelRunner</code> is a very low-level class; above it is the <code>TpModelManager</code>. This means that <code>update_weights_from_tensor</code> is actually called by each TP rank of SGLang. You can refer to this diagram for the specific SGLang architecture:</p>
+<div style="text-align: center;">
+<img src="https://raw.githubusercontent.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/main/sglang/code-walk-through/sglang-architecture.svg" alt="SGLang Architecture" style="width:50%;">
+</div>
+
+<p>Let's get back to the main track and examine the <code>update_weights_from_tensor</code> interface executed on each TP rank at the SGLang low level:</p>
+<pre><code class="language-python">def update_weights_from_tensor(
+    self,
+    named_tensors: List[Tuple[str, Union[torch.Tensor, &quot;LocalSerializedTensor&quot;]]],
+    load_format: Optional[str] = None,
+):
+    named_tensors = [
+        (name, _unwrap_tensor(tensor, tp_rank=self.tp_rank))
+        for name, tensor in named_tensors
+    ]
+    if load_format == &quot;direct&quot;:
+        _model_load_weights_direct(self.model, named_tensors)
+    elif load_format in self.server_args.custom_weight_loader:
+        custom_loader = dynamic_import(load_format)
+        custom_loader(self.model, named_tensors)
+    elif load_format is None:
+        self.model.load_weights(named_tensors)
+    else:
+        raise NotImplementedError(f&quot;Unknown load_format={load_format}&quot;)
+    return True, &quot;Success&quot;
+
+
+def _unwrap_tensor(tensor, tp_rank):
+    if isinstance(tensor, LocalSerializedTensor):
+        monkey_patch_torch_reductions()
+        tensor = tensor.get(tp_rank)
+    return tensor.to(torch.cuda.current_device())
+
+
+@dataclass
+class LocalSerializedTensor:
+    &quot;&quot;&quot;torch.Tensor that gets serialized by MultiprocessingSerializer (which only serializes a pointer and not the data).
+    The i-th element in the list corresponds to i-th rank's GPU.&quot;&quot;&quot;
+
+    values: List[bytes]
+
+    def get(self, rank: int):
+        return MultiprocessingSerializer.deserialize(self.values[rank])
+</code></pre>
+<p>Each TP rank calls the <code>_unwrap_tensor</code> interface. In the <code>tensor.get(tp_rank)</code> step, the call chain <code>LocalSerializedTensor.get -&gt; MultiprocessingSerializer.deserialize</code> is followed to deserialize and recover the handle tuple of the full tensor aggregated on the FSDP side. Then, a new Python tensor object is constructed, and the just-recovered handle tuple is assigned as its handle tuple. Through this handle-sharing mechanism, the new tensor object and the aggregated full tensor on the FSDP side share all metadata and naturally point to the same block of GPU memory, completing the tensor reconstruction process. After reconstruction, this new tensor object is passed to <code>ModelRunner.load_weights</code> to replace the original tensor at the SGLang low level.</p>
+<h2 id="weight-synchronization-strategy-in-slime">Weight Synchronization Strategy in <code>slime</code></h2>
+<p>With the previous understanding of <code>update_weights_from_tensor</code>, let's further analyze <code>slime</code>'s weight synchronization strategy under a co-located policy. <code>slime</code> is a lightweight framework that supports both disaggregated and co-located strategies. In terms of technology choices, <code>slime</code> uses Ray for communication, Megatron for the Training Backend, and SGLang for the Rollout Backend. Thanks to its streamlined design and technology stack, the <code>slime</code> codebase is very clean. We will have more to share on this later. For now, let's continue from the previous discussion and delve into <code>slime</code>'s weight synchronization strategy in a co-located setting.</p>
+<p>In a co-located strategy, the rollout engine and training engine must continuously offload and upload to free up GPU memory for each other. SGLang manages offloading via <code>torch.memory.caching_allocator</code>, while Megatron uses its own custom memory allocator. Logically, after a rollout concludes, the physical memory is released directly via the memory saver, and then Megatron is started for training. After training, Megatron's model weights and optimizer are all offloaded to the CPU, and then SGLang's model weights and KV cache are uploaded to the GPU.</p>
+<p>This is where it gets interesting. For the subsequent parameter update, <code>slime</code> will upload Megatron's model weights to the GPU in buckets. Then, similar to the operation in <code>verl</code>, it aggregates them to get the full tensor, serializes it to get the handle tuple, and passes the handle tuple to the rollout engine, calling the <code>update_weights_from_tensor</code> interface to complete the parameter update.</p>
+<p>A very interesting question to share is: why does <code>slime</code> need to offload Megatron's model weights first and then upload them again? Can't they just be kept on the GPU?</p>
+<p>The answer lies in <code>slime</code>'s more refined handling of weight updates. Specifically, to prevent OOM issues when an extremely large MoE model's entire set of weights is uploaded to the GPU and coexists with SGLang, <code>slime</code> updates parameters in buckets. Only a small portion of parameters within a bucket is updated at a time. If a method similar to <code>verl</code>'s were used, keeping all of FSDP's parameters on the GPU, it would still be very easy to run out of memory for very large models unless the TP degree is very high. Based on this, we can see that during <code>slime</code>'s update weights phase, the GPU memory usage is almost entirely composed of SGLang's CUDA Graph, model weights, and KV cache, with the uploaded Megatron parameters taking up very little memory. Therefore, in theory, <code>slime</code> does not need the complex <a href="https://hebiao064.github.io/rl-memory-management">multi-stage wake up</a> mechanism we implemented in <code>verl</code>, and SGLang's memory static fraction can be set to a very high level. Unfortunately, since Megatron's offloading is not perfect, there is still room for improvement in the current memory static fraction. We at LMSYS are actively collaborating with the <code>slime</code> team on optimizations.</p>
+<p>Alright, with this foundation, let's quickly review the specific weight update process in <code>slime</code>'s co-located strategy:</p>
+<ol>
+<li><strong>Establish Communication Group</strong>: To be able to gather handle tuples during weight updates, a process group (<code>_ipc_gather_group</code>) containing all rollout and training engines is established when <code>slime</code> starts, with <code>nccl</code> as the communication backend.</li>
+<li><strong>Clear KV Cache</strong>: After the rollout engine updates its parameters, all previous KV cache entries become unusable. Therefore, before the rollout engine updates its parameters, a flush cache command is sent to all rollout engines to clear the radix tree, ensuring that the old KV cache does not affect the new round of rollouts.</li>
+<li><strong>Weight Aggregation</strong>: Buckets are constructed, and the Megatron model weights within a bucket are uploaded from CPU to GPU. Then, a <code>broadcast</code> is performed within the PP/EP group to ensure each rank has the complete parameter in the PP/EP dimension, followed by <code>dist.all_gather</code> + <code>torch.cat</code> to complete the aggregation at the TP level, resulting in a full tensor. <code>verl</code> mainly deals with parameters sharded only at the TP level, so <code>full_tensor</code> can be used to directly gather the <code>DTensor</code> along this dimension into a tensor. In <code>slime</code>, there is multi-dimensional parallelism with different sharding strategies, so <code>full_tensor</code> cannot be used simply; manual aggregation is required.</li>
+<li><strong>Tensor Serialization and Handle Tuple Aggregation</strong>: Same as in <code>verl</code>, <code>MultiprocessingSerializer.serialize</code> is used for serialization to get the handle tuple, followed by <code>dist.gather()</code> to aggregate the handle tuples.</li>
+<li><strong>Pass Handle Tuples and Reconstruct Parameters to Complete Update</strong>: This part is very similar to what was described before. The aggregated handle tuples are passed to the SGLang Engines, deserialized on the SGLang side, the parameters are reconstructed, and then <code>ModelRunner.load_weights</code> is called to complete the update.</li>
+</ol>
+<p>Here is some relevant code for better understanding:</p>
+<details>
+<summary>slime weight update code</summary>
+
+
+<pre><code class="language-python">def update_weights_from_tensor(self):
+    pp_size = mpu.get_pipeline_model_parallel_world_size()
+    ep_size = mpu.get_expert_model_parallel_world_size()
+    rank = dist.get_rank()
+    if rank == 0:
+        ray.get([engine.reset_prefix_cache.remote() for engine in self.rollout_engines])
+    dist.barrier()
+    for param_infos in self.param_info_buckets:
+        # init params:
+        params = []
+        for info in param_infos:
+            if dist.get_rank() == info.src_rank:
+                params.append(
+                    torch.nn.Parameter(self.params_dict[info.name].to(device=torch.cuda.current_device()))
+                )
+            else:
+                params.append(torch.empty(info.shape, dtype=info.dtype, device=torch.cuda.current_device()))
+
+        # broadcast params across pp ranks
+        if pp_size &gt; 1:
+            handles = []
+            for info, param in zip(param_infos, params):
+                if info.src_rank in dist.get_process_group_ranks(mpu.get_pipeline_model_parallel_group()):
+                    handles.append(
+                        torch.distributed.broadcast(
+                            param, src=info.src_rank, group=mpu.get_pipeline_model_parallel_group(), async_op=True
+                        )
+                    )
+            for handle in handles:
+                handle.wait()
+
+        # broadcast params across ep ranks
+        if ep_size &gt; 1:
+            handles = []
+            for info, param in zip(param_infos, params):
+                if &quot;.experts.&quot; in info.name:
+                    src_rank = (
+                        info.src_rank
+                        if info.src_rank in dist.get_process_group_ranks(mpu.get_expert_model_parallel_group())
+                        else rank
+                    )
+                    handles.append(
+                        torch.distributed.broadcast(
+                            param, src=src_rank, group=mpu.get_expert_model_parallel_group(), async_op=True
+                        )
+                    )
+            for handle in handles:
+                handle.wait()
+
+        converted_named_tensors = []
+        for info, param in zip(param_infos, params):
+            # set tp attrs
+            for key, value in info.attrs.items():
+                setattr(param, key, value)
+            # gather param
+            param = update_weight_utils.all_gather_param(info.name, param)
+            param = update_weight_utils.remove_padding(info.name, param, self.vocab_size)
+            converted_named_tensors.extend(
+                update_weight_utils.convert_to_hf(
+                    self.args, self.model_name, info.name, param, self.quantization_config
+                )
+            )
+        self._update_converted_params_from_tensor(converted_named_tensors)
+
+def all_gather_param(name, param):
+    if &quot;expert_bias&quot; in name:
+        return param
+
+    assert hasattr(param, &quot;tensor_model_parallel&quot;), f&quot;{name} does not have tensor_model_parallel attribute&quot;
+    if not param.tensor_model_parallel:
+        # if mpu.get_tensor_model_parallel_world_size() == 1:
+        return param.data
+
+    if &quot;.experts.&quot; in name:
+        tp_size = mpu.get_expert_tensor_parallel_world_size()
+        tp_group = mpu.get_expert_tensor_parallel_group()
+    else:
+        tp_size = mpu.get_tensor_model_parallel_world_size()
+        tp_group = mpu.get_tensor_model_parallel_group()
+
+    param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
+    dist.all_gather(param_partitions, param.data, group=tp_group)
+    partition_dim = param.partition_dim
+    assert param.partition_stride == 1, &quot;partition_stride != 1 is not supported&quot;
+    # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
+    # TODO: check only GLU is used.
+    if &quot;linear_fc1.weight&quot; in name:
+        param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
+        param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
+    # this is bug in megatron's grouped moe.
+    if &quot;linear_fc2.weight&quot; in name:
+        if partition_dim == 0:
+            partition_dim = 1
+    param = torch.cat(param_partitions, dim=partition_dim)
+    return param
+
+def _update_converted_params_from_tensor(self, converted_named_tensors):
+    ipc_handle = MultiprocessingSerializer.serialize(converted_named_tensors, output_str=True)
+    ipc_handles = (
+        [None] * dist.get_world_size(self._ipc_gather_group) if self._ipc_gather_src == dist.get_rank() else None
+    )
+    dist.gather_object(
+        ipc_handle,
+        object_gather_list=ipc_handles,
+        dst=self._ipc_gather_src,
+        group=self._ipc_gather_group,
+    )
+
+    if dist.get_rank() == self._ipc_gather_src:
+        ref = self._ipc_engine.update_weights_from_tensor.remote(
+            ipc_handles=ipc_handles,
+        )
+        ray.get(ref)
+
+    converted_named_tensors.clear()
+    torch.cuda.empty_cache()
+</code></pre>
+
+
+</details>
+
+<h2 id="comparison-of-three-weight-update-methods">Comparison of Three Weight Update Methods</h2>
+<p>Finally, let's compare three weight update methods. As the saying goes, "knowing is easy, but doing is hard." My personal journey into RL system development began with the weight update interface. An RL system just needs to integrate an inference engine, run a series of inferences, and then update the weights after training is complete. However, the bitter-sweet experience can only be truly understood by those who have gone through the grind. By outlining these three weight update interfaces, I am essentially outlining two main approaches:</p>
+<ol>
+<li>
+<p><strong><code>update_weights_from_disk</code></strong>: This is the simplest interface. While ensuring the engine is running, it directly reads weights from the disk and then calls <code>ModelRunner.load_weights</code> down the line to update the weights. In practice, after each update of the target policy during the RL process, the target policy is saved, and then the <code>update_weights_from_disk</code> interface is called to perform the update. This might not sound efficient, as it involves writing weights to underlying storage and then reading them back, with the overall speed determined by the I/O efficiency of the storage. However, if the read/write speed of the underlying storage is fast enough, or if the SGLang Engine can read from the disk efficiently in parallel, this might not be an unfeasible solution. Furthermore, writing to storage also accomplishes checkpointing. If other interfaces are used for weight updates, checkpoint management requires a separate asynchronous logic. Lastly, I believe <code>update_weights_from_disk</code> is the interface best suited for the dynamic scaling needs of rollouts. If, during training, rollouts become surprisingly slow and you're using an <code>update_weights_from_distributed</code> solution, you would have to pause the existing communication group, add a new Rollout Engine, and re-establish the communication group to scale out—a process of considerable engineering complexity. With the <code>update_weights_from_disk</code> interface, you can simply add a new Rollout Engine to the DP router above the Rollout Engines, and all Rollout Engines can then read from the same checkpoint to update their weights. <code>update_weights_from_disk</code> can be used in both co-located and disaggregated strategies, but frameworks that support co-location mostly adopt <code>update_weights_from_tensor</code>. Among mainstream frameworks, AReaL has chosen <code>update_weights_from_disk</code>.</p>
+</li>
+<li>
+<p><strong><code>update_weights_from_distributed</code></strong>: This is an interface I implemented. It's logically similar to <code>update_weights_from_tensor</code>, but <code>from_distributed</code> uses NCCL or InfiniBand for communication between different resource groups and can only be used in a disaggregated strategy. Specifically, when the Training Engine and Rollout Engine are placed in two separate resource groups, a unified communication group is established between them. Each time the training engine finishes updating weights, the sharded weights are gathered parameter by parameter onto TP 0 of the Training Engine, then transferred from the Training Engine's TP 0 to each TP of the Rollout Engine. Each TP of the Rollout Engine then shards the data to take the part it needs, and the parameters are loaded.</p>
+</li>
+<li>
+<p><strong><code>update_weights_from_tensor</code></strong>: This is actually similar to <code>update_weights_from_distributed</code>; logically, both require a gathering step. However, as we analyzed earlier, <code>update_weights_from_tensor</code> only serializes and passes handle tuples, not the actual data. The main difficulty with <code>from_tensor</code> is that the co-located strategy often requires strong intrusion into the rollout engine to meet its strict SPMD (Single Program, Multiple Data) requirements. Many optimizations for MoE, like the classic DeepSeek DP Attention, cannot be enabled, whereas these are naturally supported in a disaggregated strategy.</p>
+</li>
+</ol></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/sys-design/readme-1-EN.md">rlhf/sys-design/readme-1-EN.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

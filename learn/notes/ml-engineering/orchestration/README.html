@@ -1,0 +1,47 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orchestration</title><link rel="stylesheet" href="../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../index.html">Learn</a><div class="links"><a href="../../../notes.html" class="here">Notes library</a><a href="../../../index.html">All chapters</a><a href="../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../notes.html">Notes library</a> › <a href="../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › orchestration/README.md</div>
+<article class="note"><h1 id="orchestration">Orchestration</h1>
+<p>There are many container/accelerator orchestration solutions - many of which are open source.</p>
+<p>So far I have been working with SLURM and Kubernetes.</p>
+<h2 id="slurm">SLURM</h2>
+<ul>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm">SLURM</a> - Simple Linux Utility for Resource Management, which you're guaranteed to find on most HPC environments and typically it's supported by most cloud providers.  It has been around for more than 2 decades</li>
+</ul>
+<h3 id="slurm-on-kubernetes">SLURM on Kubernetes:</h3>
+<p>These are frameworks allowing you to run SLURM on top of Kubernetes:</p>
+<ul>
+<li><a href="https://github.com/slinkyproject">Slinky</a> - a framework from the creators of SLURM.</li>
+<li><a href="https://github.com/nebius/soperator">Soperator</a> - from Nebius</li>
+<li>CoreWeave never released their <a href="https://www.coreweave.com/products/sunk">SUNK</a> open source, so it's only available to its customers.</li>
+</ul>
+<h2 id="kubernetes">Kubernetes</h2>
+<p>The other most popular orchestrator is Kubernetes:</p>
+<ul>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/kubernetes">Kubernetes</a> - also known as K8s, is an open source system for automating deployment, scaling, and management of containerized applications. Here is a good <a href="https://web.archive.org/web/20250324222116/https://www.fluidstack.io/post/is-kubernetes-or-slurm-the-best-orchestrator-for-512-gpu-jobs">comparison between SLURM and K8s</a>.</li>
+</ul>
+<h2 id="other-orchestration-frameworks">Other orchestration frameworks</h2>
+<p>Here are various other less popular than SLURM and K8s, but still very mighty orchestration solutions:</p>
+<ul>
+<li><a href="https://github.com/dstackai/dstack">dstack</a> is a lightweight, open-source alternative to Kubernetes &amp; SLURM, simplifying AI container orchestration with multi-cloud &amp; on-prem support. It natively supports NVIDIA, AMD, &amp; TPU.</li>
+<li><a href="https://github.com/skypilot-org/skypilot">SkyPilot</a> is a framework for running AI and batch workloads on any infra, offering unified execution, high cost savings, and high GPU availability.</li>
+<li><a href="https://github.com/openhpc/ohpc">OpenHPC</a> provides a variety of common, pre-built ingredients required to deploy and manage an HPC Linux cluster including provisioning tools, resource management, I/O clients, runtimes, development tools, containers, and a variety of scientific libraries.</li>
+<li><a href="https://www.nvidia.com/en-us/software/run-ai/">run.ai</a> - got acquired by NVIDIA and is planned to be open sourced soon.</li>
+<li><a href="https://docs.docker.com/engine/swarm/">Docker Swarm</a> is a container orchestration tool.</li>
+<li><a href="https://www.ibm.com/products/hpc-workload-management">IBM Platform Load Sharing Facility (LSF)</a> Suites is a workload management platform and job scheduler for distributed high performance computing (HPC).</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/README.md">orchestration/README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

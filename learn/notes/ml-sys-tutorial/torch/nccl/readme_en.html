@@ -1,0 +1,260 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NCCL in SGLang</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › torch/nccl/readme_en.md</div>
+<article class="note"><h1 id="nccl-in-sglang">NCCL in SGLang</h1>
+<p>Before we discuss NVIDIA Collective Communication Library (NCCL) and communication in SGLang, we introduce the parallelism and general communication primitives.</p>
+<h2 id="parallelism">Parallelism</h2>
+<p>In this section, we introcue the parallelism - TP, DP, PP. Generally we assume the communication data size should be TP &gt; DP &gt; PP. (Therefore we prefer to have inter-node PP but intra-node TP. You might want to reference <code>_initialize_distributed</code> in Megatron-LM for this, although it is not the key-point of this documentation.)</p>
+<p>The figures are for training. But it still gives the rough idea of inference parallelism and why we need the communication operations included in the next section.</p>
+<h3 id="dp-data-parallelism">DP: Data Parallelism</h3>
+<p>The key idea is to distribute data on the replicated model of each GPU. We need to perform element-wise reduction across multiple GPUs (AR/AllReduce).</p>
+<p>To reduce memory consumption, you might want to have a look at ZeRO.</p>
+<p><img src="./NCCL.assets/dp.png" alt="image-20250306172636313" style="zoom:50%;" /></p>
+<p>(CMU-15442, 09-ML-Parallelization by Tianqi Chen)</p>
+<h3 id="tp-tensor-parallelism">TP: Tensor Parallelism</h3>
+<p>For $Y = XW$, we could have:</p>
+<p><img src="./NCCL.assets/tp.png" alt="image-20250306173703481" style="zoom:50%;" /></p>
+<p>(CMU-15442, 10-ML-Parallelization by Tianqi Chen)</p>
+<p>We would require communication to perform reduce operation.</p>
+<h3 id="pp-pipeline-parallelism">PP: Pipeline Parallelism</h3>
+<p>The key iead is to improve resource utilization by pipelined sub-stages.</p>
+<p><img src="./NCCL.assets/pp.png" alt="image-20250306180204260" style="zoom:50%;" /></p>
+<p>(Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM)</p>
+<h3 id="ep-expert-parallelism">EP: Expert Parallelism</h3>
+<p><img alt="tensor parallel vs expert parallel" src="https://github.com/NVIDIA/TensorRT-LLM/blob/main/docs/source/blogs/media/tp_ep.png?raw=true"></p>
+<p>(TensorRT-LLM: https://nvidia.github.io/TensorRT-LLM/advanced/expert-parallelism.html)</p>
+<h2 id="communication-in-nccl">Communication in NCCL</h2>
+<h3 id="primitives">Primitives</h3>
+<p>NCCL provides the following <strong>collective</strong> communication primitives.</p>
+<p>By these visualized representation with their names, you could get an intuitive understanding of their functions.</p>
+<p>(https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/collectives.html)</p>
+<p><strong>AllReduce</strong></p>
+<p><img alt="image-20250306182204867" src="../../../../vendor/notes/ml-sys-tutorial/torch/nccl/NCCL.assets/allreduce.png"></p>
+<ul>
+<li><code>ncclAllReduce()</code></li>
+</ul>
+<p><strong>Broadcast</strong></p>
+<p><img alt="image-20250306182304182" src="../../../../vendor/notes/ml-sys-tutorial/torch/nccl/NCCL.assets/broadcast.png"></p>
+<ul>
+<li><code>ncclBroadcast()</code></li>
+</ul>
+<p><strong>Reduce</strong></p>
+<p><img alt="image-20250306182348771" src="../../../../vendor/notes/ml-sys-tutorial/torch/nccl/NCCL.assets/reduce.png"></p>
+<ul>
+<li><code>ncclReduce</code></li>
+</ul>
+<p><strong>AllGather</strong></p>
+<p><img alt="image-20250306182417197" src="../../../../vendor/notes/ml-sys-tutorial/torch/nccl/NCCL.assets/allgather.png"></p>
+<ul>
+<li><code>ncclAllGather()</code></li>
+</ul>
+<p><strong>ReduceScatter</strong></p>
+<p><img alt="image-20250306182445260" src="../../../../vendor/notes/ml-sys-tutorial/torch/nccl/NCCL.assets/reducescatter.png"></p>
+<ul>
+<li><code>ncclReduceScatter()</code></li>
+</ul>
+<p>Also there are <strong>point-to-point</strong> send/recv for scatter, gather, and all-to-all operations. You can get how they works from their names.</p>
+<h3 id="how-to-apply-these-primitives-on-network-topology">How to Apply these Primitives on Network Topology?</h3>
+<p>To get a quick view, you might want to read this slide: https://images.nvidia.com/events/sc15/pdfs/NCCL-Woolley.pdf</p>
+<p><strong>Ring-based</strong></p>
+<p><code>NCCL_ALGO_RING</code></p>
+<p><img alt="image-20250306185113263" src="../../../../vendor/notes/ml-sys-tutorial/torch/nccl/NCCL.assets/ring.png"></p>
+<p><strong>Tree-based</strong></p>
+<p><code>NCCL_ALGO_TREE</code></p>
+<p><strong>CollNet</strong></p>
+<p><code>NCCL_ALGO_COLLNET_CHAIN</code></p>
+<p><strong>NVLink-Shuffle</strong></p>
+<p><code>NCCL_ALGO_NVLS</code> and <code>NCCL_ALGO_NVLS_TREE</code></p>
+<p>We can have a detailed look at the NCCL in the next section now.</p>
+<h2 id="what-is-nccl">What is NCCL</h2>
+<p>NCCL (NVIDIA Collective Communications Library) is a high-performance communication library developed by NVIDIA for GPU-to-GPU interactions. </p>
+<p>NCCL addresses large model parallized training by:</p>
+<ul>
+<li>Enabling efficient data exchange in multi-GPU training</li>
+<li>Automatically identifying and optimizing communication topology between GPUs</li>
+<li>Providing standardized collective communication interfaces</li>
+<li>Supporting both intra-node (single-machine multi-GPU) and inter-node (multi-machine multi-GPU) communication</li>
+</ul>
+<h3 id="key-concepts-of-nccl">Key Concepts of NCCL</h3>
+<ul>
+<li><strong>Collective Operations</strong>: Supports operations like Broadcast, Reduction, Aggregation, AllReduce, AllGather, etc., for data synchronization across GPUs/nodes.</li>
+<li><strong>Processes and Groups</strong>: Processes represent computational nodes participating in communication, organized into groups for collective operations.</li>
+<li><strong>Communicators</strong>: Objects defining communication relationships between processes, specifying participant groups and modes (e.g., peer-to-peer, broadcast).</li>
+<li><strong>Devices and Streams</strong>: Works with CUDA streams for asynchronous communication and parallel computation across GPUs.</li>
+<li><strong>Synchronization</strong>: Provides synchronization primitives (e.g., barriers) to ensure consistent states during collective operations.</li>
+<li><strong>Performance Optimization</strong>: Techniques like merged collective operations, batched data transfers, and computation-communication overlap.</li>
+<li><strong>Fault Tolerance</strong>: Reliable communication despite node failures or network instability.</li>
+</ul>
+<h3 id="supported-collective-operations">Supported Collective Operations</h3>
+<ol>
+<li><strong>AllReduce</strong>: Aggregate data across GPUs (e.g., sum) and broadcast results to all GPUs.</li>
+<li><strong>Broadcast</strong>: Transmit data from a source GPU to all others.</li>
+<li><strong>Reduce</strong>: Aggregate data to a single target GPU.</li>
+<li><strong>AllGather</strong>: Gather data from all GPUs and distribute to all GPUs.</li>
+<li><strong>ReduceScatter</strong>: Reduce data and scatter results across GPUs.</li>
+<li><strong>Send/Recv</strong>: Peer-to-peer communication.</li>
+<li><strong>AllToAll</strong>: Distribute data to all GPUs.</li>
+</ol>
+<h3 id="hardware-requirements">Hardware Requirements</h3>
+<ul>
+<li>NVIDIA GPUs with CUDA support</li>
+<li>NVLink-enabled GPUs recommended for best performance</li>
+<li>InfiniBand or RoCE networks for multi-node communication</li>
+<li>Compatible CUDA and GPU driver versions</li>
+</ul>
+<h3 id="nccl-in-pytorch">NCCL in PyTorch</h3>
+<p>PyTorch natively supports NCCL:</p>
+<pre><code class="language-python">import torch.distributed as dist
+
+# Initialize process group
+dist.init_process_group(backend='nccl')
+
+# Wrap model
+model = torch.nn.parallel.DistributedDataParallel(model)
+</code></pre>
+<h3 id="how-nccl-works">How NCCL Works</h3>
+<p><strong>Ring Algorithm</strong><br>
+Used for intra-node communication:</p>
+<ol>
+<li>Organize GPUs into a ring.</li>
+<li>Each GPU communicates only with adjacent neighbors.</li>
+<li>Global data exchange via multi-step transfers.</li>
+<li>Data split into chunks for parallel transfer.</li>
+</ol>
+<p><strong>Advantages</strong>:</p>
+<ul>
+<li>Maximizes GPU-to-GPU bandwidth</li>
+<li>Balanced communication load</li>
+<li>Scalable design</li>
+</ul>
+<p><strong>Tree Algorithm</strong><br>
+(See <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/torch/torch-distributed/readme.md">postscript in torch-distributed notes</a>.）</p>
+<!--真的要放在这里吗？-->
+
+<h3 id="communication-protocols">Communication Protocols</h3>
+<p>NCCL implements three protocols:
+1. <strong>Simple</strong>: Basic protocol.
+2. <strong>LL (Low Latency)</strong>: Optimized for small payloads.
+3. <strong>LL128</strong>: Optimized for NVLink, achieving 93.75% effective bandwidth.</p>
+<h3 id="nccl-vs-other-libraries">NCCL vs. Other Libraries</h3>
+<ol>
+<li><strong>MPI Comparison</strong>:
+   - NCCL: GPU-focused optimizations.
+   - MPI: General-purpose but less optimized for GPUs.
+   - Hybrid use: MPI manages processes, NCCL handles GPU communication.</li>
+<li><strong>Gloo Comparison</strong>:
+   - Gloo: Supports CPU/GPU.
+   - NCCL: Outperforms in GPU scenarios.</li>
+</ol>
+<h3 id="topology-optimization">Topology Optimization</h3>
+<!--我记得好像有这个东西，有空写吧-->
+
+<h2 id="common-nvidia-tools">Common NVIDIA Tools</h2>
+<p>Reference: <a href="https://www.yourmetaverse.cn/deep_learning/199/">WeLearnNLP Guide</a>.</p>
+<h2 id="nvidia-smi-topo-m"><code>nvidia-smi topo -m</code></h2>
+<p>Compare two cluster topologies:</p>
+<pre><code class="language-bash">    GPU0    GPU1    GPU2    GPU3    GPU4    GPU5    GPU6    GPU7    CPU Affinity    NUMA Affinity   GPU NUMA ID
+GPU0     X  SYS SYS SYS SYS SYS SYS SYS 0-15,32-47  0       N/A
+GPU1    SYS  X  SYS SYS SYS SYS SYS SYS 0-15,32-47  0       N/A
+GPU2    SYS SYS  X  SYS SYS SYS SYS SYS 0-15,32-47  0       N/A
+GPU3    SYS SYS SYS  X  SYS SYS SYS SYS 0-15,32-47  0       N/A
+GPU4    SYS SYS SYS SYS  X  SYS SYS SYS 16-31,48-63 1       N/A
+GPU5    SYS SYS SYS SYS SYS  X  SYS SYS 16-31,48-63 1       N/A
+GPU6    SYS SYS SYS SYS SYS SYS  X  SYS 16-31,48-63 1       N/A
+GPU7    SYS SYS SYS SYS SYS SYS SYS  X  16-31,48-63 1       N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+</code></pre>
+<pre><code class="language-bash">        GPU0    GPU1    GPU2    GPU3    GPU4    GPU5    GPU6    GPU7    CPU Affinity    NUMA Affinity   GPU NUMA ID
+GPU0     X      NV18    NV18    NV18    NV18    NV18    NV18    NV18    0-47,96-143     0               N/A
+GPU1    NV18     X      NV18    NV18    NV18    NV18    NV18    NV18    0-47,96-143     0               N/A
+GPU2    NV18    NV18     X      NV18    NV18    NV18    NV18    NV18    0-47,96-143     0               N/A
+GPU3    NV18    NV18    NV18     X      NV18    NV18    NV18    NV18    0-47,96-143     0               N/A
+GPU4    NV18    NV18    NV18    NV18     X      NV18    NV18    NV18    48-95,144-191   1               N/A
+GPU5    NV18    NV18    NV18    NV18    NV18     X      NV18    NV18    48-95,144-191   1               N/A
+GPU6    NV18    NV18    NV18    NV18    NV18    NV18     X      NV18    48-95,144-191   1               N/A
+GPU7    NV18    NV18    NV18    NV18    NV18    NV18    NV18     X      48-95,144-191   1               N/A
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+</code></pre>
+<p><strong>Key Observations</strong>:
+1. <strong>Interconnect</strong>:
+   - Cluster 1: PCIe + NUMA nodes (SYS)
+   - Cluster 2: NVLink (NV18) → Higher bandwidth/lower latency.
+2. <strong>NUMA Architecture</strong>:
+   - GPU 0-3: NUMA node 0
+   - GPU 4-7: NUMA node 1
+   - Optimal task placement: Minimize cross-NUMA communication.
+3. <strong>System Scale</strong>:
+   - Cluster 1: 64 CPU cores; Cluster 2: 192 cores.
+4. <strong>Topology Completeness</strong>:<br>
+   - Every GPU directly connects to all others
+   - Eliminates intermediate "hops," improving throughput.  </p>
+<h2 id="nvlink-inspection">NVLink Inspection</h2>
+<pre><code class="language-bash">nvidia-smi nvlink --status -i 0
+nvidia-smi nvlink --capabilities -i 0
+</code></pre>
+<details>
+<summary>Example Output (H100 GPUs)</summary>
+
+
+<pre><code class="language-bash">GPU 0: NVIDIA H100 80GB HBM3
+         Link 0: 26.562 GB/s
+         ... (18 links total)
+         All links support:
+         - Peer-to-peer (P2P) communication
+         - System memory access
+         - P2P/System atomics
+         - SLI support
+</code></pre>
+
+</details>
+
+<p><strong>Key Features</strong>:
+- Full bidirectional P2P support
+- High-speed atomics
+- System memory access</p>
+<h2 id="gpu-monitoring">GPU Monitoring</h2>
+<p>Tool recommendation: <strong><a href="https://github.com/Syllo/nvtop">nvitop</a></strong>
+Install via <code>pip install nvitop</code> for real-time GPU metrics visualization.</p>
+<h2 id="sglang-communication">SGLang Communication</h2>
+<!--我还没找到代码在哪里，晚点再说 -->
+
+<h2 id="references">References</h2>
+<ul>
+<li>https://mlsyscourse.org/ CMU-15442 by Tianqi Chen</li>
+<li>https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html NCCL docs</li>
+<li>https://images.nvidia.com/events/sc15/pdfs/NCCL-Woolley.pdf NCCL talk</li>
+<li>https://nvidia.github.io/TensorRT-LLM/index.html TensorRT-LLM docs</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/torch/nccl/readme_en.md">torch/nccl/readme_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,160 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Squeezing 1TB Model Rollout into a Single H200: INT4 QAT RL End-to-End Practice</title><link rel="stylesheet" href="../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../index.html">Learn</a><div class="links"><a href="../../../../../notes.html" class="here">Notes library</a><a href="../../../../../index.html">All chapters</a><a href="../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../notes.html">Notes library</a> › <a href="../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/slime/int4/readme-en.md</div>
+<article class="note"><h1 id="squeezing-1tb-model-rollout-into-a-single-h200-int4-qat-rl-end-to-end-practice">Squeezing 1TB Model Rollout into a Single H200: INT4 QAT RL End-to-End Practice</h1>
+<blockquote>
+<p>💡 <strong>TL;DR:</strong></p>
+<p>Inspired by the Kimi K2 team, the SGLang RL team successfully landed an INT4 <strong>Quantization-Aware Training (QAT)</strong> pipeline. By combining <strong>fake quantization during training</strong> with <strong>real quantization at inference (W4A16)</strong>, we achieved stability and train–infer consistency comparable to BF16 full-precision training. Meanwhile, extreme INT4 compression allows single-node rollout for ~1TB-scale models, eliminating cross-node communication bottlenecks and significantly improving rollout efficiency—an open-source reference that balances high performance and low cost.</p>
+</blockquote>
+<h2 id="introduction">Introduction</h2>
+<p>Recently, the SGLang RL team has made significant progress in RL training stability, efficiency, and application scenarios, including:</p>
+<ul>
+<li><strong>INT4 QAT End-to-End Training</strong>: We implemented a complete QAT INT4 closed-loop solution from training to inference and provided a detailed <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/int4/readme-en.md">technical recipe</a>, significantly improving rollout efficiency and stability.</li>
+<li><strong>Unified Multi-Turn VLM/LLM Training</strong>: We provided an implementation for the VLM multi-turn sampling paradigm <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/vlm-multi-turn/readme.md">blog</a>. Developers only need to write a customized <code>rollout</code> function to easily start multi-turn RL for VLM, just like training LLM.</li>
+<li><strong>Rollout Router Replay</strong>: We implemented the <strong><a href="https://github.com/THUDM/slime/blob/58525eb986c66a271aa31077e17b8afebe704b4f/tests/test_qwen3_30B_A3B_r3.py#L79">Rollout Router Replay</a></strong> mechanism, significantly improving RL stability for MoE models during RL training.</li>
+<li><strong>FP8 End-to-End Training</strong>: We successfully implemented <strong><a href="https://lmsys.org/blog/2025-11-25-fp8-rl/">end-to-end FP8 training and sampling</a></strong> in RL scenarios, further unlocking hardware performance.</li>
+<li><strong>Speculative Decoding in RL</strong>: We successfully practiced <strong><a href="https://thudm.github.io/slime/advanced/speculative-decoding.html">speculative sampling</a></strong> in RL scenarios, achieving lossless acceleration for large-scale training.</li>
+</ul>
+<p>Building on top of these, we went one step further: on the slime framework, we reproduced and deployed an <strong>end-to-end INT4 QAT</strong> solution: <strong><a href="https://github.com/THUDM/slime/blob/58525eb986c66a271aa31077e17b8afebe704b4f/scripts/low_precision/run-kimi-k2-Thinking-int4.sh">INT4 Quantization-Aware Training (QAT)</a></strong>. This solution is deeply inspired by the Kimi team’s K2-Thinking technical report and its <strong>W4A16 QAT (Quantization-Aware Training)</strong> practice: <a href="https://www.zhihu.com/question/1969558404759544488/answer/1970539327902679960"><strong>W4A16 QAT (Quantization-Aware Training)</strong></a>. To pay tribute to pioneers and give back to the community, this article <strong>dissects</strong> the technical details of building the full pipeline in an open-source ecosystem, aiming to provide a practical reference that balances stability and performance.</p>
+<p><strong>Key benefits at a glance:</strong></p>
+<ul>
+<li><strong>Break the VRAM bottleneck</strong>: With weight compression and low-bit quantization, ~1TB-scale K2-like models can be shrunk to fit on a single H200 (141GB) GPU, avoiding cross-node communication bottlenecks.</li>
+<li><strong>Train–infer consistency</strong>: Training uses QAT to shape weights into an INT4-friendly distribution; inference uses W4A16 (INT4 weights, BF16 activations). Both rely on BF16 Tensor Cores, achieving train–infer consistency comparable to BF16 full precision.</li>
+<li><strong>Single-node efficiency doubling</strong>: For very large models, INT4 greatly reduces VRAM and bandwidth pressure, delivering rollout efficiency significantly higher than W8A8 (FP8 weights, FP8 activations).</li>
+</ul>
+<p>This project is jointly completed by the <strong>SGLang RL team, InfiXAI team, Ant Group Asystem &amp; AQ Infra team, slime team, and RadixArk team</strong>. Related features and recipes have been synced to the <a href="https://github.com/THUDM/slime">slime</a> and <a href="https://github.com/radixark/miles">Miles</a> communities. We welcome everyone to try them out and contribute. We are also further challenging ourselves with MXFP8 and NVFP4. We also gratefully acknowledge <a href="https://www.linkedin.com/company/verda-cloud/">Verda Cloud</a> for compute resource sponsorship.</p>
+<h2 id="technical-overview">Technical Overview</h2>
+<h3 id="overall-pipeline">Overall Pipeline</h3>
+<p>We implemented a complete INT4 QAT closed loop from training to inference, as illustrated below:</p>
+<div align="center">
+  <img src="figs/QAT-INT4-e2e.png" alt="End-to-end QAT INT4 pipeline" width="80%"  />
+</div>
+
+<p>During the <strong>QAT training stage</strong>, the training side maintains BF16 master weights, while the forward pass introduces quantization noise via <strong>fake quantization</strong>. “Fake” means we do not truly convert BF16 tensors to low-precision INT4 storage; instead, we keep the floating-point compute path and insert <strong>QDQ (Quantize-DeQuantize)</strong> operations to emulate low-precision arithmetic. Concretely, high-precision weights are first “discretized” into INT4 and then immediately restored. Although the physical dtype remains floating point, the value precision is effectively reduced. The discrepancy between the original and restored values introduces quantization error, which is mathematically equivalent to injecting noise into the network, forcing the model to adapt to this precision loss via gradient updates.</p>
+<p>For the backward pass, we use <strong>STE (Straight-Through Estimator)</strong> to bypass the non-differentiability of quantization. The core quantization operator is <strong>rounding</strong>, which is a step function whose derivative is 0 almost everywhere. This would completely block gradient flow and prevent updates to the underlying master weights. STE uses a <strong>“straight-through gradient estimator”</strong> strategy: during backprop it defines the derivative of rounding as 1 (i.e., treats it as an identity mapping). This is like building a bridge over a cliff, enabling gradients to pass through the rounding layer and update the high-precision floating-point weights, thus closing the QAT training loop.</p>
+<p>In the <strong>weight conversion stage</strong>, we export the converged BF16 weights and perform <strong>real quantization</strong>, converting them into INT4 formats suitable for inference engines (e.g., Marlin).</p>
+<p>In the <strong>RL rollout stage</strong>, SGLang loads INT4 weights and runs efficient W4A16 inference (INT4 weights × BF16 activations). The generated experience data flows back to the first stage for the next RL training iteration, forming a self-consistent closed loop.</p>
+<h3 id="key-strategy-choices"><strong>Key Strategy Choices</strong></h3>
+<p>For quantization format, we follow <a href="https://huggingface.co/moonshotai/Kimi-K2-Thinking">Kimi-K2-Thinking</a> and choose <strong>INT4 (W4A16)</strong>. Compared to FP4, INT4 has broader support on existing hardware (pre-Blackwell), and the ecosystem already has mature high-performance Marlin kernels. Experiments show that with a 1×32 scale granularity, INT4 provides sufficient dynamic range and stable accuracy, and its performance and tooling are well-optimized. As an industry “good enough” quantization standard, INT4 strikes a rational balance across performance, risk, and maintenance cost. That said, we also plan to explore FP4 RL on NVIDIA Blackwell GPUs in the future.</p>
+<p>For training, we use the classic combination of <strong>fake quantization + STE</strong>. By maintaining BF16 master weights, simulating quantization noise in the forward pass, and passing gradients straight through in the backward pass, we maximize convergence and stability in low-precision training.</p>
+<h2 id="training-side-retrofitting-fake-quantization-into-megatron-lm">Training Side: Retrofitting Fake Quantization into Megatron-LM</h2>
+<h3 id="implementing-fake-quantization-and-ste">Implementing Fake Quantization and STE</h3>
+<div align="center">
+  <img src="figs/fake-quantize-STE.png" alt="Training-side Fake Quantization & STE" width="80%"  />
+</div>
+
+<p>The core goal of this stage is to simulate quantization error on-the-fly during training, forcing the model to “learn” to adapt to low-precision representations. We therefore adopt <strong>fake quantization</strong>: while weights are stored and updated in BF16, they are temporarily mapped into the INT4 precision range in the forward pass.</p>
+<p>Implementation-wise, the core logic lives in the <code>_FakeInt4QuantizationSTE</code> class in <code>megatron/core/extensions/transformer_engine.py</code>. It performs dynamic quantization based on per-group max absolute value, emulating INT4’s <code>[-7, 7]</code> range and clipping, but still computes in BF16 and only injects quantization error. For the crucial backward pass, we introduce <strong>STE</strong>, ensuring gradients pass through the quantization layer unchanged to update master weights, keeping training continuous.</p>
+<h3 id="fake-quantization-ablations">Fake Quantization Ablations</h3>
+<p>To validate the necessity of QAT and study the impact of train–infer precision mismatch, we designed ablations for two asymmetric scenarios:</p>
+<ul>
+<li><strong>QAT INT4 training enabled, BF16 rollout</strong></li>
+<li><strong>QAT training disabled, direct INT4 rollout</strong></li>
+</ul>
+<p>We measure train–infer inconsistency using the absolute difference in log probabilities (Logprob Abs Diff).</p>
+<p><img src="figs/moonlight-1.png" alt="Rollout BF16, training-side comparison of QAT INT4 effect" width="45%" /> <img src="figs/moonlight-2.png" alt="Rollout INT4 weight-only, training-side comparison of QAT INT4 effect" width="45%" /></p>
+<p><strong>The left plot shows “QAT INT4 training + BF16 rollout”</strong> (the <strong>red curve</strong>). Interestingly, even with high-precision BF16 inference, the error remains significantly higher. This is because QAT has already adapted weights to INT4 quantization noise via “compensation”; if we remove quantization at inference, that compensation becomes a perturbation, causing <strong>distribution shift</strong>.</p>
+<p><strong>The right plot shows “no QAT training + direct INT4 rollout”</strong> (the <strong>red curve</strong>), corresponding to a conventional post-training quantization (PTQ) setup. Since the model never saw quantization noise during training, compressing weights to INT4 causes severe information loss and shifts feature distributions relative to training, resulting in errors that oscillate and increase with training steps.</p>
+<p><strong>Conclusion:</strong> These results strongly indicate that <strong>training-side fake quantization and inference-side real quantization must be enabled together</strong>. Only when the simulated noise during training is <strong>strictly aligned</strong> with the true quantization during inference can we suppress train–infer mismatch, avoid distribution shift, and keep errors near baseline—thus truly closing the loop for end-to-end low-precision RL training.</p>
+<h2 id="weight-update-stage">Weight Update Stage</h2>
+<h3 id="weight-flow-and-dynamic-format-adaptation">Weight Flow and Dynamic Format Adaptation</h3>
+<div align="center">
+  <img src="figs/marlin_optimization.jpg" alt="SGLang-side weight handling pipeline" width="80%"  />
+</div>
+
+<p>To reuse existing inference-side optimizations in SGLang, we directly adopted its built-in <strong>Marlin kernel</strong> as the INT4 inference backend. However, in practice we encountered a notable “format gap”: QAT training outputs weights in standard formats (similar to Hugging Face), while SGLang’s Marlin kernel requires weights to be specially <strong>packed</strong> and <strong>permuted</strong> so that the kernel can read them efficiently.</p>
+<p>Given that RL training requires frequent weight updates, we must solve format compatibility. We therefore designed a reverse <code>restore_weights_before_loading</code> <strong>safety mechanism</strong>. Using cached <code>_original_shapes</code> metadata, it restores (resizes) the in-memory Marlin weight format back to original shapes <strong>before</strong> any weight update happens. This prevents runtime errors due to shape mismatches and enables smooth switching between standard weight formats and Marlin formats. We also added a system-level <code>post_process_weights</code> API to allow the control plane to explicitly trigger this process according to the training schedule.</p>
+<p>To address post-load format adaptation, we implemented a <strong>dynamic weight management mechanism</strong> in <code>compressed_tensors_moe.py</code>. After weight loading finishes, the system automatically runs <code>process_weights_after_loading</code>, calling operators like <code>gptq_marlin_moe_repack</code> and <code>marlin_moe_permute_scales</code> to convert standard weights into highly optimized Marlin formats in memory, maximizing memory-access and compute efficiency for inference.</p>
+<h3 id="quantization-during-weight-updates">Quantization During Weight Updates</h3>
+<div align="center">
+  <img src="figs/weights-update.jpg" alt="Weight update" width="80%"  />
+</div>
+
+<p>Now comes the core <strong>real quantization</strong> step. Unlike training-time fake quantization, this step irreversibly compresses precision via <code>int4_block_quantize</code>: with a configured group size, we compute per-group scales and map high-precision floats into the INT4 integer domain <code>[-7, 7]</code>.</p>
+<p>To maximize VRAM efficiency, we then do <strong>bit packing</strong>. Since PyTorch lacks a native INT4 dtype, we implement <code>pack_int4_to_int32</code> using bitwise tricks to tightly pack 8 INT4 values into one INT32 integer (i.e., <code>8 × 4 bits = 32 bits</code>). Finally, these packed weights together with scales are passed to the inference engine, completing the conversion from “training format” to “inference format”.</p>
+<h2 id="inference-stage">Inference Stage</h2>
+<div align="center">
+  <img src="figs/sglang-w4a16.png" alt="SGLang W4A16 inference" width="80%"  />
+</div>
+
+<p><strong>Minimal packing and near-zero-overhead unpacking</strong></p>
+<p>During RL rollout, we directly reuse SGLang’s mature W4A16 quantization solution. SGLang stores weights in a compact INT4 format by packing two 4-bit values into one byte, saving <strong>75%</strong> memory compared to BF16. At inference time, Triton kernels unpack efficiently using bit operations (<code>&gt;&gt; 4</code> and <code>&amp; 0xF</code>). Thanks to overlap between compute and IO, this unpacking is almost zero-overhead.</p>
+<p><strong>Deep fusion for MoE operators</strong></p>
+<ul>
+<li><strong>Memory optimization</strong>: SGLang introduces a dynamic <code>moe_align_block_size</code> that chooses <code>block_size</code> based on current token counts and expert distribution, grouping and aligning tokens for the same expert to improve bandwidth utilization.</li>
+<li><strong>Compute fusion</strong>: Besides integrating a high-performance <a href="https://github.com/IST-DASLab/marlin"><strong>Marlin INT4</strong></a> implementation, SGLang also fuses the gating part into a single high-performance kernel to avoid repeated kernel launches and intermediate reads/writes. This INT4 inference scheme is compatible with mainstream formats such as GPTQ and AWQ, and supports both symmetric and asymmetric modes.</li>
+</ul>
+<h2 id="int4-qat-rl-results">INT4 QAT RL Results</h2>
+<h3 id="training-results">Training Results</h3>
+<ul>
+<li><strong>Training side</strong></li>
+</ul>
+<div align="center">
+  <img src="figs/qwen3-235b-raw-reward.png" alt="Qwen3-235B-A22B Raw-Reward comparison" width="45%"  /> 
+  <img src="figs/kimi-k2-raw-reward.png" alt="Kimi-K2-Thinking Raw-Reward comparison" width="45%"  />
+</div>
+
+<p>The plots above show training performance on the dapo-math-17k dataset for Qwen3-235B-A22B and Kimi-K2-Thinking under the slime framework. Compared with <strong>“BF16 train–BF16 infer”</strong> and <strong>“BF16 train–FP8 infer”</strong>, the <strong>“BF16 train–INT4 infer”</strong> setup still achieves steady Raw-Reward growth with a trend largely consistent with the former two, demonstrating the effectiveness of this approach.</p>
+<ul>
+<li><strong>Evaluation side</strong></li>
+</ul>
+<div align="center">
+  <img src="figs/qwen3-235b-AIME.png" alt="Qwen3-235B-A22B AIME evaluation comparison" width="45%"  /> 
+  <img src="figs/kimi-k2-AIME.png" alt="Kimi-K2-Thinking AIME evaluation comparison" width="45%"  />
+</div>
+
+<p>To evaluate model capability more rigorously, we run an evaluation on the aime-2024 benchmark every 10 training steps. The plots show the scoring trajectories of Qwen3-235B-A22B and Kimi-K2-Thinking under different RL training configurations.</p>
+<p>The experiments indicate that the <strong>“BF16 train–INT4 infer”</strong> scheme not only exhibits a stable upward trend in evaluation scores, but also closely overlaps with <strong>“BF16 train–BF16 infer”</strong> and <strong>“BF16 train–FP8 infer”</strong> in both slope and peak score. This strong alignment suggests that low-bit quantization does not harm core representational capacity, enabling large compute savings while preserving (or matching) full-precision generalization performance.</p>
+<h3 id="traininfer-gap">Train–Infer Gap</h3>
+<div align="center">
+  <img src="figs/qwen3-30b-train-infer-gap.png" alt="Qwen3-30B-A3B train–infer gap comparison" width="45%"  /> 
+  <img src="figs/qwen3-235b-train-infer-gap.png" alt="Qwen3-235B-A22B train–infer gap comparison" width="45%"  />
+</div>
+
+<p>To visualize effectiveness, we validated QAT RL training on Qwen3-30B and Qwen3-235B. The Y-axis shows the absolute logprob difference between training-side and inference-side outputs; lower values mean stronger consistency. Results show that INT4 (<strong>green dashed</strong>) almost overlaps with the BF16 baseline (<strong>red solid</strong>), and is significantly lower than FP8 (<strong>blue dashed</strong>). This confirms that INT4 QAT can effectively avoid the accuracy loss in the <strong>“BF16 train–FP8 infer”</strong> mode and achieve train–infer behavior indistinguishable from full precision.</p>
+<p><strong>We hypothesize two reasons behind this consistency:</strong></p>
+<ul>
+<li><strong>Truncation error suppression</strong>: Training-side fake quantization constrains weights to the INT4 range. This constraint <a href="https://www.zhihu.com/question/1969558404759544488/answer/1970539327902679960">can effectively reduce floating-point rounding errors caused by non-deterministic accumulation orders in parallel matmul (i.e., the “adding a small number to a large number” precision loss).</a></li>
+<li><strong>High-precision compute</strong>: Inference uses W4A16 and relies on <strong>BF16 Tensor Cores</strong> throughout, keeping compute precision highly aligned with training.</li>
+</ul>
+<h3 id="rollout-speedup">Rollout Speedup</h3>
+<div align="center">
+  <img src="figs/qwen3-235b-rollout-performance.png" alt="Qwen3-235B-A22B rollout performance comparison" width="45%"  />
+  <img src="figs/kimi-k2-rollout-performance.png" alt="Kimi-K2-Thinking rollout performance comparison" width="45%"  />
+</div>
+
+<p>From the Qwen3-235B rollout performance plot, we can see that INT4 (<strong>green dash-dot</strong>) and FP8 (<strong>blue dashed</strong>) both significantly speed up compared to the BF16 baseline (<strong>red solid</strong>), but the gap between INT4 and FP8 is not huge. This is largely limited by current hardware: NVIDIA H-series GPUs do not have native INT4 Tensor Cores. W4A16 essentially still uses BF16 Tensor Cores for compute; while it greatly reduces memory bandwidth pressure, it cannot gain the compute uplift of native FP8 Tensor Cores as W8A8 does. Therefore, INT4 only shows a slight advantage in per-step latency and remains in roughly the same performance tier as FP8.</p>
+<p>For Kimi-K2-Thinking rollout performance, first look at the <strong>communication bottleneck</strong> in the two-node scenario: FP8 (<strong>red line</strong>) and INT4 (<strong>blue line</strong>) are similar, because H-series GPUs lack native INT4 compute units and INT4 cannot speed up compute, so overall performance is still limited by cross-node bandwidth.</p>
+<p>However, the single-node result (the <strong>green line</strong>) reveals INT4’s <strong>true value—VRAM compression</strong>. By halving model size, we can load ~1TB-scale models fully into a single machine’s VRAM, eliminating expensive cross-node communication and greatly reducing rollout time. This strongly demonstrates that under current hardware, the main benefit of INT4 QAT is enabling efficient single-node rollouts via VRAM compression.</p>
+<h2 id="summary-and-future-work">Summary and Future Work</h2>
+<p>By reproducing the approach in an open-source framework, we validated the effectiveness of the INT4 QAT scheme proposed by the Kimi team:</p>
+<ul>
+<li><strong>Accuracy reproduction</strong>: In slime reproductions, we observed the same INT4 QAT accuracy advantages, matching the BF16 baseline.</li>
+<li><strong>Efficiency improvement</strong>: Rollout throughput improved significantly, validating the value of low-bit quantization in RL.</li>
+</ul>
+<p>Future work:</p>
+<ul>
+<li><strong>Training-side efficiency optimization</strong>: Today, adding QAT fake quantization introduces extra compute overhead during training, making it noticeably slower than BF16. This partially offsets the end-to-end gains from faster rollout. We plan to propose a new optimization to address this training-side bottleneck and accelerate the full pipeline.</li>
+<li><strong>Inference-side FP4</strong>: As NVIDIA Blackwell becomes more widely available, we will actively explore FP4 precision for RL training and inference to further tap into hardware potential.</li>
+</ul>
+<p>slime’s attempt at INT4 QAT not only demonstrates the feasibility of reproducing industrial state-of-the-art techniques in an open-source ecosystem, but also opens a new path for low-cost training at extreme scale. We hope this solution helps more developers deeply understand QAT and promote its practical adoption in RL.</p>
+<h2 id="acknowledgements">Acknowledgements</h2>
+<p>SGLang RL Team: Ji Li, Yefei Chen, Xi Chen, BBuf, Chenyang Zhao</p>
+<p>InfiXAI Team: Mingfa Feng, Congkai Xie, Shuo Cai</p>
+<p>Ant Group Asystem &amp; AQ Infra Team: Yanan Gao, Zhiling Ye, Yuan Wang, Xingliang Shi</p>
+<p>slime Team: Zilin Zhu, Lei Li, Haisha Zhao</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/int4/readme-en.md">rlhf/slime/int4/readme-en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

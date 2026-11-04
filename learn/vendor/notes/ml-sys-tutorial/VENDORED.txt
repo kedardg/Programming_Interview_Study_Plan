@@ -1,0 +1,1 @@
+Vendored from https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial (Apache-2.0, Chenyang Zhao and contributors). Markdown copied verbatim; rendered to learn/notes/ml-sys-tutorial/ by scripts/build_notes.py.

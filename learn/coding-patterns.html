@@ -1,0 +1,1054 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coding Interview Patterns</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+pre.formula { white-space: pre; line-height: 1.45; }
+pre.formula .c { color: var(--text-dim); }
+.pmap td:first-child { white-space: nowrap; }
+</style>
+</head>
+<body>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html" class="here">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<main>
+<h1>Coding Interview Patterns: the Blind 75 by Technique</h1>
+<p class="dim">The 75 problems in Steps 3–4 of the study plan are not 75 separate facts. They are about fifteen patterns, each worn in a few disguises. This chapter teaches the patterns, animates the ones that are hard to see in your head, gives you real Python solutions you can run, and ends with a map from every one of the 75 (numbered as in the <a href="../index.html">plan</a>) to its pattern and the one sentence that unlocks it.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (13:08)</h3><audio controls preload="none" src="audio/coding-patterns.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/coding-patterns.txt">Read the transcript</a>.</p></div>
+<h2 id="protocol">1. How to solve a problem you have never seen</h2>
+<p>The plan gives you a 45-minute cap and a ten-step protocol (brute force → simplify → visualize → optimize → test → explain → bullets → pseudocode → signatures → implementation). Interviewers score the same thing that protocol trains: <em>a visible, repeatable process</em>. In practice it compresses to a loop you should be able to run on autopilot:</p>
+<table class="cmp">
+<tr><th>Phase</th><th>Minutes</th><th>What you do out loud</th></tr>
+<tr><td><strong>Understand</strong></td><td>3–5</td><td>Restate the problem in your words. Ask about input size, value ranges, duplicates, empty input, whether the input is sorted, what to return on failure. Write one tiny example and one edge case.</td></tr>
+<tr><td><strong>Match</strong></td><td>2–3</td><td>Name the candidate pattern(s): "sorted + pair → two pointers", "substring with a constraint → sliding window", "count the ways → DP", "dependencies → topological sort". Say the brute force and its complexity first; it is your safety net.</td></tr>
+<tr><td><strong>Plan</strong></td><td>5–8</td><td>Pseudocode or bullets. State the invariant your loop maintains ("window never contains a repeat"). State the target complexity and why it is achievable.</td></tr>
+<tr><td><strong>Implement</strong></td><td>12–18</td><td>Write clean code top-down: signature, then skeleton, then the body. Narrate decisions, not keystrokes. Prefer clarity over cleverness; a helper function is free.</td></tr>
+<tr><td><strong>Review</strong></td><td>3–5</td><td>Trace your example through the code by hand. Check off-by-ones, empty input, single element, all-equal values, negative numbers, overflow (not in Python, but say it).</td></tr>
+<tr><td><strong>Evaluate</strong></td><td>2</td><td>Time and space, and the trade you would make with more time ("the O(n log n) patience sort for LIS").</td></tr>
+</table>
+<p>When you are stuck for more than five minutes at the Match phase, the plan's rule applies: finish the 45 minutes, then watch the matching Aditya Verma tutorial and re-solve the next day. Being stuck is data about which pattern you have not yet internalized.</p>
+<h3>Complexity cheat-sheet</h3>
+<table class="cmp">
+<tr><th>n up to</th><th>Target complexity</th><th>Typical patterns</th></tr>
+<tr><td>10–20</td><td>O(2ⁿ), O(n!)</td><td>Backtracking, bitmask DP, brute-force subsets</td></tr>
+<tr><td>~10³</td><td>O(n²)</td><td>Nested loops, 2D DP, expand-around-center</td></tr>
+<tr><td>~10⁵–10⁶</td><td>O(n log n), O(n)</td><td>Sort + sweep, heaps, two pointers, sliding window, hashing, BFS/DFS, 1D DP</td></tr>
+<tr><td>~10⁹+</td><td>O(log n), O(1)</td><td>Binary search on the answer, math, bit tricks</td></tr>
+</table>
+<p>Python-specific: <code>dict</code>/<code>set</code> operations are O(1) average; <code>list.pop(0)</code> is O(n) (use <code>collections.deque</code>); <code>heapq</code> is a min-heap, so push <code>-x</code> for a max-heap; string concatenation in a loop is O(n²) (collect in a list, then <code>''.join</code>); recursion depth defaults to 1000, so iterative DFS on big inputs or <code>sys.setrecursionlimit</code>.</p>
+
+<h2 id="arrays">2. Arrays &amp; hashing</h2>
+<p>The first pattern is the oldest trade in computing: <strong>spend memory to avoid a second pass</strong>. A hash map turns "have I seen the thing that would complete this?" into O(1). The second is <strong>running state</strong>: a single scan that carries just enough summary of the prefix (the minimum so far, the best sum ending here, the product of everything to my left) to make the decision at each index without looking back.</p>
+<pre class="formula"><span class="c"># #1 Two Sum — hash map of complements. O(n) time, O(n) space.</span>
+def two_sum(nums, target):
+    seen = {}                          <span class="c"># value -&gt; index</span>
+    for i, x in enumerate(nums):
+        if target - x in seen:         <span class="c"># the partner was already scanned</span>
+            return [seen[target - x], i]
+        seen[x] = i                    <span class="c"># insert AFTER checking: a number can't pair with itself</span>
+
+<span class="c"># #2 Best Time to Buy and Sell Stock — running minimum. O(n), O(1).</span>
+def max_profit(prices):
+    lo, best = float('inf'), 0
+    for p in prices:
+        lo = min(lo, p)                <span class="c"># cheapest buy so far</span>
+        best = max(best, p - lo)       <span class="c"># sell today against that buy</span>
+    return best
+
+<span class="c"># #4 Product of Array Except Self — prefix pass, then suffix pass in place. O(n), O(1) extra.</span>
+def product_except_self(nums):
+    n = len(nums); out = [1] * n
+    for i in range(1, n):              <span class="c"># out[i] = product of everything left of i</span>
+        out[i] = out[i-1] * nums[i-1]
+    suffix = 1
+    for i in range(n-1, -1, -1):       <span class="c"># multiply by product of everything right of i</span>
+        out[i] *= suffix
+        suffix *= nums[i]
+    return out
+
+<span class="c"># #5 Maximum Subarray — Kadane. "Best sum ending here" is either extend or restart.</span>
+def max_subarray(nums):
+    best = cur = nums[0]
+    for x in nums[1:]:
+        cur = max(x, cur + x)          <span class="c"># if the running sum went negative, it only hurts: restart</span>
+        best = max(best, cur)
+    return best
+
+<span class="c"># #6 Maximum Product Subarray — negatives flip sign, so track BOTH max and min ending here.</span>
+def max_product(nums):
+    best = hi = lo = nums[0]
+    for x in nums[1:]:
+        cands = (x, hi * x, lo * x)
+        hi, lo = max(cands), min(cands)
+        best = max(best, hi)
+    return best
+
+<span class="c"># #31 Longest Consecutive Sequence — set, and only start counting from run starts. O(n).</span>
+def longest_consecutive(nums):
+    s, best = set(nums), 0
+    for x in s:
+        if x - 1 not in s:             <span class="c"># x begins a run; each element is visited O(1) times overall</span>
+            length = 1
+            while x + length in s: length += 1
+            best = max(best, length)
+    return best</pre>
+
+<div class="card">
+<h3>Animation 1: Kadane's algorithm — extend or restart</h3>
+<canvas id="kadaneViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="kadStep">Step</button>
+  <button class="btn secondary" id="kadPlay">▶ Play</button>
+  <button class="btn secondary" id="kadReset">Reset</button>
+</div>
+<p class="caption">Bars are the array. The green bracket is the subarray whose sum is "current" (best ending at the cursor); the blue bracket is the best seen so far. When the running sum drops below the next element on its own, the bracket <em>restarts</em> — that is the whole algorithm. Notice it never needs to look back.</p>
+</div>
+
+<p>Related one-liners: <strong>#3 Contains Duplicate</strong> is <code>len(set(nums)) &lt; len(nums)</code>; <strong>#53 Valid Anagram</strong> compares two <code>Counter</code>s (or 26-slot arrays); <strong>#54 Group Anagrams</strong> keys a dict by the sorted string (or the 26-count tuple) — O(n·k log k); <strong>#59 Encode/Decode Strings</strong> is length-prefixing (<code>"5#hello"</code>) so any character is safe.</p>
+
+<h2 id="pointers">3. Two pointers &amp; sliding window</h2>
+<p>Both patterns exploit <strong>monotonicity</strong>: some quantity only moves one way as a pointer advances, so a pointer never has to go back. Two pointers on a sorted array: if the pair sum is too small, only moving the left pointer right can help. A sliding window over a sequence: if the window violates a constraint, shrinking from the left is the only fix, and once it is valid, growing from the right is the only way to find longer answers. The invariant you state in the Plan phase is "the window is always valid after the inner loop."</p>
+<pre class="formula"><span class="c"># #9 3Sum — sort, fix one, two-pointer the rest, skip duplicates. O(n²).</span>
+def three_sum(nums):
+    nums.sort(); out = []
+    for i in range(len(nums) - 2):
+        if i and nums[i] == nums[i-1]: continue          <span class="c"># skip duplicate anchors</span>
+        l, r = i + 1, len(nums) - 1
+        while l &lt; r:
+            s = nums[i] + nums[l] + nums[r]
+            if s &lt; 0: l += 1
+            elif s &gt; 0: r -= 1
+            else:
+                out.append([nums[i], nums[l], nums[r]])
+                l += 1
+                while l &lt; r and nums[l] == nums[l-1]: l += 1   <span class="c"># skip duplicate pairs</span>
+    return out
+
+<span class="c"># #10 Container With Most Water — move the SHORTER wall; moving the taller can never help. O(n).</span>
+def max_area(h):
+    l, r, best = 0, len(h) - 1, 0
+    while l &lt; r:
+        best = max(best, (r - l) * min(h[l], h[r]))
+        if h[l] &lt; h[r]: l += 1
+        else: r -= 1
+    return best
+
+<span class="c"># #50 Longest Substring Without Repeating Characters — variable window + last-seen index. O(n).</span>
+def length_of_longest_substring(s):
+    last, left, best = {}, 0, 0
+    for right, ch in enumerate(s):
+        if ch in last and last[ch] &gt;= left:   <span class="c"># repeat inside the window: jump left past it</span>
+            left = last[ch] + 1
+        last[ch] = right
+        best = max(best, right - left + 1)
+    return best
+
+<span class="c"># #51 Longest Repeating Character Replacement — window valid iff size - maxfreq &lt;= k.</span>
+def character_replacement(s, k):
+    count, left, maxf, best = {}, 0, 0, 0
+    for right, ch in enumerate(s):
+        count[ch] = count.get(ch, 0) + 1
+        maxf = max(maxf, count[ch])          <span class="c"># maxf never needs to decrease: a stale high value only keeps the window from shrinking below a size we already achieved</span>
+        if (right - left + 1) - maxf &gt; k:
+            count[s[left]] -= 1; left += 1
+        best = max(best, right - left + 1)
+    return best
+
+<span class="c"># #52 Minimum Window Substring — expand until all needs met, then shrink while still met. O(|s| + |t|).</span>
+from collections import Counter
+def min_window(s, t):
+    need, missing = Counter(t), len(t)
+    left, best = 0, (0, float('inf'))
+    for right, ch in enumerate(s):
+        if need[ch] &gt; 0: missing -= 1       <span class="c"># this char was still required</span>
+        need[ch] -= 1
+        while missing == 0:                  <span class="c"># window covers t: try to shrink</span>
+            if right - left &lt; best[1] - best[0]: best = (left, right)
+            need[s[left]] += 1
+            if need[s[left]] &gt; 0: missing += 1   <span class="c"># we just dropped a required char</span>
+            left += 1
+    return '' if best[1] == float('inf') else s[best[0]:best[1]+1]
+
+<span class="c"># #56 Valid Palindrome — two pointers skipping non-alphanumerics. #57/#58 use expand-around-center:</span>
+def count_palindromes(s):                     <span class="c"># #58 Palindromic Substrings, O(n²)</span>
+    total = 0
+    for center in range(2 * len(s) - 1):     <span class="c"># 2n-1 centers: each char and each gap</span>
+        l, r = center // 2, center // 2 + center % 2
+        while l &gt;= 0 and r &lt; len(s) and s[l] == s[r]:
+            total += 1; l -= 1; r += 1
+    return total</pre>
+
+<div class="card">
+<h3>Animation 2: sliding window with a character map (#50)</h3>
+<canvas id="winViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="winStep">Step</button>
+  <button class="btn secondary" id="winPlay">▶ Play</button>
+  <button class="btn secondary" id="winReset">Reset</button>
+</div>
+<p class="caption">The right edge advances one character per step. When the new character already sits inside the window, the left edge jumps just past its previous position (the "last seen" map on the right makes that a single lookup, not a scan). The best window so far is drawn underneath. Total work is O(n) because each edge only ever moves right.</p>
+</div>
+
+<p><strong>Fast/slow pointers</strong> are two pointers on a linked list or implicit sequence: Floyd's cycle detection (<strong>#41</strong>) advances one pointer by 1 and the other by 2; if they ever meet there is a cycle. The same trick finds the middle of a list (slow is at the middle when fast reaches the end) — used in <strong>#45 Reorder List</strong>.</p>
+
+<h2 id="binsearch">4. Binary search</h2>
+<p>Binary search is not "search a sorted array". It is: <em>a predicate that is false…false…true…true over a range lets you find the boundary in O(log n)</em>. Sorted arrays are the obvious case; rotated arrays, "minimum capacity such that…", and "first version that is bad" are the same thing with a different predicate. Write it with half-open bounds and a loop invariant and you will never fence-post it: keep <code>lo</code> such that the answer is in <code>[lo, hi]</code>, and shrink until they meet.</p>
+<pre class="formula"><span class="c"># #7 Find Minimum in Rotated Sorted Array — predicate: nums[mid] &gt; nums[hi] means the min is to the right.</span>
+def find_min(nums):
+    lo, hi = 0, len(nums) - 1
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if nums[mid] &gt; nums[hi]: lo = mid + 1     <span class="c"># rotation point is strictly right of mid</span>
+        else: hi = mid                            <span class="c"># mid could itself be the minimum</span>
+    return nums[lo]
+
+<span class="c"># #8 Search in Rotated Sorted Array — one half is always sorted; check whether the target lies in it.</span>
+def search(nums, target):
+    lo, hi = 0, len(nums) - 1
+    while lo &lt;= hi:
+        mid = (lo + hi) // 2
+        if nums[mid] == target: return mid
+        if nums[lo] &lt;= nums[mid]:                 <span class="c"># left half sorted</span>
+            if nums[lo] &lt;= target &lt; nums[mid]: hi = mid - 1
+            else: lo = mid + 1
+        else:                                     <span class="c"># right half sorted</span>
+            if nums[mid] &lt; target &lt;= nums[hi]: lo = mid + 1
+            else: hi = mid - 1
+    return -1
+
+<span class="c"># Binary search on the ANSWER (not in Blind 75 but the pattern interviewers love):</span>
+<span class="c"># "min ship capacity to deliver in D days" = smallest cap such that feasible(cap) is True.</span>
+def first_true(lo, hi, feasible):
+    while lo &lt; hi:
+        mid = (lo + hi) // 2
+        if feasible(mid): hi = mid
+        else: lo = mid + 1
+    return lo</pre>
+
+<div class="card">
+<h3>Animation 3: finding the minimum of a rotated array (#7)</h3>
+<canvas id="bsViz" class="viz" width="900" height="240"></canvas>
+<div class="controls">
+  <button class="btn" id="bsStep">Step</button>
+  <button class="btn secondary" id="bsReset">Reset</button>
+  <span class="dim" id="bsMsg"></span>
+</div>
+<p class="caption">lo and hi bracket the rotation point. Each step compares the middle element with the rightmost one: larger means the drop is to the right, so lo jumps past mid; otherwise the minimum is mid or to its left. Half the range dies per step.</p>
+</div>
+
+<h2 id="stack">5. Stacks, monotonic stacks &amp; intervals</h2>
+<p>A stack solves "match the most recent open thing" (<strong>#55 Valid Parentheses</strong>) and, as a <strong>monotonic stack</strong>, "for each element, the next greater/smaller one" in O(n) — daily temperatures, histogram areas. Intervals are a sort-then-sweep pattern: sort by start, walk once, and keep a running "current merged interval"; the only question at each step is <em>overlap or not</em>.</p>
+<pre class="formula"><span class="c"># #55 Valid Parentheses — stack of expected closers. O(n).</span>
+def is_valid(s):
+    pair, stack = {')': '(', ']': '[', '}': '{'}, []
+    for ch in s:
+        if ch in pair:
+            if not stack or stack.pop() != pair[ch]: return False
+        else: stack.append(ch)
+    return not stack
+
+<span class="c"># #36 Merge Intervals — sort by start, extend or push. O(n log n).</span>
+def merge(intervals):
+    intervals.sort(); out = []
+    for s, e in intervals:
+        if out and s &lt;= out[-1][1]: out[-1][1] = max(out[-1][1], e)   <span class="c"># overlap: extend</span>
+        else: out.append([s, e])
+    return out
+
+<span class="c"># #35 Insert Interval — three phases: before, overlapping (merge into one), after. O(n).</span>
+def insert(intervals, new):
+    out, i, n = [], 0, len(intervals)
+    while i &lt; n and intervals[i][1] &lt; new[0]: out.append(intervals[i]); i += 1
+    while i &lt; n and intervals[i][0] &lt;= new[1]:
+        new = [min(new[0], intervals[i][0]), max(new[1], intervals[i][1])]; i += 1
+    out.append(new)
+    return out + intervals[i:]
+
+<span class="c"># #37 Non-overlapping Intervals — greedy: keep the interval that ENDS earliest. O(n log n).</span>
+def erase_overlap_intervals(intervals):
+    intervals.sort(key=lambda x: x[1]); removed, end = 0, float('-inf')
+    for s, e in intervals:
+        if s &gt;= end: end = e          <span class="c"># compatible: keep it</span>
+        else: removed += 1            <span class="c"># conflicts with a kept interval that ends earlier: drop this one</span>
+    return removed
+
+<span class="c"># #38 Meeting Rooms: sort, check intervals[i][0] &lt; intervals[i-1][1]. #39 Meeting Rooms II — min-heap of end times:</span>
+import heapq
+def min_meeting_rooms(intervals):
+    intervals.sort(); ends = []
+    for s, e in intervals:
+        if ends and ends[0] &lt;= s: heapq.heapreplace(ends, e)   <span class="c"># a room frees up: reuse it</span>
+        else: heapq.heappush(ends, e)                            <span class="c"># need a new room</span>
+    return len(ends)</pre>
+
+<div class="card">
+<h3>Animation 4: merging intervals on a timeline (#36)</h3>
+<canvas id="intViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="intStep">Step</button>
+  <button class="btn secondary" id="intReset">Reset</button>
+</div>
+<p class="caption">Intervals are sorted by start (top rows). The sweep takes them one at a time: if the next one starts at or before the current merged interval's end, the merged interval stretches; otherwise it is closed and a new one begins. Output accumulates at the bottom.</p>
+</div>
+
+<h2 id="lists">6. Linked lists</h2>
+<p>Linked-list problems are pointer choreography. Two habits remove almost all bugs: a <strong>dummy head</strong> so the "first node" is never a special case, and <strong>saving the next pointer before you overwrite it</strong>. Draw three boxes and arrows on paper before you write a line.</p>
+<pre class="formula"><span class="c"># #40 Reverse Linked List — iterative. prev ← cur ← nxt, one step at a time. O(n), O(1).</span>
+def reverse_list(head):
+    prev, cur = None, head
+    while cur:                     <span class="c">#   prev   cur    nxt</span>
+        nxt = cur.next             <span class="c">#   [a] &lt;- [b]    [c] -&gt; ...   (save c first)</span>
+        cur.next = prev            <span class="c">#   [a] &lt;- [b]    [c]          (flip b's arrow)</span>
+        prev, cur = cur, nxt       <span class="c">#          prev   cur          (advance both)</span>
+    return prev
+
+<span class="c"># #41 Linked List Cycle — Floyd's tortoise and hare. O(n), O(1).</span>
+def has_cycle(head):
+    slow = fast = head
+    while fast and fast.next:
+        slow, fast = slow.next, fast.next.next
+        if slow is fast: return True
+    return False
+
+<span class="c"># #42 Merge Two Sorted Lists — dummy head + tail pointer. O(n + m).</span>
+def merge_two(a, b):
+    dummy = tail = ListNode()
+    while a and b:
+        if a.val &lt;= b.val: tail.next, a = a, a.next
+        else: tail.next, b = b, b.next
+        tail = tail.next
+    tail.next = a or b
+    return dummy.next
+
+<span class="c"># #43 Merge K Sorted Lists — min-heap of (val, index, node). O(N log k). Tie-break on index: nodes aren't comparable.</span>
+def merge_k(lists):
+    heap = [(l.val, i, l) for i, l in enumerate(lists) if l]; heapq.heapify(heap)
+    dummy = tail = ListNode()
+    while heap:
+        _, i, node = heapq.heappop(heap)
+        tail.next = tail = node
+        if node.next: heapq.heappush(heap, (node.next.val, i, node.next))
+    return dummy.next
+
+<span class="c"># #44 Remove Nth From End — two pointers n apart, from a dummy so removing the head works. O(n).</span>
+def remove_nth_from_end(head, n):
+    dummy = ListNode(0, head); lead = lag = dummy
+    for _ in range(n): lead = lead.next
+    while lead.next: lead, lag = lead.next, lag.next
+    lag.next = lag.next.next
+    return dummy.next
+
+<span class="c"># #45 Reorder List — find middle (fast/slow), reverse second half, interleave. O(n), O(1).</span>
+def reorder_list(head):
+    slow = fast = head
+    while fast and fast.next: slow, fast = slow.next, fast.next.next
+    second, slow.next = reverse_list(slow.next), None
+    first = head
+    while second:
+        nxt1, nxt2 = first.next, second.next      <span class="c"># save both continuations before rewiring</span>
+        first.next, second.next = second, nxt1    <span class="c"># first -&gt; second -&gt; (old first.next)</span>
+        first, second = nxt1, nxt2                <span class="c"># advance along the original lists</span></pre>
+
+<h2 id="trees">7. Trees, BSTs &amp; tries</h2>
+<p>Every tree problem is one of three traversals plus a question of <em>what information flows up</em> (post-order: compute from children) or <em>down</em> (pre-order: pass bounds/paths). BFS with a queue gives level structure; DFS gives paths. BSTs add the ordering invariant: in-order traversal is sorted, and bounds propagate downward. A trie is a tree keyed by characters — the structure that makes prefix queries O(length).</p>
+<pre class="formula"><span class="c"># Templates</span>
+def dfs(node):                               <span class="c"># post-order: info flows UP</span>
+    if not node: return BASE
+    left, right = dfs(node.left), dfs(node.right)
+    return combine(node, left, right)
+
+from collections import deque
+def bfs(root):                               <span class="c"># level order</span>
+    out, q = [], deque([root] if root else [])
+    while q:
+        level = []
+        for _ in range(len(q)):              <span class="c"># exactly one level per outer iteration</span>
+            n = q.popleft(); level.append(n.val)
+            if n.left: q.append(n.left)
+            if n.right: q.append(n.right)
+        out.append(level)
+    return out                               <span class="c"># this IS #64 Level Order Traversal</span>
+
+<span class="c"># #60 Max Depth: 1 + max(dfs(l), dfs(r)).   #62 Invert: swap children, recurse.   #61 Same Tree / #66 Subtree:</span>
+def same(a, b):
+    if not a or not b: return a is b
+    return a.val == b.val and same(a.left, b.left) and same(a.right, b.right)
+def is_subtree(root, sub):
+    return bool(root) and (same(root, sub) or is_subtree(root.left, sub) or is_subtree(root.right, sub))
+
+<span class="c"># #63 Binary Tree Maximum Path Sum — post-order; return best "arm", update global best with both arms.</span>
+def max_path_sum(root):
+    best = float('-inf')
+    def gain(n):
+        nonlocal best
+        if not n: return 0
+        l, r = max(gain(n.left), 0), max(gain(n.right), 0)   <span class="c"># negative arms are dropped</span>
+        best = max(best, n.val + l + r)                       <span class="c"># path bends at n</span>
+        return n.val + max(l, r)                              <span class="c"># only one arm can continue upward</span>
+    gain(root); return best
+
+<span class="c"># #68 Validate BST — pass bounds down. The classic bug: comparing only with the parent.</span>
+def is_valid_bst(root, lo=float('-inf'), hi=float('inf')):
+    if not root: return True
+    if not lo &lt; root.val &lt; hi: return False
+    return is_valid_bst(root.left, lo, root.val) and is_valid_bst(root.right, root.val, hi)
+
+<span class="c"># #69 Kth Smallest in BST — in-order is sorted; stop at k. #70 LCA of BST — walk from root by value:</span>
+def lca_bst(root, p, q):
+    while root:
+        if p.val &lt; root.val and q.val &lt; root.val: root = root.left
+        elif p.val &gt; root.val and q.val &gt; root.val: root = root.right
+        else: return root                         <span class="c"># split point (or one equals root)</span>
+
+<span class="c"># #67 Construct from Preorder + Inorder — preorder[0] is the root; its inorder index splits left/right.</span>
+def build_tree(preorder, inorder):
+    idx = {v: i for i, v in enumerate(inorder)}; it = iter(preorder)
+    def build(lo, hi):                            <span class="c"># inorder slice [lo, hi)</span>
+        if lo &gt;= hi: return None
+        root = TreeNode(next(it)); m = idx[root.val]
+        root.left = build(lo, m); root.right = build(m + 1, hi)   <span class="c"># left MUST be built first: it consumes preorder</span>
+        return root
+    return build(0, len(inorder))
+
+<span class="c"># #65 Serialize/Deserialize — preorder with explicit null markers.</span>
+def serialize(root):
+    out = []
+    def go(n):
+        if not n: out.append('#'); return
+        out.append(str(n.val)); go(n.left); go(n.right)
+    go(root); return ','.join(out)
+def deserialize(data):
+    it = iter(data.split(','))
+    def go():
+        v = next(it)
+        if v == '#': return None
+        n = TreeNode(int(v)); n.left = go(); n.right = go(); return n
+    return go()
+
+<span class="c"># #71 Trie, #72 Add &amp; Search with '.', #73 Word Search II (trie + grid backtracking)</span>
+class Trie:
+    def __init__(self): self.root = {}
+    def insert(self, w):
+        node = self.root
+        for ch in w: node = node.setdefault(ch, {})
+        node['$'] = True
+    def search(self, w, dot=False):              <span class="c"># dot=True enables '.' wildcards (#72)</span>
+        def go(node, i):
+            if i == len(w): return '$' in node
+            if w[i] == '.' and dot:
+                return any(go(node[c], i + 1) for c in node if c != '$')
+            return w[i] in node and go(node[w[i]], i + 1)
+        return go(self.root, 0)
+
+def find_words(board, words):                    <span class="c"># #73: DFS the grid, pruned by the trie. </span>
+    trie = Trie()
+    for w in words: trie.insert(w)
+    R, C, found = len(board), len(board[0]), set()
+    def dfs(r, c, node, path):
+        ch = board[r][c]
+        if ch not in node: return
+        nxt = node[ch]; path += ch
+        if '$' in nxt: found.add(path)
+        board[r][c] = '*'                        <span class="c"># mark visited in place</span>
+        for dr, dc in ((1,0),(-1,0),(0,1),(0,-1)):
+            nr, nc = r + dr, c + dc
+            if 0 &lt;= nr &lt; R and 0 &lt;= nc &lt; C: dfs(nr, nc, nxt, path)
+        board[r][c] = ch                         <span class="c"># unmark (backtrack)</span>
+    for r in range(R):
+        for c in range(C): dfs(r, c, trie.root, '')
+    return list(found)</pre>
+
+<div class="card">
+<h3>Animation 5: BFS wave vs DFS dive on the same tree</h3>
+<canvas id="treeViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="treeStep">Step</button>
+  <button class="btn secondary" id="treeReset">Reset</button>
+  <label class="ctl"><input type="radio" name="trav" value="bfs" checked> BFS (queue)</label>
+  <label class="ctl"><input type="radio" name="trav" value="dfs"> DFS pre-order (stack)</label>
+  <span class="dim" id="treeMsg"></span>
+</div>
+<p class="caption">Same tree, same "visit" operation, different container. BFS pulls from a queue and lights up level by level — the shape behind #64 and shortest-path problems. DFS pulls from a stack (or the call stack) and dives to a leaf before backing up — the shape behind every path, depth, and subtree problem. The container's contents are shown live.</p>
+</div>
+
+<h2 id="heaps">8. Heaps</h2>
+<p>A heap answers one question in O(log n): <em>what is the current extreme?</em> That makes it the tool whenever you repeatedly need the smallest/largest of a changing set: top-k, k-way merge, scheduling by earliest end (<strong>#39</strong>), Dijkstra. The two-heap trick for the running median keeps the lower half in a max-heap and the upper half in a min-heap, rebalancing so their sizes differ by at most one; the median is then at the tops.</p>
+<pre class="formula"><span class="c"># #74 Top K Frequent — O(n log k) with a heap, or O(n) with bucket sort by frequency.</span>
+from collections import Counter
+def top_k_frequent(nums, k):
+    return [x for x, _ in heapq.nlargest(k, Counter(nums).items(), key=lambda kv: kv[1])]
+def top_k_bucket(nums, k):
+    freq = Counter(nums); buckets = [[] for _ in range(len(nums) + 1)]
+    for x, f in freq.items(): buckets[f].append(x)
+    out = []
+    for f in range(len(buckets) - 1, 0, -1):
+        out += buckets[f]
+        if len(out) &gt;= k: return out[:k]
+
+<span class="c"># #75 Find Median from Data Stream — two heaps. add O(log n), median O(1).</span>
+class MedianFinder:
+    def __init__(self): self.lo, self.hi = [], []       <span class="c"># lo: max-heap (negated), hi: min-heap</span>
+    def add_num(self, x):
+        heapq.heappush(self.lo, -x)                       <span class="c"># 1. push to lower half</span>
+        heapq.heappush(self.hi, -heapq.heappop(self.lo))  <span class="c"># 2. move lower's max to upper (keeps every lo &lt;= every hi)</span>
+        if len(self.hi) &gt; len(self.lo):                   <span class="c"># 3. rebalance so lo has the extra element</span>
+            heapq.heappush(self.lo, -heapq.heappop(self.hi))
+    def find_median(self):
+        if len(self.lo) &gt; len(self.hi): return -self.lo[0]
+        return (-self.lo[0] + self.hi[0]) / 2</pre>
+
+<div class="card">
+<h3>Animation 6: running median with two heaps (#75)</h3>
+<canvas id="medViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="medStep">Add next number</button>
+  <button class="btn secondary" id="medReset">Reset</button>
+  <span class="dim" id="medMsg"></span>
+</div>
+<p class="caption">Each new number lands in the lower max-heap, its maximum is handed to the upper min-heap, then sizes are rebalanced. The two heap tops always straddle the median. Note the heaps are drawn sorted for readability — a real heap only guarantees the top.</p>
+</div>
+
+<h2 id="graphs">9. Graphs</h2>
+<p>Graph problems come in a few shapes: <strong>reachability/components</strong> (flood fill with DFS/BFS, or union-find), <strong>ordering under dependencies</strong> (topological sort), <strong>shortest paths</strong> (BFS for unweighted, Dijkstra for weighted), and <strong>structure checks</strong> (is it a tree: n−1 edges and connected). Grids are graphs whose adjacency is the four directions — say that out loud and the interviewer knows you see it.</p>
+<pre class="formula"><span class="c"># #30 Number of Islands — flood fill. O(R·C).</span>
+def num_islands(grid):
+    R, C, count = len(grid), len(grid[0]), 0
+    def sink(r, c):
+        if 0 &lt;= r &lt; R and 0 &lt;= c &lt; C and grid[r][c] == '1':
+            grid[r][c] = '0'
+            for dr, dc in ((1,0),(-1,0),(0,1),(0,-1)): sink(r + dr, c + dc)
+    for r in range(R):
+        for c in range(C):
+            if grid[r][c] == '1': count += 1; sink(r, c)
+    return count
+
+<span class="c"># #27 Clone Graph — DFS with an old→new map (the map doubles as "visited").</span>
+def clone_graph(node):
+    seen = {}
+    def go(n):
+        if n in seen: return seen[n]
+        copy = seen[n] = Node(n.val)
+        copy.neighbors = [go(x) for x in n.neighbors]
+        return copy
+    return go(node) if node else None
+
+<span class="c"># #28 Course Schedule — Kahn's algorithm: repeatedly remove nodes with in-degree 0. O(V + E).</span>
+def can_finish(n, prereqs):
+    adj, indeg = [[] for _ in range(n)], [0] * n
+    for a, b in prereqs: adj[b].append(a); indeg[a] += 1   <span class="c"># b -&gt; a</span>
+    q = deque(i for i in range(n) if indeg[i] == 0); done = 0
+    while q:
+        u = q.popleft(); done += 1
+        for v in adj[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0: q.append(v)
+    return done == n                                       <span class="c"># leftover nodes = a cycle</span>
+
+<span class="c"># #32 Alien Dictionary — build char edges from adjacent words' first difference, then Kahn. </span>
+def alien_order(words):
+    adj = {c: set() for w in words for c in w}; indeg = {c: 0 for c in adj}
+    for w1, w2 in zip(words, words[1:]):
+        if len(w1) &gt; len(w2) and w1.startswith(w2): return ''   <span class="c"># "abc" before "ab" is invalid</span>
+        for a, b in zip(w1, w2):
+            if a != b:
+                if b not in adj[a]: adj[a].add(b); indeg[b] += 1
+                break
+    q = deque(c for c in indeg if indeg[c] == 0); out = []
+    while q:
+        c = q.popleft(); out.append(c)
+        for d in adj[c]:
+            indeg[d] -= 1
+            if indeg[d] == 0: q.append(d)
+    return ''.join(out) if len(out) == len(adj) else ''
+
+<span class="c"># #29 Pacific Atlantic — BFS/DFS from each ocean INWARD (water flows downhill, so search uphill).</span>
+def pacific_atlantic(h):
+    R, C = len(h), len(h[0])
+    def reach(starts):
+        seen = set(starts); stack = list(starts)
+        while stack:
+            r, c = stack.pop()
+            for dr, dc in ((1,0),(-1,0),(0,1),(0,-1)):
+                nr, nc = r + dr, c + dc
+                if 0 &lt;= nr &lt; R and 0 &lt;= nc &lt; C and (nr, nc) not in seen and h[nr][nc] &gt;= h[r][c]:
+                    seen.add((nr, nc)); stack.append((nr, nc))
+        return seen
+    pac = reach([(0, c) for c in range(C)] + [(r, 0) for r in range(R)])
+    atl = reach([(R-1, c) for c in range(C)] + [(r, C-1) for r in range(R)])
+    return [list(p) for p in pac &amp; atl]
+
+<span class="c"># Union-Find — #34 Connected Components, #33 Graph Valid Tree (n-1 edges AND no cycle).</span>
+class DSU:
+    def __init__(self, n): self.p = list(range(n))
+    def find(self, x):
+        while self.p[x] != x: self.p[x] = self.p[self.p[x]]; x = self.p[x]   <span class="c"># path halving</span>
+        return x
+    def union(self, a, b):
+        a, b = self.find(a), self.find(b)
+        if a == b: return False          <span class="c"># already connected: this edge closes a cycle</span>
+        self.p[a] = b; return True
+def count_components(n, edges):
+    d = DSU(n); return n - sum(d.union(a, b) for a, b in edges)
+def valid_tree(n, edges):
+    if len(edges) != n - 1: return False
+    d = DSU(n); return all(d.union(a, b) for a, b in edges)
+
+<span class="c"># Dijkstra template (weighted shortest path) — heap of (dist, node).</span>
+def dijkstra(adj, src):
+    dist = {src: 0}; pq = [(0, src)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d &gt; dist.get(u, float('inf')): continue        <span class="c"># stale entry</span>
+        for v, w in adj[u]:
+            if d + w &lt; dist.get(v, float('inf')):
+                dist[v] = d + w; heapq.heappush(pq, (d + w, v))
+    return dist</pre>
+
+<div class="card">
+<h3>Animation 7: Kahn's topological sort (#28 Course Schedule)</h3>
+<canvas id="topoViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="topoStep">Step</button>
+  <button class="btn secondary" id="topoReset">Reset</button>
+  <label class="ctl"><input type="checkbox" id="topoCycle"> add a cycle (3 → 1)</label>
+  <span class="dim" id="topoMsg"></span>
+</div>
+<p class="caption">Numbers on nodes are in-degrees (unfinished prerequisites). Nodes with in-degree 0 enter the queue; removing one decrements its dependents. Tick "add a cycle" and watch the queue run dry with nodes still unprocessed — that leftover is how the algorithm detects a cycle.</p>
+</div>
+
+<h2 id="dp">10. Dynamic programming</h2>
+<p>DP is recursion with memory, but the useful skill is the <strong>four-step recipe</strong>: (1) <em>define the state</em> — what does <code>dp[i]</code> mean, in one sentence; (2) <em>write the recurrence</em> — how does <code>dp[i]</code> depend on smaller states, i.e. what was the last decision; (3) <em>base cases</em>; (4) <em>order of evaluation</em> (so dependencies are ready) and where the answer lives. Say these four things before coding and the implementation becomes transcription. The Blind 75 DP problems are mostly 1D "last decision" problems; two are 2D grids; the rest are the two classic subsequence problems.</p>
+<pre class="formula"><span class="c"># #16 Climbing Stairs — dp[i] = ways to reach step i = dp[i-1] + dp[i-2]. It's Fibonacci.</span>
+def climb_stairs(n):
+    a, b = 1, 1
+    for _ in range(n): a, b = b, a + b
+    return a
+
+<span class="c"># #17 Coin Change — dp[a] = min coins to make amount a = 1 + min(dp[a - c]) over coins. O(amount · coins).</span>
+def coin_change(coins, amount):
+    dp = [0] + [float('inf')] * amount
+    for a in range(1, amount + 1):
+        for c in coins:
+            if c &lt;= a: dp[a] = min(dp[a], dp[a - c] + 1)
+    return dp[amount] if dp[amount] &lt; float('inf') else -1
+
+<span class="c"># #21 Combination Sum IV — same shape but COUNT ordered ways: dp[a] = sum(dp[a - c]).</span>
+<span class="c"># (Outer loop over amount counts permutations; outer loop over coins would count combinations.)</span>
+
+<span class="c"># #22 House Robber — dp[i] = max(dp[i-1], dp[i-2] + nums[i]). #23 House Robber II: max of robbing [0..n-2] or [1..n-1].</span>
+def rob(nums):
+    take, skip = 0, 0
+    for x in nums: take, skip = skip + x, max(skip, take)
+    return max(take, skip)
+def rob_circular(nums):
+    return max(rob(nums[1:]), rob(nums[:-1])) if len(nums) &gt; 1 else nums[0]
+
+<span class="c"># #24 Decode Ways — dp[i] = ways for prefix of length i; last decision = 1-digit or 2-digit chunk.</span>
+def num_decodings(s):
+    dp = [1, 1 if s[0] != '0' else 0]
+    for i in range(2, len(s) + 1):
+        ways = dp[i-1] if s[i-1] != '0' else 0
+        if 10 &lt;= int(s[i-2:i]) &lt;= 26: ways += dp[i-2]
+        dp.append(ways)
+    return dp[-1]
+
+<span class="c"># #18 Longest Increasing Subsequence — O(n²) DP, then the O(n log n) patience trick.</span>
+def lis_quadratic(nums):
+    dp = [1] * len(nums)                           <span class="c"># dp[i] = LIS ending exactly at i</span>
+    for i in range(len(nums)):
+        for j in range(i):
+            if nums[j] &lt; nums[i]: dp[i] = max(dp[i], dp[j] + 1)
+    return max(dp, default=0)
+import bisect
+def lis(nums):
+    tails = []                                     <span class="c"># tails[k] = smallest tail of an increasing subsequence of length k+1</span>
+    for x in nums:
+        i = bisect.bisect_left(tails, x)
+        if i == len(tails): tails.append(x)
+        else: tails[i] = x
+    return len(tails)
+
+<span class="c"># #19 Longest Common Subsequence — 2D: dp[i][j] = LCS of a[:i], b[:j]. O(n·m).</span>
+def lcs(a, b):
+    dp = [[0] * (len(b) + 1) for _ in range(len(a) + 1)]
+    for i in range(1, len(a) + 1):
+        for j in range(1, len(b) + 1):
+            dp[i][j] = dp[i-1][j-1] + 1 if a[i-1] == b[j-1] else max(dp[i-1][j], dp[i][j-1])
+    return dp[-1][-1]
+
+<span class="c"># #20 Word Break — dp[i] = s[:i] is segmentable = any(dp[j] and s[j:i] in dict).</span>
+def word_break(s, words):
+    words, dp = set(words), [True] + [False] * len(s)
+    for i in range(1, len(s) + 1):
+        dp[i] = any(dp[j] and s[j:i] in words for j in range(i))
+    return dp[-1]
+
+<span class="c"># #25 Unique Paths — grid DP (or the binomial C(m+n-2, m-1)). #26 Jump Game — greedy farthest reach:</span>
+def can_jump(nums):
+    reach = 0
+    for i, x in enumerate(nums):
+        if i &gt; reach: return False
+        reach = max(reach, i + x)
+    return True</pre>
+
+<div class="card">
+<h3>Animation 8: coin change table filling (#17)</h3>
+<canvas id="dpViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="dpStep">Step</button>
+  <button class="btn secondary" id="dpPlay">▶ Play</button>
+  <button class="btn secondary" id="dpReset">Reset</button>
+  <span class="dim" id="dpMsg"></span>
+</div>
+<p class="caption">coins = [1, 3, 4], amount = 10. Each cell dp[a] looks back at dp[a−1], dp[a−3], dp[a−4] (highlighted) and takes the minimum plus one. The order is forced: a cell is only computed after everything it depends on. Notice dp[6] = 2 (3+3), not the greedy 4+1+1 — exactly why greedy fails and DP exists.</p>
+</div>
+
+<h2 id="bits">11. Bit manipulation</h2>
+<p>Five problems, four idioms: <code>n &amp; (n-1)</code> clears the lowest set bit (count bits by repeating until zero, <strong>#12</strong>); <code>x ^ x = 0</code> and XOR is commutative, so XOR-ing all indices and values leaves the missing one (<strong>#14</strong>); shifting right by one relates a number to its half (<strong>#13</strong> Counting Bits: <code>bits[i] = bits[i &gt;&gt; 1] + (i &amp; 1)</code>); and addition decomposes into XOR (sum without carry) plus AND-shifted-left (the carry), iterated until the carry is zero (<strong>#11</strong>). Python integers are unbounded, so simulate 32-bit wraparound with a mask.</p>
+<pre class="formula"><span class="c"># #11 Sum of Two Integers — XOR is sum-without-carry, AND&lt;&lt;1 is the carry. 32-bit mask for Python.</span>
+def get_sum(a, b):
+    MASK, MAX = 0xFFFFFFFF, 0x7FFFFFFF
+    while b:
+        a, b = (a ^ b) &amp; MASK, ((a &amp; b) &lt;&lt; 1) &amp; MASK
+    return a if a &lt;= MAX else ~(a ^ MASK)            <span class="c"># reinterpret as signed</span>
+
+def hamming_weight(n):                               <span class="c"># #12 — each iteration clears the lowest set bit</span>
+    c = 0
+    while n: n &amp;= n - 1; c += 1
+    return c
+def count_bits(n):                                   <span class="c"># #13 — O(n)</span>
+    bits = [0] * (n + 1)
+    for i in range(1, n + 1): bits[i] = bits[i &gt;&gt; 1] + (i &amp; 1)
+    return bits
+def missing_number(nums):                            <span class="c"># #14 — XOR everything</span>
+    x = len(nums)
+    for i, v in enumerate(nums): x ^= i ^ v
+    return x
+def reverse_bits(n):                                 <span class="c"># #15 — peel bits off the right, push onto the left</span>
+    out = 0
+    for _ in range(32): out = (out &lt;&lt; 1) | (n &amp; 1); n &gt;&gt;= 1
+    return out</pre>
+
+<h2 id="backtracking">12. Backtracking &amp; matrix tricks</h2>
+<p>Backtracking is DFS over <em>choices</em>: pick, recurse, un-pick. The template is always the same; what changes is the pruning. <strong>#49 Word Search</strong> is DFS on the grid where "choice" is the next cell and "un-pick" restores the cell you marked. Matrix problems in the Blind 75 are mostly index gymnastics with one idea each.</p>
+<pre class="formula"><span class="c"># Backtracking template</span>
+def backtrack(path, choices):
+    if goal(path): record(path); return
+    for c in choices:
+        if not valid(c, path): continue       <span class="c"># prune</span>
+        path.append(c)                        <span class="c"># choose</span>
+        backtrack(path, next_choices(c))      <span class="c"># explore</span>
+        path.pop()                            <span class="c"># un-choose</span>
+
+<span class="c"># #49 Word Search — O(R·C·3^L)</span>
+def exist(board, word):
+    R, C = len(board), len(board[0])
+    def dfs(r, c, i):
+        if i == len(word): return True
+        if not (0 &lt;= r &lt; R and 0 &lt;= c &lt; C) or board[r][c] != word[i]: return False
+        board[r][c], ch = '#', board[r][c]
+        ok = any(dfs(r + dr, c + dc, i + 1) for dr, dc in ((1,0),(-1,0),(0,1),(0,-1)))
+        board[r][c] = ch
+        return ok
+    return any(dfs(r, c, 0) for r in range(R) for c in range(C))
+
+<span class="c"># #48 Rotate Image — transpose, then reverse each row (clockwise). O(n²), in place.</span>
+def rotate(m):
+    n = len(m)
+    for i in range(n):
+        for j in range(i + 1, n): m[i][j], m[j][i] = m[j][i], m[i][j]
+    for row in m: row.reverse()
+
+<span class="c"># #47 Spiral Matrix — shrink four bounds. #46 Set Matrix Zeroes — use row 0 / col 0 as the marker arrays (O(1) extra).</span>
+def spiral_order(m):
+    out, top, bot, left, right = [], 0, len(m) - 1, 0, len(m[0]) - 1
+    while top &lt;= bot and left &lt;= right:
+        out += [m[top][c] for c in range(left, right + 1)]; top += 1
+        out += [m[r][right] for r in range(top, bot + 1)]; right -= 1
+        if top &lt;= bot: out += [m[bot][c] for c in range(right, left - 1, -1)]; bot -= 1
+        if left &lt;= right: out += [m[r][left] for r in range(bot, top - 1, -1)]; left += 1
+    return out</pre>
+
+<h2 id="map">13. The Blind 75 → pattern map</h2>
+<p>Numbers follow the plan's list. Premium problems are marked; they are optional in the schedule but their patterns are not.</p>
+<table class="cmp pmap">
+<tr><th>#</th><th>Problem</th><th>Pattern</th><th>The one sentence</th></tr>
+<tr><td>1</td><td>Two Sum</td><td>Hash map</td><td>Store complements; check before inserting.</td></tr>
+<tr><td>2</td><td>Best Time to Buy and Sell Stock</td><td>Running state</td><td>Track the minimum so far; profit = today − min.</td></tr>
+<tr><td>3</td><td>Contains Duplicate</td><td>Hash set</td><td>Set size vs list length.</td></tr>
+<tr><td>4</td><td>Product of Array Except Self</td><td>Prefix/suffix</td><td>Left products pass, then right products pass in place.</td></tr>
+<tr><td>5</td><td>Maximum Subarray</td><td>Kadane</td><td>cur = max(x, cur + x); restart when the running sum hurts.</td></tr>
+<tr><td>6</td><td>Maximum Product Subarray</td><td>Kadane variant</td><td>Track both max and min ending here; negatives swap them.</td></tr>
+<tr><td>7</td><td>Find Minimum in Rotated Sorted Array</td><td>Binary search</td><td>Compare mid with hi to pick the unsorted half.</td></tr>
+<tr><td>8</td><td>Search in Rotated Sorted Array</td><td>Binary search</td><td>One half is always sorted; test if target is inside it.</td></tr>
+<tr><td>9</td><td>3Sum</td><td>Sort + two pointers</td><td>Fix one, two-pointer the rest, skip duplicates.</td></tr>
+<tr><td>10</td><td>Container With Most Water</td><td>Two pointers</td><td>Move the shorter wall inward.</td></tr>
+<tr><td>11</td><td>Sum of Two Integers</td><td>Bits</td><td>XOR = sum without carry; AND&lt;&lt;1 = carry; loop.</td></tr>
+<tr><td>12</td><td>Number of 1 Bits</td><td>Bits</td><td>n &amp; (n−1) clears the lowest set bit.</td></tr>
+<tr><td>13</td><td>Counting Bits</td><td>Bits + DP</td><td>bits[i] = bits[i&gt;&gt;1] + (i&amp;1).</td></tr>
+<tr><td>14</td><td>Missing Number</td><td>Bits</td><td>XOR all indices and values.</td></tr>
+<tr><td>15</td><td>Reverse Bits</td><td>Bits</td><td>32 iterations: shift out low bit, shift into result.</td></tr>
+<tr><td>16</td><td>Climbing Stairs</td><td>1D DP</td><td>Fibonacci with two variables.</td></tr>
+<tr><td>17</td><td>Coin Change</td><td>1D DP (min)</td><td>dp[a] = 1 + min dp[a−c]; greedy fails.</td></tr>
+<tr><td>18</td><td>Longest Increasing Subsequence</td><td>DP / patience</td><td>O(n²) ending-at-i DP, or bisect into tails for O(n log n).</td></tr>
+<tr><td>19</td><td>Longest Common Subsequence</td><td>2D DP</td><td>Match → diagonal + 1; else max of up/left.</td></tr>
+<tr><td>20</td><td>Word Break</td><td>1D DP (bool)</td><td>dp[i] = any(dp[j] and s[j:i] in dict).</td></tr>
+<tr><td>21</td><td>Combination Sum IV</td><td>1D DP (count)</td><td>Outer loop over amount counts ordered sequences.</td></tr>
+<tr><td>22</td><td>House Robber</td><td>1D DP</td><td>take/skip pair: take = skip + x, skip = max(skip, take).</td></tr>
+<tr><td>23</td><td>House Robber II</td><td>1D DP ×2</td><td>Circular → max of robbing without first or without last.</td></tr>
+<tr><td>24</td><td>Decode Ways</td><td>1D DP</td><td>Last chunk is 1 digit (non-zero) or 2 digits (10–26).</td></tr>
+<tr><td>25</td><td>Unique Paths</td><td>2D DP / combinatorics</td><td>dp[r][c] = up + left, or C(m+n−2, m−1).</td></tr>
+<tr><td>26</td><td>Jump Game</td><td>Greedy</td><td>Track farthest reachable index; fail if i exceeds it.</td></tr>
+<tr><td>27</td><td>Clone Graph</td><td>DFS + map</td><td>old→new map doubles as visited.</td></tr>
+<tr><td>28</td><td>Course Schedule</td><td>Topological sort</td><td>Kahn's: pop in-degree-0 nodes; leftovers mean a cycle.</td></tr>
+<tr><td>29</td><td>Pacific Atlantic Water Flow</td><td>Multi-source DFS/BFS</td><td>Search uphill from each ocean; intersect.</td></tr>
+<tr><td>30</td><td>Number of Islands</td><td>Flood fill</td><td>DFS sinks each island on discovery.</td></tr>
+<tr><td>31</td><td>Longest Consecutive Sequence</td><td>Hash set</td><td>Only count from run starts (x−1 not in set).</td></tr>
+<tr><td>32</td><td>Alien Dictionary (Premium)</td><td>Topological sort</td><td>Edges from first differing char of adjacent words.</td></tr>
+<tr><td>33</td><td>Graph Valid Tree (Premium)</td><td>Union-find</td><td>Exactly n−1 edges and no union fails.</td></tr>
+<tr><td>34</td><td>Connected Components (Premium)</td><td>Union-find</td><td>n minus successful unions.</td></tr>
+<tr><td>35</td><td>Insert Interval</td><td>Sweep</td><td>Before / overlapping-merge / after.</td></tr>
+<tr><td>36</td><td>Merge Intervals</td><td>Sort + sweep</td><td>Sort by start; extend the last or push new.</td></tr>
+<tr><td>37</td><td>Non-overlapping Intervals</td><td>Greedy</td><td>Sort by end; keep earliest-ending compatible interval.</td></tr>
+<tr><td>38</td><td>Meeting Rooms (Premium)</td><td>Sort + sweep</td><td>Any start before previous end → conflict.</td></tr>
+<tr><td>39</td><td>Meeting Rooms II (Premium)</td><td>Heap</td><td>Min-heap of end times; reuse a room if the earliest end ≤ start.</td></tr>
+<tr><td>40</td><td>Reverse Linked List</td><td>Pointers</td><td>Save next, flip, advance.</td></tr>
+<tr><td>41</td><td>Linked List Cycle</td><td>Fast/slow</td><td>Floyd: they meet iff a cycle exists.</td></tr>
+<tr><td>42</td><td>Merge Two Sorted Lists</td><td>Dummy head</td><td>Append the smaller head; attach the remainder.</td></tr>
+<tr><td>43</td><td>Merge K Sorted Lists</td><td>Heap</td><td>Heap of (val, idx, node): O(N log k).</td></tr>
+<tr><td>44</td><td>Remove Nth Node From End</td><td>Two pointers</td><td>Gap of n from a dummy; lag.next = lag.next.next.</td></tr>
+<tr><td>45</td><td>Reorder List</td><td>Fast/slow + reverse</td><td>Find middle, reverse second half, interleave.</td></tr>
+<tr><td>46</td><td>Set Matrix Zeroes</td><td>In-place markers</td><td>Use row 0 and column 0 as flags.</td></tr>
+<tr><td>47</td><td>Spiral Matrix</td><td>Bounds</td><td>Four shrinking bounds; guard the last row/col.</td></tr>
+<tr><td>48</td><td>Rotate Image</td><td>Transpose + reverse</td><td>Transpose, then reverse each row.</td></tr>
+<tr><td>49</td><td>Word Search</td><td>Backtracking</td><td>DFS with in-place mark/unmark.</td></tr>
+<tr><td>50</td><td>Longest Substring Without Repeating</td><td>Sliding window</td><td>Jump left past the last occurrence.</td></tr>
+<tr><td>51</td><td>Longest Repeating Character Replacement</td><td>Sliding window</td><td>Valid iff window − maxfreq ≤ k.</td></tr>
+<tr><td>52</td><td>Minimum Window Substring</td><td>Sliding window</td><td>Expand until covered; shrink while covered.</td></tr>
+<tr><td>53</td><td>Valid Anagram</td><td>Counting</td><td>Compare counts.</td></tr>
+<tr><td>54</td><td>Group Anagrams</td><td>Hash by signature</td><td>Key = sorted string or 26-count tuple.</td></tr>
+<tr><td>55</td><td>Valid Parentheses</td><td>Stack</td><td>Push opens; pop must match each close.</td></tr>
+<tr><td>56</td><td>Valid Palindrome</td><td>Two pointers</td><td>Skip non-alphanumerics from both ends.</td></tr>
+<tr><td>57</td><td>Longest Palindromic Substring</td><td>Expand around center</td><td>2n−1 centers; expand while equal.</td></tr>
+<tr><td>58</td><td>Palindromic Substrings</td><td>Expand around center</td><td>Count each successful expansion.</td></tr>
+<tr><td>59</td><td>Encode and Decode Strings (Premium)</td><td>Length prefix</td><td>"len#payload" makes any character safe.</td></tr>
+<tr><td>60</td><td>Maximum Depth of Binary Tree</td><td>Post-order DFS</td><td>1 + max(children).</td></tr>
+<tr><td>61</td><td>Same Tree</td><td>Parallel DFS</td><td>Both null → true; one null → false; compare and recurse.</td></tr>
+<tr><td>62</td><td>Invert Binary Tree</td><td>DFS</td><td>Swap children; recurse.</td></tr>
+<tr><td>63</td><td>Binary Tree Maximum Path Sum</td><td>Post-order with global</td><td>Return one arm; update best with both arms.</td></tr>
+<tr><td>64</td><td>Binary Tree Level Order Traversal</td><td>BFS</td><td>Process len(queue) nodes per level.</td></tr>
+<tr><td>65</td><td>Serialize and Deserialize Binary Tree</td><td>Pre-order + nulls</td><td>Explicit '#' markers make it invertible.</td></tr>
+<tr><td>66</td><td>Subtree of Another Tree</td><td>DFS + Same Tree</td><td>Check sameness at every node.</td></tr>
+<tr><td>67</td><td>Construct from Preorder and Inorder</td><td>Divide &amp; conquer</td><td>preorder[0] is root; inorder index splits halves.</td></tr>
+<tr><td>68</td><td>Validate Binary Search Tree</td><td>Bounds down</td><td>Pass (lo, hi); never compare only with the parent.</td></tr>
+<tr><td>69</td><td>Kth Smallest Element in a BST</td><td>In-order</td><td>In-order is sorted; stop at k.</td></tr>
+<tr><td>70</td><td>Lowest Common Ancestor of a BST</td><td>BST walk</td><td>Go left/right while both on one side; else split point.</td></tr>
+<tr><td>71</td><td>Implement Trie</td><td>Trie</td><td>Nested dicts with an end marker.</td></tr>
+<tr><td>72</td><td>Design Add and Search Words</td><td>Trie + DFS</td><td>'.' branches over all children.</td></tr>
+<tr><td>73</td><td>Word Search II</td><td>Trie + backtracking</td><td>Walk the grid and trie together; prune dead prefixes.</td></tr>
+<tr><td>74</td><td>Top K Frequent Elements</td><td>Heap / bucket</td><td>Counter + nlargest, or buckets by frequency.</td></tr>
+<tr><td>75</td><td>Find Median from Data Stream</td><td>Two heaps</td><td>Max-heap low half, min-heap high half, rebalance.</td></tr>
+</table>
+
+<h3>Which pattern? A decision walk</h3>
+<p>Ask in order. <em>Is the input sorted, or can sorting it help?</em> → two pointers or binary search. <em>Is it a contiguous subarray/substring with a constraint?</em> → sliding window (variable size) or prefix sums. <em>Do I need "have I seen X" or grouping?</em> → hash map/set. <em>Is it "count the ways" or "min/max over choices with overlapping subproblems"?</em> → DP; write the four-step recipe. <em>Are there dependencies, components, or a grid?</em> → graph: topological sort, union-find, flood fill, BFS for shortest unweighted. <em>Repeatedly need the extreme of a changing set?</em> → heap. <em>Most-recent matching / next greater?</em> → stack. <em>Enumerate all configurations with pruning?</em> → backtracking. <em>Linked structure?</em> → dummy head, fast/slow. <em>Tree?</em> → decide whether information flows up (post-order) or down (bounds), BFS only for levels. If none fit, say the brute force and look for the monotonic quantity — it is usually hiding there.</p>
+
+<h2 id="deeper">14. Where to go deeper</h2>
+<ul>
+<li>The plan's Step 4 protocol and the 45-minute cap; interview-mode weeks 12–13 re-solve what you missed.</li>
+<li><a href="https://www.youtube.com/@theadityaverma">Aditya Verma's channel</a> — especially the DP and sliding-window playlists; the plan's rule is to watch the matching tutorial when a pattern is new.</li>
+<li><a href="https://neetcode.io/roadmap">NeetCode roadmap</a> — the same 75 (plus 75 more) ordered as a dependency graph of patterns.</li>
+<li><a href="https://leetcode.com/list/xi4ci4ig/">The Blind 75 list on LeetCode</a> for tracking, and the <a href="flashcards.html">Coding Patterns flashcard deck</a> for the one-sentence insights.</li>
+</ul>
+
+<div class="footer-nav"><a href="system-design.html">← System Design</a><a href="notes.html">Notes →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function onTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+function player(btnId,stepFn,ms){let t=null;const b=document.getElementById(btnId);
+  const stop=()=>{if(t){clearInterval(t);t=null;b.textContent='▶ Play';}};
+  b.onclick=()=>{if(t){stop();return;}b.textContent='⏸ Pause';t=setInterval(()=>{if(!stepFn())stop();},ms);};
+  return stop;}
+
+// ---------- 1. Kadane ----------
+(function(){
+const cv=document.getElementById('kadaneViz'),ctx=cv.getContext('2d');
+const A=[-2,1,-3,4,-1,2,1,-5,4];let i=-1,cur=0,best=-Infinity,cs=0,bs=0,be=-1,msg='Press Step. cur = best sum ending at the cursor; best = best seen.';
+function step(){if(i>=A.length-1)return false;i++;const x=A[i];
+  if(i===0||cur+x<x){cur=x;cs=i;msg='a['+i+']='+x+': running sum '+(i===0?'starts':'('+(cur-x+x)+') would only hurt → RESTART')+' here, cur='+cur;}
+  else{cur+=x;msg='a['+i+']='+x+': extend, cur='+cur;}
+  if(cur>best){best=cur;bs=cs;be=i;msg+=' — new best '+best;}
+  draw();return true;}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const bw=60,x0=80,base=170,sc=18;
+  ctx.font='13px sans-serif';
+  A.forEach((v,k)=>{const x=x0+k*(bw+14);const h=Math.abs(v)*sc;ctx.fillStyle=k===i?acc:(k<=i?'rgba(128,128,128,.55)':'rgba(128,128,128,.25)');
+    ctx.fillRect(x,v>=0?base-h:base,bw,h);ctx.fillStyle=txt;ctx.textAlign='center';ctx.fillText(v,x+bw/2,base+(v>=0?20:-(h)-8));ctx.fillStyle=dim;ctx.fillText('a['+k+']',x+bw/2,base+40);});
+  ctx.strokeStyle=css('--border');ctx.beginPath();ctx.moveTo(x0-10,base);ctx.lineTo(x0+A.length*(bw+14),base);ctx.stroke();
+  function bracket(s,e,y,col,label){if(e<s)return;const x1=x0+s*(bw+14)-4,x2=x0+e*(bw+14)+bw+4;ctx.strokeStyle=col;ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(x1,y);ctx.lineTo(x1,y+10);ctx.lineTo(x2,y+10);ctx.lineTo(x2,y);ctx.stroke();ctx.lineWidth=1;ctx.fillStyle=col;ctx.textAlign='left';ctx.fillText(label,x2+6,y+12);}
+  if(i>=0){bracket(cs,i,base+50,acc2,'cur = '+cur);bracket(bs,be,base+72,acc,'best = '+best);}
+  ctx.fillStyle=txt;ctx.textAlign='left';ctx.font='bold 13px sans-serif';ctx.fillText(msg,20,28);}
+document.getElementById('kadStep').onclick=()=>step();
+const stop=player('kadPlay',step,700);
+document.getElementById('kadReset').onclick=()=>{stop();i=-1;cur=0;best=-Infinity;cs=bs=0;be=-1;msg='Press Step.';draw();};
+draw();onTheme(draw);})();
+
+// ---------- 2. sliding window ----------
+(function(){
+const cv=document.getElementById('winViz'),ctx=cv.getContext('2d');
+const S='abcabcbbxyzab';let r=-1,l=0,best=[0,-1],last={},msg='Press Step: the right edge advances one character at a time.';
+function step(){if(r>=S.length-1)return false;r++;const ch=S[r];
+  if(ch in last&&last[ch]>=l){msg="'"+ch+"' already in window at "+last[ch]+" → left jumps to "+(last[ch]+1);l=last[ch]+1;}else msg="'"+ch+"' is new → window grows";
+  last[ch]=r;if(r-l>best[1]-best[0]){best=[l,r];msg+=' — new best length '+(r-l+1);}draw();return true;}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const cw=40,x0=30,y=70;ctx.font='16px monospace';ctx.textAlign='center';
+  for(let k=0;k<S.length;k++){const x=x0+k*(cw+4);const inW=k>=l&&k<=r;ctx.fillStyle=inW?acc2:css('--bg-card');ctx.strokeStyle=css('--border');rr(ctx,x,y,cw,36,6);ctx.fill();ctx.stroke();ctx.fillStyle=inW?'#fff':txt;ctx.fillText(S[k],x+cw/2,y+24);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText(k,x+cw/2,y+52);ctx.font='16px monospace';}
+  if(r>=0){ctx.fillStyle=acc2;ctx.font='12px sans-serif';ctx.fillText('L',x0+l*(cw+4)+cw/2,y-8);ctx.fillText('R',x0+r*(cw+4)+cw/2,y-8);}
+  if(best[1]>=best[0]){const x1=x0+best[0]*(cw+4),x2=x0+best[1]*(cw+4)+cw;ctx.strokeStyle=acc;ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(x1,y+62);ctx.lineTo(x2,y+62);ctx.stroke();ctx.lineWidth=1;ctx.fillStyle=acc;ctx.textAlign='left';ctx.font='12px sans-serif';ctx.fillText('best = '+(best[1]-best[0]+1),x2+8,y+66);}
+  ctx.fillStyle=txt;ctx.textAlign='left';ctx.font='bold 13px sans-serif';ctx.fillText(msg,20,28);
+  ctx.font='12px monospace';ctx.fillStyle=dim;const entries=Object.entries(last).map(([k,v])=>k+':'+v).join('  ');ctx.fillText('last seen → '+(entries||'{}'),20,H-30);
+  ctx.fillText('window = s['+l+'..'+r+']  length '+(r>=l?r-l+1:0),20,H-12);}
+document.getElementById('winStep').onclick=()=>step();
+const stop=player('winPlay',step,650);
+document.getElementById('winReset').onclick=()=>{stop();r=-1;l=0;best=[0,-1];last={};msg='Press Step.';draw();};
+draw();onTheme(draw);})();
+
+// ---------- 3. binary search rotated ----------
+(function(){
+const cv=document.getElementById('bsViz'),ctx=cv.getContext('2d');
+const A=[11,13,15,17,2,4,5,7,8,9];let lo=0,hi=A.length-1,mid=-1,done=false;
+const msgEl=document.getElementById('bsMsg');
+function step(){if(done)return false;if(lo>=hi){done=true;msgEl.textContent='lo == hi → minimum is A['+lo+'] = '+A[lo];draw();return false;}
+  mid=(lo+hi)>>1;if(A[mid]>A[hi]){msgEl.textContent='A[mid]='+A[mid]+' > A[hi]='+A[hi]+' → drop is to the right: lo = mid+1';lo=mid+1;}
+  else{msgEl.textContent='A[mid]='+A[mid]+' ≤ A[hi]='+A[hi]+' → min is at mid or left: hi = mid';hi=mid;}
+  draw();return true;}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const bw=64,x0=50,y=90;ctx.font='15px monospace';ctx.textAlign='center';
+  A.forEach((v,k)=>{const x=x0+k*(bw+8);const alive=k>=lo&&k<=hi;ctx.fillStyle=k===mid&&!done?acc:(alive?css('--bg-card'):'rgba(128,128,128,.15)');ctx.strokeStyle=css('--border');rr(ctx,x,y,bw,40,6);ctx.fill();ctx.stroke();
+    ctx.fillStyle=k===mid&&!done?'#fff':(alive?txt:dim);ctx.fillText(v,x+bw/2,y+26);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText(k,x+bw/2,y+58);ctx.font='15px monospace';});
+  ctx.font='bold 12px sans-serif';ctx.fillStyle=acc2;ctx.fillText('lo',x0+lo*(bw+8)+bw/2,y-12);ctx.fillText('hi',x0+hi*(bw+8)+bw/2,y-12+(lo===hi?-14:0));
+  if(mid>=0&&!done){ctx.fillStyle=acc;ctx.fillText('mid',x0+mid*(bw+8)+bw/2,y+78);}
+  ctx.fillStyle=txt;ctx.textAlign='left';ctx.font='13px sans-serif';ctx.fillText('Rotated sorted array. Invariant: the minimum is within [lo, hi].',20,28);
+  if(done){ctx.fillStyle=acc2;ctx.fillText('✓ found in '+Math.ceil(Math.log2(A.length))+' comparisons or fewer',20,H-14);}}
+document.getElementById('bsStep').onclick=()=>step();
+document.getElementById('bsReset').onclick=()=>{lo=0;hi=A.length-1;mid=-1;done=false;msgEl.textContent='';draw();};
+draw();onTheme(draw);})();
+
+// ---------- 4. merge intervals ----------
+(function(){
+const cv=document.getElementById('intViz'),ctx=cv.getContext('2d');
+const IN=[[1,3],[2,6],[8,10],[9,12],[15,18],[17,20],[22,23]];let k=-1,out=[],msg='Intervals sorted by start. Press Step.';
+function step(){if(k>=IN.length-1)return false;k++;const [s,e]=IN[k];
+  if(out.length&&s<=out[out.length-1][1]){out[out.length-1][1]=Math.max(out[out.length-1][1],e);msg='['+s+','+e+'] starts before current end → extend to ['+out[out.length-1][0]+','+out[out.length-1][1]+']';}
+  else{out.push([s,e]);msg='['+s+','+e+'] starts after current end → new merged interval';}
+  draw();return true;}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const x0=60,sc=34;ctx.font='11px sans-serif';ctx.textAlign='center';
+  for(let v=0;v<=24;v+=2){ctx.fillStyle=dim;ctx.fillText(v,x0+v*sc,52);ctx.strokeStyle='rgba(128,128,128,.2)';ctx.beginPath();ctx.moveTo(x0+v*sc,58);ctx.lineTo(x0+v*sc,H-40);ctx.stroke();}
+  IN.forEach(([s,e],i)=>{const y=66+i*16;ctx.fillStyle=i===k?acc:(i<k?'rgba(128,128,128,.45)':'rgba(128,128,128,.25)');rr(ctx,x0+s*sc,y,(e-s)*sc,11,4);ctx.fill();});
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('input (sorted)',x0-52,70);ctx.fillText('merged',x0-52,H-44);
+  out.forEach(([s,e])=>{ctx.fillStyle=acc2;rr(ctx,x0+s*sc,H-52,(e-s)*sc,16,5);ctx.fill();ctx.fillStyle='#fff';ctx.textAlign='center';ctx.font='11px monospace';ctx.fillText('['+s+','+e+']',x0+(s+e)/2*sc,H-40);ctx.font='11px sans-serif';});
+  ctx.fillStyle=txt;ctx.textAlign='left';ctx.font='bold 13px sans-serif';ctx.fillText(msg,20,28);}
+document.getElementById('intStep').onclick=()=>step();
+document.getElementById('intReset').onclick=()=>{k=-1;out=[];msg='Press Step.';draw();};
+draw();onTheme(draw);})();
+
+// ---------- 5. BFS vs DFS ----------
+(function(){
+const cv=document.getElementById('treeViz'),ctx=cv.getContext('2d');
+// perfect binary tree of 15 nodes: children of i are 2i+1, 2i+2
+const N=15,vals=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15];
+let visited=[],container=[],order=[],mode='bfs';
+const msgEl=document.getElementById('treeMsg');
+function reset(){visited=[];order=[];container=[0];mode=document.querySelector('input[name=trav]:checked').value;msgEl.textContent=(mode==='bfs'?'queue':'stack')+': [1]';draw();}
+function step(){if(!container.length)return false;const n=mode==='bfs'?container.shift():container.pop();visited.push(n);order.push(vals[n]);
+  const kids=[2*n+1,2*n+2].filter(c=>c<N);
+  if(mode==='bfs')container.push(...kids);else container.push(...kids.reverse());  // push right first so left is popped first
+  msgEl.textContent=(mode==='bfs'?'queue':'stack')+': ['+container.map(c=>vals[c]).join(', ')+']   visited: '+order.join(' ');draw();return true;}
+function pos(n){const d=Math.floor(Math.log2(n+1)),idx=n-(2**d-1),cnt=2**d;return [((idx+0.5)/cnt)*860+20,50+d*70];}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  ctx.strokeStyle=css('--border');for(let n=0;n<N;n++){[2*n+1,2*n+2].forEach(c=>{if(c<N){const[a,b]=pos(n),[x,y]=pos(c);ctx.beginPath();ctx.moveTo(a,b);ctx.lineTo(x,y);ctx.stroke();}});}
+  for(let n=0;n<N;n++){const[x,y]=pos(n);const v=visited.indexOf(n),inC=container.includes(n);
+    ctx.fillStyle=v>=0?(mode==='bfs'?acc:acc2):(inC?css('--warn'):css('--bg-card'));ctx.beginPath();ctx.arc(x,y,16,0,7);ctx.fill();ctx.strokeStyle=css('--border');ctx.stroke();
+    ctx.fillStyle=v>=0||inC?'#fff':txt;ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(vals[n],x,y+4);
+    if(v>=0){ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.fillText('#'+(v+1),x,y+30);}}
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('amber = waiting in the container · colored = visited (order number below)',20,H-12);}
+document.getElementById('treeStep').onclick=()=>step();
+document.getElementById('treeReset').onclick=reset;document.querySelectorAll('input[name=trav]').forEach(r=>r.onchange=reset);
+reset();onTheme(draw);})();
+
+// ---------- 6. two-heap median ----------
+(function(){
+const cv=document.getElementById('medViz'),ctx=cv.getContext('2d');
+const STREAM=[5,15,1,3,8,7,9,10,2,6];let i=0,lo=[],hi=[];
+const msgEl=document.getElementById('medMsg');
+function step(){if(i>=STREAM.length)return false;const x=STREAM[i++];
+  lo.push(x);lo.sort((a,b)=>b-a);            // max-heap (kept sorted desc for display)
+  hi.push(lo.shift());hi.sort((a,b)=>a-b);   // move lo's max to hi
+  if(hi.length>lo.length){lo.push(hi.shift());lo.sort((a,b)=>b-a);}
+  const med=lo.length>hi.length?lo[0]:(lo[0]+hi[0])/2;
+  msgEl.textContent='added '+x+' → median '+med;draw();return true;}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  ctx.font='13px sans-serif';ctx.textAlign='left';ctx.fillStyle=txt;
+  ctx.fillText('stream: '+STREAM.map((v,k)=>k<i?v:'·').join(' '),20,28);
+  function heap(arr,x0,label,col,top){ctx.fillStyle=dim;ctx.fillText(label,x0,70);arr.forEach((v,k)=>{const y=90+k*28;ctx.fillStyle=k===0?col:css('--bg-card');ctx.strokeStyle=css('--border');rr(ctx,x0,y,70,22,5);ctx.fill();ctx.stroke();ctx.fillStyle=k===0?'#fff':txt;ctx.textAlign='center';ctx.fillText(v,x0+35,y+15);ctx.textAlign='left';});if(arr.length){ctx.fillStyle=col;ctx.fillText(top,x0+80,105);}}
+  heap(lo,200,'lower half — max-heap (top = largest)',acc,'← top');heap(hi,560,'upper half — min-heap (top = smallest)',acc2,'← top');
+  if(lo.length){const med=lo.length>hi.length?lo[0]:(lo[0]+hi[0])/2;ctx.fillStyle=txt;ctx.font='bold 14px sans-serif';ctx.textAlign='center';ctx.fillText('median = '+med,W/2,H-14);}}
+document.getElementById('medStep').onclick=()=>step();
+document.getElementById('medReset').onclick=()=>{i=0;lo=[];hi=[];msgEl.textContent='';draw();};
+draw();onTheme(draw);})();
+
+// ---------- 7. Kahn's algorithm ----------
+(function(){
+const cv=document.getElementById('topoViz'),ctx=cv.getContext('2d');
+const P=[[0,210],[160,110],[160,310],[330,210],[500,110],[500,310],[670,210]];
+let E,indeg,q,done,removed,msgEl=document.getElementById('topoMsg');
+function reset(){E=[[0,1],[0,2],[1,3],[2,3],[3,4],[3,5],[4,6],[5,6]];if(document.getElementById('topoCycle').checked)E.push([3,1]);
+  indeg=Array(7).fill(0);E.forEach(([a,b])=>indeg[b]++);q=[...Array(7).keys()].filter(n=>indeg[n]===0);done=[];removed=new Set();msgEl.textContent='queue: ['+q+']';draw();}
+function step(){if(!q.length){msgEl.textContent=done.length===7?'done — order: '+done.join('→'):'queue empty with '+(7-done.length)+' nodes left → CYCLE detected';return false;}
+  const u=q.shift();done.push(u);E.forEach(([a,b],k)=>{if(a===u){indeg[b]--;removed.add(k);if(indeg[b]===0)q.push(b);}});
+  msgEl.textContent='popped '+u+' → queue: ['+q+']  order so far: '+done.join('→');draw();return true;}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const ox=90,oy=-70;
+  E.forEach(([a,b],k)=>{const[x1,y1]=P[a],[x2,y2]=P[b];ctx.strokeStyle=removed.has(k)?'rgba(128,128,128,.2)':(a===3&&b===1?css('--danger'):css('--text-dim'));ctx.lineWidth=removed.has(k)?1:2;
+    ctx.beginPath();ctx.moveTo(x1+ox,y1+oy);ctx.lineTo(x2+ox,y2+oy);ctx.stroke();const ang=Math.atan2(y2-y1,x2-x1);const ex=x2+ox-Math.cos(ang)*22,ey=y2+oy-Math.sin(ang)*22;ctx.beginPath();ctx.moveTo(ex,ey);ctx.lineTo(ex-Math.cos(ang-.4)*10,ey-Math.sin(ang-.4)*10);ctx.lineTo(ex-Math.cos(ang+.4)*10,ey-Math.sin(ang+.4)*10);ctx.closePath();ctx.fillStyle=ctx.strokeStyle;ctx.fill();});
+  ctx.lineWidth=1;
+  P.forEach(([x,y],n)=>{const isDone=done.includes(n),inQ=q.includes(n);ctx.fillStyle=isDone?acc2:(inQ?css('--warn'):css('--bg-card'));ctx.beginPath();ctx.arc(x+ox,y+oy,20,0,7);ctx.fill();ctx.strokeStyle=css('--border');ctx.stroke();
+    ctx.fillStyle=isDone||inQ?'#fff':txt;ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.fillText(n,x+ox,y+oy+5);
+    ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('in='+indeg[n],x+ox,y+oy+36);});
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('amber = in queue (in-degree 0) · green = emitted · edges fade when their source is processed',20,H-12);}
+document.getElementById('topoStep').onclick=()=>step();
+document.getElementById('topoReset').onclick=reset;document.getElementById('topoCycle').onchange=reset;
+reset();onTheme(draw);})();
+
+// ---------- 8. coin change DP ----------
+(function(){
+const cv=document.getElementById('dpViz'),ctx=cv.getContext('2d');
+const COINS=[1,3,4],AMT=10;let a=0,dp=[0],msgEl=document.getElementById('dpMsg');
+function step(){if(a>=AMT)return false;a++;let best=Infinity,from=[];COINS.forEach(c=>{if(c<=a&&dp[a-c]+1<best){best=dp[a-c]+1;from=[a-c];}});dp[a]=best;
+  msgEl.textContent='dp['+a+'] = 1 + min('+COINS.filter(c=>c<=a).map(c=>'dp['+(a-c)+']='+dp[a-c]).join(', ')+') = '+best;draw();return true;}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const cw=68,x0=60,y=100;ctx.font='13px sans-serif';ctx.textAlign='center';
+  for(let k=0;k<=AMT;k++){const x=x0+k*(cw+6);const filled=k<dp.length;const dep=a>0&&COINS.some(c=>a-c===k)&&k<a;
+    ctx.fillStyle=k===a&&a>0?acc:(dep?css('--warn'):(filled?css('--bg-card'):'rgba(128,128,128,.12)'));ctx.strokeStyle=css('--border');rr(ctx,x,y,cw,44,6);ctx.fill();ctx.stroke();
+    ctx.fillStyle=k===a&&a>0||dep?'#fff':txt;ctx.font='bold 15px monospace';ctx.fillText(filled?dp[k]:'?',x+cw/2,y+28);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('dp['+k+']',x+cw/2,y+62);}
+  if(a>0){COINS.forEach(c=>{if(a-c>=0){const x1=x0+(a-c)*(cw+6)+cw/2,x2=x0+a*(cw+6)+cw/2;ctx.strokeStyle=css('--warn');ctx.beginPath();ctx.moveTo(x1,y-6);ctx.quadraticCurveTo((x1+x2)/2,y-50,x2,y-6);ctx.stroke();ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.fillText('+'+c,(x1+x2)/2,y-28);}});}
+  ctx.fillStyle=txt;ctx.textAlign='left';ctx.font='13px sans-serif';ctx.fillText('coins = [1, 3, 4], amount = 10 · dp[a] = min coins to make a',20,28);
+  if(a===AMT){ctx.fillStyle=acc2;ctx.fillText('answer dp[10] = '+dp[10]+' (e.g. 3+3+4). Greedy 4+4+1+1 = 4 coins would be wrong.',20,H-12);}}
+document.getElementById('dpStep').onclick=()=>step();
+const stop=player('dpPlay',step,600);
+document.getElementById('dpReset').onclick=()=>{stop();a=0;dp=[0];msgEl.textContent='';draw();};
+draw();onTheme(draw);})();
+</script>
+</body>
+</html>

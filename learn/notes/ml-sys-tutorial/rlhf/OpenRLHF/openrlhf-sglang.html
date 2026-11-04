@@ -1,0 +1,94 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenRLHF SGLang Version</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/OpenRLHF/openrlhf-sglang.md</div>
+<article class="note"><h1 id="openrlhf-sglang-version">OpenRLHF SGLang Version</h1>
+<h2 id="_1">环境配置</h2>
+<p>理论上只要同时安装 OpenRLHF SGLang 和 DeepSpeed 即可。但是这里推荐使用 OpenRLHF 的 docker 镜像，进行挂载：</p>
+<pre><code class="language-bash">docker run --runtime=nvidia -it --shm-size=&quot;40g&quot; --cap-add=SYS_ADMIN   -v {YOUR_DATA_DIR}:/var/lib/docker   
+nvcr.io/nvidia/pytorch:24.07-py3 bash
+</code></pre>
+<p>接着，把 docker commit 保存下来，<code>docker ps -a</code> 查找 <code>&lt;container_id&gt;</code>，然后 <code>docker commit &lt;container_id&gt; openrlhf</code>，下次直接 <code>docker run --gpus all -it openrlhf</code> 就可以直接进入 docker 了。</p>
+<p>然后，进入 docker，安装 OpenRLHF-SGLang 发行版和 SGLang：</p>
+<pre><code class="language-bash">pip install torch
+git clone -b dev_pr https://github.com/zhaochenyang20/OpenRLHF-SGLang.git
+cd OpenRLHF-SGLang
+pip install .
+</code></pre>
+<p>如果出现了 <code>flash_attn</code> 的安装错误，可以仿照修改 <code>~/.zshrc</code> 文件，添加：</p>
+<pre><code class="language-bash">export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:/data/chayenne/miniconda3/envs/rlhf-sglang/lib/python3.11/site-packages/nvidia/cusparse/lib:$LD_LIBRARY_PATH
+export CUDA_HOME=/usr/local/cuda-12.1
+</code></pre>
+<p>然后，安装 SGLang 的最新发行版：</p>
+<pre><code class="language-bash">git clone https://github.com/sgl-project/sglang.git
+cd sglang
+
+pip install --upgrade pip
+pip install -e &quot;python[all]&quot; --find-links https://flashinfer.ai/whl/cu124/torch2.4/flashinfer/
+</code></pre>
+<h2 id="ppo">运行 PPO</h2>
+<pre><code class="language-bash"># 启动 ray，自行设置 RAY_TEMP_DIR，RLHF_CKPT_DIR WANDB_API_KEY 环境变量
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 3 --port 1234 --temp-dir=$RAY_TEMP_DIR
+
+# 在 ray 的输出中找到 RAY_HEAD_IP，然后提交任务
+ray job submit --address=&quot;&lt;RAY_HEAD_IP&gt;:1234&quot; \
+--runtime-env-json=&quot;{
+  \&quot;working_dir\&quot;: \&quot;${RLHF_CKPT_DIR}\&quot;,
+}&quot; \
+   -- python3 -m openrlhf.cli.train_ppo_ray \
+   --backend sglang \
+   --ref_num_nodes 1 \
+   --ref_num_gpus_per_node 1 \
+   --reward_num_nodes 1 \
+   --reward_num_gpus_per_node 1 \
+   --critic_num_nodes 1 \
+   --critic_num_gpus_per_node 1 \
+   --actor_num_nodes 1 \
+   --actor_num_gpus_per_node 1 \
+   --vllm_num_engines 1 \
+   --vllm_tensor_parallel_size 1 \
+   --colocate_critic_reward \
+   --colocate_actor_ref \
+   --pretrain OpenRLHF/Llama-3-8b-sft-mixture \
+   --reward_pretrain OpenRLHF/Llama-3-8b-rm-mixture \
+   --save_path ${RLHF_CKPT_DIR}/examples/llama3-8b-rlhf \
+   --save_steps 5 \
+   --micro_train_batch_size 8 \
+   --train_batch_size 32 \
+   --micro_rollout_batch_size 32 \
+   --rollout_batch_size 1024 \
+   --max_samples 100000 \
+   --max_epochs 2 \
+   --prompt_max_len 1024 \
+   --generate_max_len 1024 \
+   --zero_stage 3 \
+   --bf16 \
+   --actor_learning_rate 5e-7 \
+   --critic_learning_rate 9e-6 \
+   --init_kl_coef 0.01 \
+   --prompt_data OpenRLHF/prompt-collection-v0.1 \
+   --input_key context_messages \
+   --apply_chat_template \
+   --packing_samples \
+   --normalize_reward \
+   --adam_offload \
+   --flash_attn \
+   --gradient_checkpointing \
+   --use_wandb $WANDB_API_KEY \
+   --wandb_run_name sglang \
+   --wandb_project openrlhf
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/OpenRLHF/openrlhf-sglang.md">rlhf/OpenRLHF/openrlhf-sglang.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

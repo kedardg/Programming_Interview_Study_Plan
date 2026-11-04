@@ -1,0 +1,45 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qwen3-Coder Usage</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/qwen/coder.md</div>
+<article class="note"><h1 id="qwen3-coder-usage">Qwen3-Coder Usage</h1>
+<p><a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/qwen/[https:/github.com/QwenLM/Qwen3](https:/github.com/QwenLM/Qwen3-Coder)">Qwen3-coder</a> is the SOTA LLM developed by the Qwen team, Alibaba Cloud.</p>
+<p>SGLang has supported Qwen3-coder already. The <code>tool-parser</code> shall be used with SGLang &gt;= 0.4.9.post3.</p>
+<pre><code class="language-bash">pip install --upgrade pip
+pip install uv
+uv pip install &quot;sglang[all]&gt;=0.4.9.post3&quot;
+</code></pre>
+<p>Ongoing optimizations are tracked in the Roadmap. </p>
+<h2 id="launch-qwen3-coder-with-sglang">Launch Qwen3-Coder with SGLang</h2>
+<p>To serve Qwen3 model on H200 GPUs:</p>
+<p>For BF16 model</p>
+<pre><code>python3 -m sglang.launch_server --model-path Qwen/Qwen3-Coder-480B-A35B-Instruct --tp 8 --tool-call-parser qwen3 --enable-ep-moe --mem-fraction-static 0.85
+</code></pre>
+<p>For FP8 model</p>
+<pre><code>python3 -m sglang.launch_server --model-path Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8 --tp 8 --tool-call-parser qwen3 --enable-ep-moe --mem-fraction-static 0.85
+</code></pre>
+<h2 id="configuration-tips">Configuration Tips</h2>
+<ul>
+<li><strong>FP8 models</strong> : With <code>--tp</code> Loading failure is expected; switch to expert-parallel mode using <code>--enable-ep-moe</code>.</li>
+<li><strong>Tool call</strong>: Add <code>--tool-call-parser qwen3</code> for tool call parser. </li>
+</ul>
+<h2 id="roadmap">Roadmap</h2>
+<ul>
+<li>[x] Initial Qwen3-Coder Support</li>
+<li>[x] Initial Qwen3-Coder User Guide</li>
+<li>[ ] Streaming Tool Call Support</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/qwen/coder.md">sglang/qwen/coder.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deep Learning Fundamentals</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html" class="here">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Deep Learning Fundamentals</h1>
+<p class="dim">From a single neuron to the training dynamics of billion-parameter models: forward and backward passes, the training loop, optimizers, and what changes at scale. The <a href="math.html">Math chapter</a>'s chain rule and gradient descent do all the heavy lifting here.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (16:38)</h3><audio controls preload="none" src="audio/deep-learning.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/deep-learning.txt">Read the transcript</a>.</p></div>
+<h2 id="neuron">1. From linear regression to a network</h2>
+<p>Start with the simplest learned function: linear regression, <code>y = wx + b</code>, fit by minimizing squared error. A <strong>neuron</strong> is linear regression with many inputs and one twist — a nonlinear <em>activation function</em> applied to the weighted sum: <code>h = σ(w·x + b)</code>. The twist is everything. Stack linear layers without nonlinearities and the stack collapses: a composition of linear maps is itself a linear map (that is the "matrices compose" fact from the <a href="math.html">Math chapter</a>). With nonlinearities between them, stacked layers can bend space, and the <strong>universal approximation theorem</strong> says even one sufficiently wide hidden layer can approximate any continuous function. Depth is not needed for <em>possibility</em> — it is needed for <em>efficiency</em>: deep networks reuse intermediate features the way programs reuse subroutines, representing in thousands of parameters functions that a shallow net would need exponentially many for.</p>
+<p>A <strong>multi-layer perceptron (MLP)</strong> alternates linear maps and activations: <code>h₁ = σ(W₁x + b₁)</code>, <code>h₂ = σ(W₂h₁ + b₂)</code>, … Modern transformers still carry this exact block — the "FFN" inside every layer is a 2-layer MLP that holds roughly two-thirds of the model's parameters.</p>
+<p>Which activation? The field has converged on a small family. ReLU (<code>max(0, x)</code>) is cheap and avoids the vanishing gradients that killed sigmoid/tanh networks — its gradient is exactly 1 wherever the unit is active — but it can "die" (a unit stuck at 0 gets zero gradient forever). GELU and SiLU/Swish smooth the corner so gradients flow even slightly below zero; they are the defaults in modern LLMs (often in the gated <em>SwiGLU</em> arrangement, which multiplies two projections so the network learns its own per-feature gate).</p>
+
+<div class="card">
+<h3>Interactive: activation functions and their gradients</h3>
+<div class="controls" id="actBtns"></div>
+<div class="controls"><label class="ctl"><input type="checkbox" id="actDeriv" checked> show derivative (dashed)</label></div>
+<canvas id="actViz" class="viz" width="900" height="300"></canvas>
+<p class="caption">The solid curve is the activation; the dashed one is its derivative — what backprop multiplies by. Notice sigmoid's derivative never exceeds 0.25 and vanishes in both tails: stack ten sigmoid layers and gradients shrink by up to 0.25¹⁰ ≈ 10⁻⁶ on the way back — the vanishing-gradient problem. ReLU's derivative is a clean 0/1 gate; GELU and SiLU are its smooth relatives.</p>
+</div>
+
+<h2 id="backprop">2. The forward and backward pass</h2>
+<p>Training needs ∂loss/∂w for every weight, and <strong>backpropagation</strong> computes all of them in one backward sweep, at roughly twice the cost of the forward pass. The algorithm is just the chain rule with bookkeeping: run forward and <em>remember the intermediate activations</em>; then walk backward from the loss, computing each node's gradient from the gradients of the nodes that consumed it. Every layer needs only local knowledge — "given dL/d(my output), produce dL/d(my inputs) and dL/d(my weights)" — which is why autograd frameworks can differentiate arbitrary graphs.</p>
+<p>Two facts from this picture reach all the way to systems design later in the track: the stored activations are why training uses so much more memory than inference (and why <em>activation checkpointing</em> trades recompute for memory), and the backward pass's structure — two matmuls per forward matmul — is why training FLOPs ≈ 3× forward FLOPs, the source of the 6ND rule in section 5.</p>
+
+<div class="card">
+<h3>Animation: backprop through a 2–3–1 MLP, number by number</h3>
+<div class="controls">
+  <button class="btn" id="bpStep">Step</button>
+  <button class="btn secondary" id="bpBack">◀ Back</button>
+  <button class="btn secondary" id="bpReset">Reset</button>
+  <span class="dim" id="bpMsg"></span>
+</div>
+<canvas id="bpViz" class="viz" width="900" height="380"></canvas>
+<p class="caption">Input x = [1.0, 0.5], target t = 1.0, ReLU hidden layer, loss = ½(y − t)². Step through the forward pass (values flow left→right, each neuron shows its pre-activation z and activation h) and then the backward pass (red gradients flow right→left; each edge shows ∂L/∂w = upstream gradient × local input). The dead ReLU (h₃ = 0) is deliberate: watch its incoming weights receive exactly zero gradient — a dead unit learns nothing.</p>
+</div>
+
+<h2 id="training-loop">3. The training loop</h2>
+<p>With gradients in hand, training is a loop: sample a <strong>minibatch</strong>, forward, loss, backward, optimizer step, repeat. Minibatches (rather than the full dataset) make each step cheap, and their gradient noise is not purely a defect — it regularizes, helping the model find flatter, better-generalizing minima. Batch size is also the main throughput lever on GPUs, which is why the <a href="gpu.html">GPU chapter</a> cares so much about it.</p>
+<p>The loop's central tension is <strong>generalization</strong>. Training loss falling is guaranteed (you are optimizing it directly); what you care about is <em>validation</em> loss on held-out data. When the two diverge — train keeps falling, validation turns upward — the model is memorizing rather than learning: <strong>overfitting</strong>. The classical toolkit:</p>
+<ul>
+<li><strong>Weight decay</strong> — shrink weights toward zero each step; prefers simpler functions.</li>
+<li><strong>Dropout</strong> — randomly zero a fraction of units each forward pass so no unit can depend on a specific partner; at inference, dropout is off. (LLM pretraining mostly skips dropout — with trillions of tokens seen once, memorization is not the binding constraint.)</li>
+<li><strong>Early stopping</strong> — keep the checkpoint where validation loss bottomed out.</li>
+<li><strong>More data</strong> — the regularizer that actually built modern LLMs.</li>
+</ul>
+
+<div class="card">
+<h3>Animation: overfitting, and dropout fighting it</h3>
+<div class="controls">
+  <button class="btn" id="ofPlay">▶ Train</button>
+  <button class="btn secondary" id="ofReset">Reset</button>
+  <label class="ctl">dropout p <input type="range" id="doP" min="0" max="70" value="0"> <span id="doPLabel">0.00</span></label>
+</div>
+<canvas id="ofViz" class="viz" width="900" height="330"></canvas>
+<p class="caption">Left: training (blue) and validation (orange) loss over epochs; the ✕ marks the early-stopping point where validation bottoms out. Raise dropout and retrain: the curves separate later and less (at the cost of slower training progress). Right: the network being trained — each epoch a new random mask greys out hidden units; the surviving network must still predict.</p>
+</div>
+
+<h3>Normalization: why training deep nets is possible at all</h3>
+<p>As layers train, the distribution of their outputs shifts under the layers above them, destabilizing optimization. Normalization layers re-center and re-scale activations so each layer sees inputs at a predictable scale. <strong>BatchNorm</strong> normalizes each feature across the minibatch — great for CNNs, but it couples examples in a batch and behaves differently at train and eval time. <strong>LayerNorm</strong> normalizes across features <em>within each example</em> — batch-independent, so it became the transformer default. <strong>RMSNorm</strong> drops LayerNorm's mean subtraction and just divides by the root-mean-square (one fewer reduction, one fewer parameter): <code>x / RMS(x) · g</code>. It works as well and is cheaper, so Llama-class models use it — and it is simple enough that writing its fused Triton kernel is a Week-6 exercise in the <a href="../index.html">study plan</a> (the Liger RMSNorm notebook).</p>
+
+<h2 id="optimizers">4. Optimizers</h2>
+<p>Plain SGD follows the raw minibatch gradient. Its failure mode is the elongated valley from the <a href="math.html">Math chapter</a>: huge gradients across the valley, tiny ones along it, so the safe learning rate is set by the steep direction and progress along the flat one crawls. Each improvement fixes part of this:</p>
+<table class="cmp">
+<tr><th>Optimizer</th><th>Update idea</th><th>What it fixes</th></tr>
+<tr><td>SGD</td><td>w ← w − η g</td><td>—</td></tr>
+<tr><td>+ Momentum</td><td>v ← βv + g; w ← w − ηv</td><td>Oscillations cancel in v; progress along the valley accumulates</td></tr>
+<tr><td>Adam</td><td>momentum + divide by √(running mean of g²), per weight</td><td>Each weight gets its own effective step size, so steep and flat directions are rescaled automatically</td></tr>
+<tr><td>AdamW</td><td>Adam, but weight decay applied directly to w, not mixed into g</td><td>Decay strength no longer entangled with the adaptive rescaling — the LLM default</td></tr>
+</table>
+<p>Adam's price is memory: two FP32 state tensors (m and v) per parameter. With FP32 master weights that is ~16 bytes of optimizer state per parameter — a 70B model needs over a terabyte of optimizer state, which is the single biggest reason training needs the sharding techniques (ZeRO/FSDP) in the <a href="training.html">Training chapter</a>.</p>
+
+<div class="card">
+<h3>Animation: optimizer race</h3>
+<div class="controls">
+  <button class="btn" id="raceRun">▶ Race</button>
+  <button class="btn secondary" id="raceReset">Reset</button>
+  <span class="dim">same start, same surface: L = ½x² + 5y²</span>
+</div>
+<canvas id="raceViz" class="viz" width="900" height="340"></canvas>
+<p class="caption">SGD (grey) zig-zags and crawls. Momentum (blue) damps the zig-zag and accelerates down the valley. Adam (green) rescales each coordinate by its own gradient history, so it moves almost straight to the minimum. This 2-D cartoon is unfair in some ways (Adam's advantages are largest on sparse/ill-conditioned problems), but the geometry it shows is the honest reason these optimizers exist.</p>
+</div>
+
+<h3>Learning-rate schedules</h3>
+<p>No single learning rate is right for a whole run. LLM training almost universally uses <strong>warmup + cosine decay</strong>: ramp linearly from ~0 over the first few hundred/thousand steps (early gradients are huge and poorly scaled — warmup prevents an immediate blow-up, especially with Adam's not-yet-calibrated second moments), then decay smoothly so late training takes fine-grained steps that settle into a good minimum.</p>
+
+<div class="card">
+<h3>Interactive: warmup + cosine schedule</h3>
+<div class="controls">
+  <label class="ctl">warmup steps <input type="range" id="lrWarm" min="1" max="30" value="8"> <span id="lrWarmLabel"></span>%</label>
+  <label class="ctl">min LR <input type="range" id="lrMin" min="0" max="50" value="10"> <span id="lrMinLabel"></span>% of peak</label>
+</div>
+<canvas id="lrViz" class="viz" width="900" height="220"></canvas>
+<p class="caption">The schedule every Llama-style run uses. Variants you will meet: linear decay, step decay, and WSD (warmup–stable–decay, which holds the plateau and decays only at the end so one long run can be checkpoint-forked into several shorter ones).</p>
+</div>
+
+<h2 id="scale">5. What changes at scale</h2>
+<p>Scaling laws are the empirical backbone of modern LLMs: across many orders of magnitude, loss falls as a smooth power law in model size N and training tokens D. The <strong>Chinchilla</strong> result made it a budgeting rule — for a fixed compute budget, loss is minimized near <strong>D ≈ 20 N</strong>: a 70B model wants ~1.4T tokens, not the 300B that earlier models used. (Production models now train far <em>past</em> compute-optimal — Llama-3-8B saw 15T tokens — because inference cost rewards over-training a small model: you pay training FLOPs once and serving costs forever.)</p>
+<p>The companion rule of thumb prices a run. One token of training costs about <strong>6 FLOPs per parameter</strong> — 2 for the forward matmuls, 4 for backward (gradients w.r.t. both activations and weights):</p>
+<div class="formula">Training FLOPs ≈ 6 · N · D
+Llama-3-8B:  6 × 8×10⁹ × 15×10¹²  ≈ 7.2×10²³ FLOPs
+On 1,000 H100s at 40% MFU (~400 TFLOP/s each): 7.2e23 / 4e17 ≈ 1.8×10⁶ s ≈ 21 days</div>
+<p>That worked example contains the vocabulary of every training-infrastructure conversation: <strong>MFU</strong> (model FLOPs utilization — achieved useful FLOPs over hardware peak; 35–45% is respectable at scale) and the gap between peak and achieved, which the <a href="gpu.html">GPU</a> and <a href="parallelism.html">Parallelism</a> chapters spend themselves explaining.</p>
+<p>Two more realities of large-scale training round out the picture:</p>
+<ul>
+<li><strong>Instability.</strong> Big runs hit <em>loss spikes</em> — sudden jumps from rare bad batches or numerical issues. Defenses: <strong>gradient clipping</strong> (rescale the global gradient norm to a cap, typically 1.0, so no single step is catastrophic), careful initialization, and skipping/rewinding bad batches.</li>
+<li><strong>Mixed precision.</strong> Compute in BF16 (half the memory and bandwidth, and tensor cores run it at twice FP32 throughput — see <a href="quantization.html">Quantization</a> for the formats), but keep FP32 <em>master weights</em> and optimizer state, because a BF16 weight's 8-bit mantissa cannot absorb a tiny gradient update — the add rounds to nothing and learning silently stalls. FP16 needs an extra <em>loss-scaling</em> trick (multiply the loss by ~2¹⁴ so small gradients don't underflow its narrow range); BF16's FP32-sized exponent is exactly why it displaced FP16 for training.</li>
+</ul>
+
+<h2 id="reading">6. Where to go deeper</h2>
+<ul>
+<li><a href="https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi">3Blue1Brown: Neural networks</a> — the animated backprop intuition.</li>
+<li><a href="https://karpathy.ai/zero-to-hero.html">Karpathy: Neural Networks — Zero to Hero</a> — build micrograd (backprop from scratch) and GPT by hand; the single best companion to this chapter.</li>
+<li><a href="https://playground.tensorflow.org/">TensorFlow Playground</a> — train small MLPs live in the browser and watch features form.</li>
+<li><a href="https://arxiv.org/abs/2203.15556">Chinchilla paper</a> — compute-optimal scaling; <a href="https://distill.pub/2017/momentum/">Why Momentum Really Works</a> (Distill) — the interactive deep-dive on section 4.</li>
+<li>Then test yourself with the <a href="flashcards.html">Deep Learning flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="math.html">← Math</a><a href="transformers.html">Transformers →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function themeWatch(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+
+// ---------- 1. activations ----------
+(function(){
+const cv=document.getElementById('actViz'),ctx=cv.getContext('2d');
+const F={
+ ReLU:{f:x=>Math.max(0,x),d:x=>x>0?1:0,c:'#5b8cff',on:true},
+ GELU:{f:x=>0.5*x*(1+Math.tanh(0.79788456*(x+0.044715*x*x*x))),d:null,c:'#38c6a0',on:true},
+ SiLU:{f:x=>x/(1+Math.exp(-x)),d:null,c:'#f2a65a',on:false},
+ sigmoid:{f:x=>1/(1+Math.exp(-x)),d:x=>{const s=1/(1+Math.exp(-x));return s*(1-s)},c:'#e5604c',on:true},
+ tanh:{f:Math.tanh,d:x=>1-Math.tanh(x)**2,c:'#b07cff',on:false}};
+Object.values(F).forEach(o=>{if(!o.d)o.d=x=>(o.f(x+1e-4)-o.f(x-1e-4))/2e-4;});
+const btns=document.getElementById('actBtns');
+Object.keys(F).forEach(k=>{
+  const b=document.createElement('button');b.className='btn secondary';b.textContent=k;
+  b.style.borderColor=F[k].c;if(F[k].on)b.style.background=F[k].c,b.style.color='#fff';
+  b.onclick=()=>{F[k].on=!F[k].on;if(F[k].on){b.style.background=F[k].c;b.style.color='#fff';}else{b.style.background='';b.style.color='';}draw();};
+  btns.appendChild(b);});
+document.getElementById('actDeriv').onchange=draw;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),bd=css('--border');
+  const O={x:W/2,y:H/2+20},S=90;
+  ctx.strokeStyle=bd;ctx.lineWidth=1;
+  for(let i=-4;i<=4;i++){ctx.beginPath();ctx.moveTo(O.x+i*S,0);ctx.lineTo(O.x+i*S,H);ctx.stroke();}
+  ctx.strokeStyle=dim;ctx.beginPath();ctx.moveTo(0,O.y);ctx.lineTo(W,O.y);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(O.x,0);ctx.lineTo(O.x,H);ctx.stroke();
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('x',W-16,O.y-6);
+  const showD=document.getElementById('actDeriv').checked;
+  Object.entries(F).forEach(([k,o])=>{
+    if(!o.on)return;
+    [[o.f,false],[o.d,true]].forEach(([fn,dash])=>{
+      if(dash&&!showD)return;
+      ctx.strokeStyle=o.c;ctx.lineWidth=dash?1.5:2.5;ctx.setLineDash(dash?[5,4]:[]);
+      ctx.beginPath();let first=true;
+      for(let px=0;px<=W;px+=2){const x=(px-O.x)/S,y=fn(x);const py=O.y-y*S;
+        if(py<-50||py>H+50){first=true;continue;}
+        first?ctx.moveTo(px,py):ctx.lineTo(px,py);first=false;}
+      ctx.stroke();ctx.setLineDash([]);});
+  });
+}
+draw();themeWatch(draw);
+})();
+
+// ---------- 2. backprop stepper ----------
+(function(){
+const cv=document.getElementById('bpViz'),ctx=cv.getContext('2d');
+// network: x(2) -> h(3, ReLU) -> y(1), loss = 0.5(y-t)^2
+const x=[1.0,0.5],t=1.0;
+const W1=[[0.5,-0.3],[0.8,0.2],[-0.6,0.9]],b1=[0.1,-0.2,0.05];
+const W2=[0.7,-0.5,0.6],b2=0.2;
+const z=W1.map((r,i)=>r[0]*x[0]+r[1]*x[1]+b1[i]);
+const h=z.map(v=>Math.max(0,v));
+const y=W2[0]*h[0]+W2[1]*h[1]+W2[2]*h[2]+b2;
+const L=0.5*(y-t)**2;
+const dy=y-t;
+const dW2=h.map(v=>dy*v);
+const dh=W2.map(w=>dy*w);
+const dz=dh.map((g,i)=>z[i]>0?g:0);
+const dW1=dz.map(g=>[g*x[0],g*x[1]]);
+const steps=[
+ 'Press Step to run the forward pass.',
+ 'Forward 1/3 — hidden pre-activations: zᵢ = Wᵢ·x + bᵢ. E.g. z₁ = 0.5·1.0 + (−0.3)·0.5 + 0.1 = '+z[0].toFixed(2)+'.',
+ 'Forward 2/3 — ReLU: hᵢ = max(0, zᵢ). Note h₃ = max(0, '+z[2].toFixed(2)+') = 0 — a dead unit this pass.',
+ 'Forward 3/3 — output y = W₂·h + b₂ = '+y.toFixed(3)+'; loss L = ½(y − 1.0)² = '+L.toFixed(3)+'. Activations are KEPT for backward.',
+ 'Backward 1/4 — ∂L/∂y = y − t = '+dy.toFixed(3)+'. One number starts the whole backward pass.',
+ 'Backward 2/4 — output weights: ∂L/∂W₂ᵢ = ∂L/∂y · hᵢ (upstream grad × stored input). h₃ = 0 ⇒ its weight gets grad 0.',
+ 'Backward 3/4 — into the hidden layer: ∂L/∂hᵢ = ∂L/∂y · W₂ᵢ, then through ReLU: ∂L/∂zᵢ = ∂L/∂hᵢ if zᵢ>0 else 0. The dead unit blocks its gradient entirely.',
+ 'Backward 4/4 — input weights: ∂L/∂W₁ᵢⱼ = ∂L/∂zᵢ · xⱼ. Every gradient = upstream × local. Now the optimizer steps: w ← w − η·∇w.'];
+let s=0;
+const P={x:[{x:110,y:120},{x:110,y:250}],h:[{x:430,y:70},{x:430,y:185},{x:430,y:300}],y:{x:730,y:185}};
+function draw(){
+  const Wd=cv.width,H=cv.height;ctx.clearRect(0,0,Wd,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),bd=css('--border'),danger=css('--danger'),txt=css('--text');
+  document.getElementById('bpMsg').textContent='step '+s+'/'+(steps.length-1);
+  ctx.font='12px monospace';
+  const fwdZ=s>=1,fwdH=s>=2,fwdY=s>=3,bY=s>=4,bW2=s>=5,bH=s>=6,bW1=s>=7;
+  // edges x->h
+  P.x.forEach((px,j)=>P.h.forEach((ph,i)=>{
+    ctx.strokeStyle=bW1?danger:(fwdZ?acc:bd);ctx.lineWidth=bW1?2:1.5;
+    ctx.beginPath();ctx.moveTo(px.x+22,px.y);ctx.lineTo(ph.x-22,ph.y);ctx.stroke();
+    const mx=(px.x+ph.x)/2,my=(px.y+ph.y)/2+(j?10:-8);
+    ctx.fillStyle=bW1?danger:dim;
+    ctx.fillText(bW1?('∇'+dW1[i][j].toFixed(2)):('w='+W1[i][j]),mx-26,my);
+  }));
+  // edges h->y
+  P.h.forEach((ph,i)=>{
+    ctx.strokeStyle=bW2?danger:(fwdY?acc:bd);ctx.lineWidth=bW2?2:1.5;
+    ctx.beginPath();ctx.moveTo(ph.x+22,ph.y);ctx.lineTo(P.y.x-22,P.y.y);ctx.stroke();
+    const mx=(ph.x+P.y.x)/2,my=(ph.y+P.y.y)/2-6;
+    ctx.fillStyle=bW2?danger:dim;
+    ctx.fillText(bW2?('∇'+dW2[i].toFixed(2)):('w='+W2[i]),mx-24,my);
+  });
+  // nodes
+  function node(p,label,val,on,gradTxt){
+    ctx.beginPath();ctx.arc(p.x,p.y,22,0,7);
+    ctx.fillStyle=on?acc:css('--bg-inset');ctx.fill();
+    ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.stroke();
+    ctx.fillStyle=on?'#fff':dim;ctx.textAlign='center';ctx.fillText(label,p.x,p.y+4);
+    ctx.textAlign='left';ctx.fillStyle=txt;
+    if(val)ctx.fillText(val,p.x-30,p.y+42);
+    if(gradTxt){ctx.fillStyle=danger;ctx.fillText(gradTxt,p.x-30,p.y+58);}
+  }
+  P.x.forEach((p,j)=>node(p,'x'+(j+1),'= '+x[j].toFixed(1),true));
+  P.h.forEach((p,i)=>node(p,'h'+(i+1),
+    fwdH?('z='+z[i].toFixed(2)+' h='+h[i].toFixed(2)):(fwdZ?('z='+z[i].toFixed(2)):''),
+    fwdZ, bH?('∂z='+dz[i].toFixed(2)):null));
+  node(P.y,'y',fwdY?('y='+y.toFixed(3)):'',fwdY,bY?('∂y='+dy.toFixed(2)):null);
+  if(fwdY){ctx.fillStyle=txt;ctx.fillText('L = ½(y−t)² = '+L.toFixed(3)+'   (t = 1.0)',P.y.x-60,P.y.y-50);}
+  // message
+  ctx.fillStyle=txt;ctx.font='13px sans-serif';
+  wrap(steps[s],30,H-34,Wd-60);
+  function wrap(text,x0,y0,maxw){const words=text.split(' ');let line='',yy=y0;
+    words.forEach(w=>{if(ctx.measureText(line+w).width>maxw){ctx.fillText(line,x0,yy);line=w+' ';yy+=17;}else line+=w+' ';});
+    ctx.fillText(line,x0,yy);}
+}
+document.getElementById('bpStep').onclick=()=>{if(s<steps.length-1)s++;draw();};
+document.getElementById('bpBack').onclick=()=>{if(s>0)s--;draw();};
+document.getElementById('bpReset').onclick=()=>{s=0;draw();};
+draw();themeWatch(draw);
+})();
+
+// ---------- 3. overfitting + dropout ----------
+(function(){
+const cv=document.getElementById('ofViz'),ctx=cv.getContext('2d');
+let epoch=0,timer=null,mask=[1,1,1,1,1,1,1,1,1,1,1,1];
+const pS=document.getElementById('doP'),pL=document.getElementById('doPLabel');
+pS.oninput=()=>{pL.textContent=(pS.value/100).toFixed(2);};pS.oninput();
+const EPOCHS=100;
+function curves(){
+  const p=pS.value/100;
+  const tr=[],va=[];
+  for(let e=0;e<=EPOCHS;e++){
+    const slow=1+1.6*p;
+    tr.push(1.8*Math.exp(-e/(14*slow))+0.08+0.02*Math.sin(e*1.3));
+    const overfit=Math.max(0,e-28*(1+2.2*p))/(60);
+    va.push(1.8*Math.exp(-e/(16*slow))+0.22+overfit*overfit*1.1*(1-0.85*p)+0.02*Math.sin(e*0.9+2));
+  }
+  return{tr,va};
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),warn=css('--warn'),dim=css('--text-dim'),bd=css('--border'),txt=css('--text');
+  const {tr,va}=curves();
+  const x0=50,y0=H-40,pw=470,ph=H-80;
+  ctx.strokeStyle=bd;ctx.strokeRect(x0,y0-ph,pw,ph);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';
+  ctx.fillText('loss',x0-34,y0-ph+10);ctx.fillText('epochs →',x0+pw-54,y0+16);
+  function plot(arr,color){
+    ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
+    for(let e=0;e<=Math.min(epoch,EPOCHS);e++){
+      const px=x0+e/EPOCHS*pw,py=y0-Math.min(arr[e],2.2)/2.2*ph;
+      e?ctx.lineTo(px,py):ctx.moveTo(px,py);}
+    ctx.stroke();}
+  plot(tr,acc);plot(va,warn);
+  ctx.fillStyle=acc;ctx.fillText('train',x0+8,y0-ph+16);
+  ctx.fillStyle=warn;ctx.fillText('validation',x0+8,y0-ph+30);
+  // early stop marker
+  if(epoch>5){let best=0;for(let e=0;e<=Math.min(epoch,EPOCHS);e++)if(va[e]<va[best])best=e;
+    const px=x0+best/EPOCHS*pw,py=y0-Math.min(va[best],2.2)/2.2*ph;
+    ctx.strokeStyle=txt;ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(px-6,py-6);ctx.lineTo(px+6,py+6);ctx.moveTo(px+6,py-6);ctx.lineTo(px-6,py+6);ctx.stroke();
+    ctx.fillStyle=dim;ctx.fillText('early stop',px-24,py-12);}
+  // network with dropout
+  const nx=600;
+  const layers=[[0,1,2,3].map(i=>({x:nx,y:60+i*62})),
+                [0,1,2,3,4,5].map(i=>({x:nx+120,y:40+i*48})),
+                [0,1,2,3,4,5].map(i=>({x:nx+240,y:40+i*48})),
+                [0,1].map(i=>({x:nx+340,y:120+i*80}))];
+  for(let l=0;l<3;l++)layers[l].forEach((a,ai)=>layers[l+1].forEach((b,bi)=>{
+    const dropA=l>0&&!mask[(l-1)*6+ai],dropB=l<2&&!mask[l*6+bi];
+    ctx.strokeStyle=bd;ctx.globalAlpha=(dropA||dropB)?0.12:0.6;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();ctx.globalAlpha=1;}));
+  layers.forEach((L,l)=>L.forEach((n,i)=>{
+    const dropped=(l===1||l===2)&&!mask[(l-1)*6+i];
+    ctx.beginPath();ctx.arc(n.x,n.y,10,0,7);
+    ctx.fillStyle=dropped?'rgba(128,128,128,0.25)':acc;ctx.fill();
+    if(dropped){ctx.strokeStyle=dim;ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(n.x-6,n.y-6);ctx.lineTo(n.x+6,n.y+6);ctx.stroke();}
+  }));
+  ctx.fillStyle=dim;ctx.fillText('epoch '+Math.min(epoch,EPOCHS)+' — fresh dropout mask each epoch',nx,H-14);
+}
+function tick(){
+  epoch++;const p=pS.value/100;
+  mask=mask.map(()=>Math.random()<p?0:1);
+  draw();if(epoch>EPOCHS)stop();
+}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('ofPlay').textContent='▶ Train';}}
+document.getElementById('ofPlay').onclick=function(){if(timer){stop();return;}if(epoch>EPOCHS)epoch=0;this.textContent='⏸ Pause';timer=setInterval(tick,120);};
+document.getElementById('ofReset').onclick=()=>{stop();epoch=0;mask=mask.map(()=>1);draw();};
+draw();themeWatch(draw);
+})();
+
+// ---------- 4. optimizer race ----------
+(function(){
+const cv=document.getElementById('raceViz'),ctx=cv.getContext('2d');
+const O={x:450,y:170},SX=52,SY=52;
+const start={x:-6.5,y:1.35};
+function grad(p){return{x:p.x,y:10*p.y};}
+let racers=null,timer=null;
+function init(){
+  racers=[
+   {name:'SGD',c:'#9aa3b5',p:{...start},step(){const g=grad(this.p);this.p.x-=0.085*g.x;this.p.y-=0.085*g.y;},trail:[{...start}]},
+   {name:'Momentum',c:'#5b8cff',p:{...start},v:{x:0,y:0},step(){const g=grad(this.p);this.v.x=0.9*this.v.x-0.028*g.x;this.v.y=0.9*this.v.y-0.028*g.y;this.p.x+=this.v.x;this.p.y+=this.v.y;},trail:[{...start}]},
+   {name:'Adam',c:'#38c6a0',p:{...start},m:{x:0,y:0},v:{x:0,y:0},t:0,step(){const g=grad(this.p);this.t++;
+     ['x','y'].forEach(k=>{this.m[k]=0.9*this.m[k]+0.1*g[k];this.v[k]=0.999*this.v[k]+0.001*g[k]*g[k];
+       const mh=this.m[k]/(1-Math.pow(0.9,this.t)),vh=this.v[k]/(1-Math.pow(0.999,this.t));
+       this.p[k]-=0.35*mh/(Math.sqrt(vh)+1e-8);});},trail:[{...start}]}];
+}
+function toPx(v){return{x:O.x+v.x*SX,y:O.y-v.y*SY}}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const bd=css('--border'),dim=css('--text-dim');
+  [0.15,0.5,1.2,2.5,4.5,7.5,11.5,17,23].forEach(c=>{
+    ctx.strokeStyle=bd;ctx.lineWidth=1.2;ctx.beginPath();
+    ctx.ellipse(O.x,O.y,Math.sqrt(2*c)*SX,Math.sqrt(c/5)*SY,0,0,7);ctx.stroke();});
+  ctx.strokeStyle=dim;ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(O.x-6,O.y-6);ctx.lineTo(O.x+6,O.y+6);ctx.moveTo(O.x+6,O.y-6);ctx.lineTo(O.x-6,O.y+6);ctx.stroke();
+  racers.forEach((r,i)=>{
+    ctx.strokeStyle=r.c;ctx.lineWidth=2;ctx.beginPath();
+    r.trail.forEach((p,j)=>{const q=toPx(p);j?ctx.lineTo(q.x,q.y):ctx.moveTo(q.x,q.y);});ctx.stroke();
+    const q=toPx(r.p);ctx.fillStyle=r.c;ctx.beginPath();ctx.arc(q.x,q.y,7,0,7);ctx.fill();
+    ctx.font='bold 13px sans-serif';ctx.fillText(r.name,20,30+i*20);
+    const L=r.p.x*r.p.x/2+5*r.p.y*r.p.y;
+    ctx.font='12px monospace';ctx.fillText('L='+L.toFixed(3),120,30+i*20);
+  });
+}
+function tick(){racers.forEach(r=>{r.step();r.trail.push({...r.p});if(r.trail.length>500)r.trail.shift();});draw();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('raceRun').textContent='▶ Race';}}
+document.getElementById('raceRun').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(tick,50);};
+document.getElementById('raceReset').onclick=()=>{stop();init();draw();};
+init();draw();themeWatch(()=>draw());
+})();
+
+// ---------- 4b. lr schedule ----------
+(function(){
+const cv=document.getElementById('lrViz'),ctx=cv.getContext('2d');
+const wS=document.getElementById('lrWarm'),wL=document.getElementById('lrWarmLabel');
+const mS=document.getElementById('lrMin'),mL=document.getElementById('lrMinLabel');
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),dim=css('--text-dim'),bd=css('--border');
+  const warm=wS.value/100,minF=mS.value/100;
+  wL.textContent=wS.value;mL.textContent=mS.value;
+  const x0=50,y0=H-36,pw=W-100,ph=H-70;
+  ctx.strokeStyle=bd;ctx.strokeRect(x0,y0-ph,pw,ph);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';
+  ctx.fillText('LR',x0-30,y0-ph+12);ctx.fillText('training steps →',x0+pw-92,y0+16);
+  ctx.strokeStyle=acc;ctx.lineWidth=2.5;ctx.beginPath();
+  for(let i=0;i<=pw;i++){
+    const f=i/pw;let lr;
+    if(f<warm)lr=f/warm;
+    else lr=minF+(1-minF)*0.5*(1+Math.cos(Math.PI*(f-warm)/(1-warm)));
+    const py=y0-lr*ph*0.92-4;
+    i?ctx.lineTo(x0+i,py):ctx.moveTo(x0+i,py);}
+  ctx.stroke();
+  ctx.fillStyle=dim;
+  const wx=x0+warm*pw;
+  ctx.setLineDash([4,4]);ctx.strokeStyle=dim;ctx.lineWidth=1;
+  ctx.beginPath();ctx.moveTo(wx,y0);ctx.lineTo(wx,y0-ph);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillText('warmup ends',wx+5,y0-ph+16);
+  ctx.fillText('cosine decay to '+mS.value+'% of peak',x0+pw*0.55,y0-ph*0.35);
+}
+wS.oninput=draw;mS.oninput=draw;
+draw();themeWatch(draw);
+})();
+</script>
+</body>
+</html>

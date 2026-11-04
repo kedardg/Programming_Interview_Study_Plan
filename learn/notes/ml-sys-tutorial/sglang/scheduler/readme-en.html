@@ -1,0 +1,547 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>From KV Cache to Zero Overhead Scheduling: Understanding SGLang&#x27;s Scheduling Ingenuity</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/scheduler/readme-en.md</div>
+<article class="note"><h1 id="from-kv-cache-to-zero-overhead-scheduling-understanding-sglangs-scheduling-ingenuity">From KV Cache to Zero Overhead Scheduling: Understanding SGLang's Scheduling Ingenuity</h1>
+<p>I've been wanting to systematically study the SGLang Scheduler for a year now. Around November '24, some friends and I wrote the <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/code-walk-through/readme-CN.md">SGLang Code Walkthrough</a>, but we stopped at KV Cache Management and Scheduler analysis. Since then, a whole year has passed, and the SGLang project has undergone earth-shaking changes. However, in my opinion, the scheduling algorithm itself has long since converged. The most significant innovation remains the <a href="https://lmsys.org/blog/2024-12-04-sglang-v0-4/#zero-overhead-batch-scheduler">zero-overhead batch scheduler</a> completed by lianmin in December '24. Since then, much of SGLang's optimization has been on the MoE architecture. I've been busy dealing with various RL frameworks, so the idea of studying SGLang KV Cache and Scheduler was put on hold. But this was always on my mind; otherwise, seeing discussions in SGLang technical groups that I didn't understand would cause deep technical anxiety.</p>
+<p>Furthermore, Junrong (a member of the Qwen RL Infra team and an old SGLang RL teammate) once told me, "Nowadays, I feel that the upper limit of RL infra often depends on the level of understanding of SGLang and Megatron themselves." This often reminds me that a deep understanding of inference and training systems is key to driving RL infra development. Indeed, I have written many deep thoughts on RL systems before, such as:</p>
+<ol>
+<li><a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/sys-design/readme-4.md">Deep Dive into DeepSeek MoE: Classical Secondary Development of EP and FSDP</a></li>
+<li><a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/sys-design/readme-1.md">RL System Reflections: Deep Understanding of Weight Update Mechanisms</a></li>
+<li><a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/sys-design/readme-2.md">RL System Reflections: FSDP Training Backend</a></li>
+</ol>
+<p>This article will follow the logic of the above three articles to deeply understand SGLang's scheduling system, from KV Cache to Overlapped Scheduling, explaining SGLang's scheduling ingenuity in one go.</p>
+<p>[Special thanks to Liu Zhiyi's original article <a href="https://zhuanlan.zhihu.com/p/1969077475129688722">SGLang Scheduler Evolution</a>]</p>
+<p>Considering that the scheduling system is perhaps the most complex central component of SGLang, I have revised the writing structure several times for easier understanding. Generally, I will first isolate several important classes and data structures, and then analyze the overall workflow of the scheduler.</p>
+<h2 id="key-class-and-data-structure">Key Class and Data Structure</h2>
+<p>First, let's review two high-level architecture diagrams of SGLang:</p>
+<div style="text-align: center;">
+<img src="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/raw/main/sglang/code-walk-through/sglang-architecture.svg" alt="SGLang Architecture" width="1000">
+</div>
+
+<div style="text-align: center;">
+<img src="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/raw/main/sglang/code-walk-through/sglang_scheduler.svg" alt="SGLang Architecture" width="1000">
+</div>
+
+<h3 id="scheduler">Scheduler</h3>
+<p>The <code>Scheduler</code> manages all active requests through the following core logic objects:</p>
+<ol>
+<li><code>waiting_queue</code>: As the name suggests, <code>waiting_queue</code> is a priority queue for all active requests. All requests that haven't finished prefill and requests retracted during the decode phase are placed here. Before each loop, if the queue is not empty, the Scheduler calls <code>self.policy.calc_priority(self.waiting_queue)</code> to reorder the queue based on preset strategies (like FCFS, longest prefix match, etc.), and then forms a <code>new_batch</code> via <code>PrefillAdder</code>.</li>
+</ol>
+<p>A request is considered to have "completed Prefill" only after the last chunk is processed, moving it to the Decode phase. In an intermediate state, it is neither in the <code>waiting_queue</code> (since it has started running) nor in the traditional <code>running_batch</code> (since it hasn't reached Decode); it is managed by the Scheduler through a separate <code>self.chunked_req</code> variable.</p>
+<ol start="2">
+<li>
+<p><code>new_batch</code>: Requests about to enter the prefill/extend phase. Given the characteristics of chunked prefill, if a request is very long and exceeds <code>chunked_prefill_size</code>, it will be marked with <code>self.chunked_req = True</code> and handled specially: it only joins the <code>running_batch</code> for Decode once all its chunks are prefilled. In the intermediate state, it's held by <code>self.chunked_req</code>. The full scheduling trajectory for a new request is: <code>waiting_queue -&gt; new_batch (current round) -&gt; last_batch (start of next round) -&gt; running_batch (merged)</code>; while for requests already in decode: <code>running_batch -&gt; cur_batch (current round) -&gt; running_batch (start of next round)</code>.</p>
+</li>
+<li>
+<p><code>running_batch</code>: Requests about to enter the decode phase. When GPU memory (KV Cache Pool) is heavily fragmented or insufficient for the next token of all requests, the Scheduler uses <code>retract_decode</code> to withdraw some requests from <code>running_batch</code> back to <code>waiting_queue</code>. (PS: Honestly, the names <code>running_batch</code> and <code>new_batch</code> are somewhat misleading. It might be more accurate to call them <code>decode_batch</code> and <code>prefill_batch</code>.)</p>
+</li>
+<li>
+<p><code>cur_batch</code>: The requests currently being processed in the Scheduler's main loop function <code>run_batch</code>. Note that SGLang is prefill-first; it only enters the decode phase when no new prefill batch exists. Thus, if <code>new_batch</code> exists, <code>cur_batch = new_batch</code>, otherwise <code>cur_batch = running_batch</code>.</p>
+</li>
+</ol>
+<pre><code class="language-python">def get_next_batch_to_run(self):
+    # Core detail: Only if the last round was Prefill (Extend), do we need to merge into the Decode queue
+    if self.last_batch and self.last_batch.forward_mode.is_extend():
+        self.running_batch.merge_batch(self.last_batch)
+
+    # Prefill priority strategy
+    new_batch = self.get_new_batch_prefill()
+    if new_batch:
+        return new_batch
+    else:
+        # If no Prefill, update and run Decode
+    return self.update_running_batch(self.running_batch)
+</code></pre>
+<pre><code class="language-mermaid">graph TD
+    subgraph Prefill_Stage [Prefill Stage]
+        direction TB
+        A([get_next_batch_prefill]) --&gt; B[new_batch]
+    end
+
+    subgraph Decode_Stage [Decode Stage]
+        direction TB
+        C[last_batch] -- merge_batch --- E
+        D[running_batch] -- merge_batch --- E
+        E[running_batch]
+    end
+
+    %% Core flow logic
+    B -- &quot;Next round (Prefill completed)&quot; --&gt; C
+
+    B -- &quot;Prefill priority (If exists)&quot; --&gt; F
+    E -- &quot;If no Prefill (Otherwise)&quot; --&gt; F
+
+    subgraph Run_Batch_Stage [run_batch function]
+        F[cur_batch]
+    end
+
+    %% Style settings
+    style A fill:#ffcc99,stroke:#e68a00
+    style B fill:#d1e0ff,stroke:#5c85d6
+    style C fill:#d1e0ff,stroke:#5c85d6
+    style D fill:#d1e0ff,stroke:#5c85d6
+    style E fill:#d1e0ff,stroke:#5c85d6
+    style F fill:#d1e0ff,stroke:#5c85d6
+
+    style Prefill_Stage fill:#e8f5e9,stroke:#81c784,stroke-dasharray: 5 5
+    style Decode_Stage fill:#e8f5e9,stroke:#81c784,stroke-dasharray: 5 5
+    style Run_Batch_Stage fill:#ffebee,stroke:#e57373
+</code></pre>
+<h3 id="batch">Batch</h3>
+<p><code>waiting_queue, new_batch, running_batch, cur_batch</code> describe the control logic of a request. Here we analyze four batch-related classes defined in the Scheduler: <code>ScheduleBatch</code>, <code>ModelWorkerBatch</code>, <code>ForwardBatch</code>, and <code>GenerationBatchResult</code>. They describe the data structures actually executed on different hardware resources. Note that <code>waiting_queue, new_batch, running_batch, cur_batch</code> are all instances of <code>ScheduleBatch</code>.</p>
+<ol>
+<li><strong><code>ScheduleBatch</code></strong></li>
+</ol>
+<p><code>ScheduleBatch</code> is managed by the Scheduler and contains high-level scheduling information, with most data residing on the CPU.</p>
+<pre><code class="language-python">class ScheduleBatch:
+    reqs: List[Req]  # List of requests
+    req_to_token_pool: ReqToTokenPool  # Mapping pool of all tokens for all requests to kv cache
+    token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator  # KV cache allocator
+    tree_cache: BasePrefixCache  # Prefix cache tree
+    forward_mode: ForwardMode  # Forward mode
+
+    # Batch related
+    input_ids: torch.Tensor  # Input token IDs
+    seq_lens: torch.Tensor  # Sequence lengths of all requests
+    extend_lens: List[int]  # Extension lengths (seq_len - prefix_len)
+    prefix_lens: List[int]  # Prefix lengths of all requests
+</code></pre>
+<ol start="2">
+<li><strong><code>ModelWorkerBatch</code></strong></li>
+</ol>
+<p><code>ModelWorkerBatch</code> is managed by <code>TpModelWorker</code> and contains only data related to model forward on the GPU. it will be converted from the CPU Scheduler to the GPU ModelRunner.</p>
+<pre><code class="language-python">class ModelWorkerBatch:
+    forward_mode: ForwardMode
+    input_ids: torch.Tensor # Input token IDs
+    req_pool_indices: torch.Tensor # Indices for out_cache_loc for all requests
+    seq_lens: torch.Tensor # Sequence lengths of all requests
+    out_cache_loc: torch.Tensor # KV cache slot indices for new tokens in this batch
+</code></pre>
+<ol start="3">
+<li><strong><code>ForwardBatch</code></strong></li>
+</ol>
+<p><code>ForwardBatch</code> is managed by <code>ModelRunner</code> and contains only data related to model forward on the GPU, including the low-level tensor data.</p>
+<pre><code class="language-python">class ForwardBatch:
+    forward_mode: ForwardMode
+    batch_size: int
+    input_ids: torch.Tensor
+    seq_lens: torch.Tensor
+    positions: torch.Tensor  # Position encodings
+</code></pre>
+<ol start="4">
+<li><strong><code>GenerationBatchResult</code></strong></li>
+</ol>
+<p><code>GenerationBatchResult</code>, as the name suggests, is the output of the model forward.</p>
+<pre><code class="language-python">class GenerationBatchResult:
+    logits_output: torch.Tensor # Full logits output and related info from model forward
+    next_token_ids: torch.Tensor # Next token IDs after sampling
+    num_accepted_tokens: int # Number of accepted tokens in speculative decoding
+    next_draft_input: Optional[EagleDraftInput] # Next round input for speculative decoding
+    extend_input_len_per_req: List[int] # Extension input length per request
+    extend_logprob_start_len_per_req: List[int] # Starting position for logprob calculation per request
+    copy_done: torch.cuda.Event # Synchronization event for GPU to CPU data transfer
+    delay_sample_func: Optional[callable] # Delayed sampling function
+    future_indices: Optional[FutureIndices] # Index information in the Future mechanism
+</code></pre>
+<p>In <code>TpModelWorker::forward_batch_generation</code>, after the GPU completes inference (Forward) and sampling (Sample), it packs all outputs into <code>GenerationBatchResult</code> and returns it to the Scheduler.</p>
+<pre><code class="language-python"># TpModelWorker.py illustrative code
+def forward_batch_generation(self, model_worker_batch):
+    # 1. Run model forward
+    logits_output = self.model_runner.forward(forward_batch)
+    # 2. Sample to get tokens
+    next_token_ids = self.model_runner.sample(logits_output, forward_batch)
+
+    # 3. Pack and return all results
+    return GenerationBatchResult(
+        logits_output=logits_output,
+        next_token_ids=next_token_ids,
+        ...
+    )
+</code></pre>
+<p>After receiving <code>GenerationBatchResult</code> in the main loop, the Scheduler updates each request's state based on the carried information, mainly in the <code>process_batch_result</code> function:</p>
+<ul>
+<li><strong>Update Token</strong>: Append values from <code>next_token_ids</code> to each request's <code>output_ids</code>.</li>
+<li><strong>Determine Termination</strong>: Check if the new token is a stop token (EOS); if so, remove the request from <code>running_batch</code>.</li>
+<li><strong>Streaming Output</strong>: Based on logprob info in <code>logits_output</code>, push results to the frontend via <code>stream_output</code> if it's a streaming request.</li>
+<li><strong>Resource Release</strong>: If a request completes, notify Radix Cache to release or cache the corresponding KV Cache.</li>
+</ul>
+<p>Note that in Zero Overhead Scheduling (discussed later), CPU scheduling is overlapped with GPU computation. In this mode, <code>GenerationBatchResult</code> is key to asynchronous non-blocking scheduling:</p>
+<ul>
+<li><strong>Delayed Sampling (<code>delay_sample_func</code>)</strong>: In overlap mode, the GPU doesn't immediately block after forward; it returns a <code>result</code> containing a sampling function. The Scheduler can use the GPU sampling gap to process post-scheduling for the previous batch.</li>
+<li><strong>Synchronization Token (<code>copy_done</code>)</strong>: Carries a CUDA Event. When the CPU truly needs to access token IDs (e.g., to send to a user), it calls <code>result.copy_done.synchronize()</code>, ensuring it doesn't read incomplete data.</li>
+<li><strong>Placeholder Management (<code>future_indices</code>)</strong>: In overlap mode, current output is the next batch's input. <code>GenerationBatchResult</code> records these tokens' positions in the GPU <code>FutureMap</code>, allowing the next batch to read results directly from GPU memory without CPU transit.</li>
+</ul>
+<h3 id="kv-cache-management">KV Cache Management</h3>
+<p>Scheduling itself involves little KV Cache management directly, so it can be analyzed separately. Interestingly, when SGLang first launched, the combination of RadixCache and PagedAttention gave it a massive throughput advantage over vLLM (which only used PagedAttention then). This was around August 2024, when I first joined the SGLang community. Back then, I mistakenly thought RadixCache and PagedAttention competed for the same role. Even when Ying Sheng told me they weren't contradictory, I didn't fully grasp their relationship. It wasn't until I recently re-examined the Scheduler that I understood: by early 2025, both are standard in SGLang and vLLM, acting like "multi-level indexing" in an OS.</p>
+<p>Actually, Paged Attention is like an OS page table, solving the "logical cache address to physical storage address" mapping; it lets logically continuous KV Cache be scattered in physical VRAM to reduce fragmentation. Radix Cache handles "cache reuse"; requests with the same prefix can reuse logical cache addresses, avoiding redundant computation.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Dimension</th>
+<th style="text-align: left;">Paged Attention (Addressing Layer)</th>
+<th style="text-align: left;">Radix Cache (Strategy Layer)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Problem Solved</td>
+<td style="text-align: left;">Memory fragmentation. Logically continuous but physically discrete.</td>
+<td style="text-align: left;">Redundant computation. Sharing KV data across requests.</td>
+</tr>
+<tr>
+<td style="text-align: left;">OS Analogy</td>
+<td style="text-align: left;">Page Table: Maps virtual addresses to physical pages.</td>
+<td style="text-align: left;">Shared Libraries/File Cache: Multiple processes sharing memory blocks.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Focus</td>
+<td style="text-align: left;">"How to store": Utilizing non-contiguous memory.</td>
+<td style="text-align: left;">"What to store": Which prefixes are identical and reusable.</td>
+</tr>
+<tr>
+<td style="text-align: left;">Relationship</td>
+<td style="text-align: left;">Without paging, sharing is hard due to fragmentation.</td>
+<td style="text-align: left;">Leverages paging flexibility for extreme reuse.</td>
+</tr>
+</tbody>
+</table>
+<p>With this knowledge, let's look at a three-request example involving <code>RadixCache</code>, <code>req_to_token_pool</code>, and <code>token_to_kv_pool</code>. Suppose the system is processing these requests sharing a prefix:</p>
+<pre><code class="language-python"># Assume the system already processed &quot;A, B&quot; before Request 1, with physical Slot Indices [10, 11].
+
+- Request 1: [&quot;A&quot;, &quot;B&quot;, &quot;C&quot;, &quot;D&quot;]
+- Request 2: [&quot;A&quot;, &quot;B&quot;, &quot;C&quot;, &quot;F&quot;]
+- Request 3: [&quot;A&quot;, &quot;B&quot;, &quot;G&quot;, &quot;H&quot;]
+</code></pre>
+<p>Requests pass through three cache layers for scheduling and computation:</p>
+<ol>
+<li><strong>L1 Cache: RadixCache Logical Layer</strong></li>
+</ol>
+<p>RadixCache is the entry point for scheduling, maintaining long-term mappings between logical token sequences and physical addresses. A new Request first checks RadixCache for an existing prefix. If hit, RadixCache returns the corresponding physical Slot Indices. For Request 1, since "A, B" exists, it returns [10, 11] and locks these slots (<code>lock_ref += 1</code>) to prevent eviction. RadixCache is a Radix Tree where each node (<code>TreeNode</code>) stores a token sequence and its physical Slot Indices. Each node has a <code>lock_ref</code>; as long as a request uses it, the node and its physical slots are safe from eviction. When memory is low, RadixCache decides which unreferenced "cold prefixes" to evict.</p>
+<pre><code class="language-python">class TreeNode:
+    def __init__(self, token_ids, slot_indices):
+        # Logical ID: Token sequence representing the path from root to this node
+        self.key = token_ids       # e.g., [&quot;A&quot;, &quot;B&quot;, &quot;C&quot;]
+
+        # Physical Indices: Corresponding Slot Indices in token_to_kv_pool
+        self.value = slot_indices  # e.g., [10, 11, 12]
+
+        # Reference count: How many active requests are using this node
+        self.lock_ref = 0          # Node and slots are non-evictable if lock_ref &gt; 0
+
+        # Tree structure: Child branches
+        self.children = {}
+
+        # Eviction metadata: LRU timestamp
+        self.last_access_time = time.time()
+
+class RadixCache:
+    def match_prefix(self, token_ids):
+        # 1. Search for longest prefix in the tree
+        # 2. On hit, increment lock_ref for all nodes on the path
+        # 3. Return physical Slot Indices for ReqToTokenPool to build the &quot;page table&quot;
+        return matched_slot_indices
+
+    def evict(self, num_slots_to_free):
+        # 1. Scan leaf nodes where lock_ref == 0
+        # 2. Sort by last_access_time (LRU)
+        # 3. Release physical slots and delete nodes until enough space is freed
+        pass
+</code></pre>
+<ol start="2">
+<li><strong>L2 Cache: ReqToTokenPool Addressing Layer</strong></li>
+</ol>
+<p><code>ReqToTokenPool</code> is a 2D matrix where row index is request ID and column index is token position, storing the actual physical address (<code>location</code>) of each token's KV Cache.</p>
+<p>After RadixCache, the Scheduler writes the returned Slot Indices into the request's row in <code>req_to_token_pool</code>. For the private part (not in RadixCache), the Scheduler requests new physical slots and writes them subsequently. For Request 1, "A, B" hit [10, 11], and private "C, D" get new slots [12, 20]. So, R1's row is <code>[10, 11, 12, 20]</code>.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Req ID (<code>req_pool_idx</code>)</th>
+<th style="text-align: left;">Pos 0</th>
+<th style="text-align: left;">Pos 1</th>
+<th style="text-align: left;">Pos 2</th>
+<th style="text-align: left;">Pos 3</th>
+<th style="text-align: left;">Description (Radix Cache Decision)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;"><strong>Request 1 (R1)</strong></td>
+<td style="text-align: left;"><strong>10</strong></td>
+<td style="text-align: left;"><strong>11</strong></td>
+<td style="text-align: left;"><strong>12</strong></td>
+<td style="text-align: left;"><strong>20</strong></td>
+<td style="text-align: left;">Shared ABC, Private D</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Request 2 (R2)</strong></td>
+<td style="text-align: left;"><strong>10</strong></td>
+<td style="text-align: left;"><strong>11</strong></td>
+<td style="text-align: left;"><strong>12</strong></td>
+<td style="text-align: left;"><strong>25</strong></td>
+<td style="text-align: left;">Shared ABC, Private F</td>
+</tr>
+<tr>
+<td style="text-align: left;"><strong>Request 3 (R3)</strong></td>
+<td style="text-align: left;"><strong>10</strong></td>
+<td style="text-align: left;"><strong>11</strong></td>
+<td style="text-align: left;"><strong>40</strong></td>
+<td style="text-align: left;"><strong>41</strong></td>
+<td style="text-align: left;">Shared AB, Private GH</td>
+</tr>
+</tbody>
+</table>
+<p>Actually, <code>req_to_token_pool</code> size is <code>[request_num, max_context_len]</code>:</p>
+<pre><code class="language-python">class ReqToTokenPool:
+    def __init__(self, size: int, max_context_len: int, device: str, enable_memory_saver: bool):
+        # Main storage: [number of requests, max context length]
+        self.req_to_token = torch.zeros(
+            (size, max_context_len),
+            dtype=torch.int32,
+            device=device
+        )
+        self.free_slots = list(range(size))  # List of available slots
+        self.size = size
+        self.max_context_len = max_context_len
+</code></pre>
+<p>Note: When the GPU finishes computing private KV Cache, the Scheduler calls <code>radix_cache.insert()</code> to add those private slots (e.g., R1's <code>[12, 20]</code>) and tokens (e.g., <code>[C, D]</code>) back to the tree. Now R1's private nodes are shared resources, allowing R2 to hit the <code>"A, B, C"</code> prefix.</p>
+<ol start="3">
+<li><strong>L3 Cache: TokenToKVPool Physical Layer</strong></li>
+</ol>
+<p>Finally, <code>token_to_kv_pool</code> is where KV Tensors actually reside in GPU memory.</p>
+<p>After L1 and L2 mapping, KV Cache for the new Request is found or allocated. The Scheduler batches requests for Forward. During Forward, GPU kernels read Slot Indices from <code>req_to_token_pool</code> to find KV Tensors in <code>token_to_kv_pool</code>. Thanks to Paged Attention, physical slots needn't be contiguous. For R1, the GPU just needs <code>[10, 11, 12, 20]</code> from <code>req_to_token_pool</code> to find the Tensors in <code>token_to_kv_pool</code>, even if they are physically far apart.</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Physical Slot (Slot Index)</th>
+<th style="text-align: left;">...</th>
+<th style="text-align: left;">10</th>
+<th style="text-align: left;">11</th>
+<th style="text-align: left;">12</th>
+<th style="text-align: left;">...</th>
+<th style="text-align: left;">20</th>
+<th style="text-align: left;">...</th>
+<th style="text-align: left;">25</th>
+<th style="text-align: left;">...</th>
+<th style="text-align: left;">40</th>
+<th style="text-align: left;">41</th>
+<th style="text-align: left;">...</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">KV Data Content</td>
+<td style="text-align: left;">other token</td>
+<td style="text-align: left;">[A]</td>
+<td style="text-align: left;">[B]</td>
+<td style="text-align: left;">[C]</td>
+<td style="text-align: left;">other token</td>
+<td style="text-align: left;">[D]</td>
+<td style="text-align: left;">other token</td>
+<td style="text-align: left;">[F]</td>
+<td style="text-align: left;">other token</td>
+<td style="text-align: left;">[G]</td>
+<td style="text-align: left;">[H]</td>
+<td style="text-align: left;">other token</td>
+</tr>
+<tr>
+<td style="text-align: left;">Sharing Status (Strategy)</td>
+<td style="text-align: left;">unknown</td>
+<td style="text-align: left;">Shared R1-R3</td>
+<td style="text-align: left;">Shared R1-R3</td>
+<td style="text-align: left;">Shared R1-R2</td>
+<td style="text-align: left;">unknown</td>
+<td style="text-align: left;">Private R1</td>
+<td style="text-align: left;">unknown</td>
+<td style="text-align: left;">Private R2</td>
+<td style="text-align: left;">unknown</td>
+<td style="text-align: left;">Private R3</td>
+<td style="text-align: left;">Private R3</td>
+<td style="text-align: left;">unknown</td>
+</tr>
+</tbody>
+</table>
+<div style="text-align: center;">
+<img src="./pics/cache.svg" alt="cache" width="800" height="600">
+</div>
+
+<h2 id="normal-scheduler">Normal Scheduler</h2>
+<p>With these data structures, let's look at the Normal Scheduler flow. A single request's flow is:</p>
+<pre><code class="language-text">Req → { Pre Schedule(CPU) → Compute Batch → Sample(GPU) → Post Schedule(CPU) } → { Pre Schedule(CPU) → ...
+</code></pre>
+<p>Or in pseudo-code:</p>
+<pre><code class="language-python">def event_loop_normal(self):
+    &quot;&quot;&quot;A normal scheduler loop.&quot;&quot;&quot;
+    while True:
+        # 1. Receive requests and handle queuing
+        recv_reqs = self.recv_requests()
+        self.process_input_requests(recv_reqs)
+
+        # 2. Get next batch to run (Prefill prioritized)
+        batch = self.get_next_batch_to_run()
+        self.cur_batch = batch
+
+        if batch:
+            # 3. Run inference and sampling
+            result = self.run_batch(batch)
+            # 4. Post-processing (Update state, stream output, release cache)
+            self.process_batch_result(batch, result)
+        else:
+            # Idle self-check and reset
+            self.self_check_during_idle()
+
+        self.last_batch = batch
+</code></pre>
+<h3 id="pre-schedule">Pre Schedule</h3>
+<ol>
+<li><strong>Entering Waiting Queue (<code>Req → Waiting_queue</code>)</strong></li>
+</ol>
+<p>Key functions: <code>Schedule::recv_requests</code> and <code>Schedule::process_input_requests</code>. The former gets requests via zmq; the latter unpacks, constructs <code>Req</code> objects, inserts them into <code>waiting_queue</code>, and signals the tokenizer.</p>
+<pre><code class="language-python">def recv_requests(self):
+    &quot;&quot;&quot;Receive requests from tokenizer manager.&quot;&quot;&quot;
+    return self.tokenizer_manager.recv_requests()
+
+def process_input_requests(self, recv_reqs):
+    &quot;&quot;&quot;Process input requests.&quot;&quot;&quot;
+    for recv_req in recv_reqs:
+        worker_id = recv_req.worker_id
+        recv_req = recv_req.obj
+        output = self._request_dispatcher(recv_req)
+        self._add_request_to_queue(output)
+        self.tokenizer_manager.send_response(worker_id, output)
+</code></pre>
+<ol start="2">
+<li><strong>Pre Schedule Prefill (<code>waiting_queue → new_batch</code>)</strong></li>
+</ol>
+<p>New requests in <code>waiting_queue</code> first enter Prefill.</p>
+<ul>
+<li><code>PrefillAdder::get_new_batch_prefill</code>: Selects requests for a Prefill Batch.</li>
+<li><code>Req::init_next_round_input()</code>: Matches <code>input_ids</code> in RadixCache for prefix length.</li>
+<li><code>ScheduleBatch::prepare_for_extend()</code>: Assigns <code>req_pool_indices</code> in <code>req_to_token_pool</code>; calculates <code>new_slots_count</code> and allocates new slots from <code>token_to_kv_pool</code>; then updates <code>req_to_token_pool</code> by concatenating matched and new slots.</li>
+</ul>
+<p>[Question: <code>req_to_token_pool</code> is updated after slot allocation, but when is Radix Cache updated?]</p>
+<ol start="3">
+<li><strong>Pre Schedule Decode (<code>running_batch → cur_batch</code>)</strong></li>
+</ol>
+<ul>
+<li><code>update_running_batch</code>: Identifies requests with EOS or Length Limit. Merges <code>last_batch</code> (finished Prefill) into <code>running_batch</code>.</li>
+<li><code>retract_decode</code>: If KV Pool is low, retracts requests (typically LRU) back to <code>waiting_queue</code> for later re-prefill.</li>
+<li><code>ScheduleBatch::prepare_for_decode()</code>: Allocates one new slot per request from <code>token_to_kv_pool</code> and updates <code>req_to_token_pool</code>. Unlike Prefill's bulk allocation, Decode allocates <code>bs * 1</code> slots.</li>
+</ul>
+<h3 id="compute-batch-sample">Compute Batch &amp; Sample</h3>
+<p>GPU runs <code>Forward</code>, then samples from logits to get <code>next_token_ids</code>:</p>
+<pre><code class="language-python">next_token_ids = self.sampler(
+    logits_output,
+    forward_batch.sampling_info,
+    # Prefill samples at sequence end (seq_lens - 1)
+    # Decode samples at current positions
+    indices = (forward_batch.positions if is_decode else forward_batch.seq_lens - 1),
+    ...
+)
+</code></pre>
+<h3 id="post-schedule">Post Schedule</h3>
+<ol>
+<li><code>result.copy_done.synchronize()</code>: Syncs to ensure CPU reads accurate <code>next_token_ids</code>.</li>
+<li><code>req.output_ids.append(next_token_id)</code>: Appends token to request.</li>
+<li><code>tree_cache.cache_unfinished_req(req)</code>: Updates LRU timestamp and locks path.</li>
+<li><code>tree_cache.cache_finished_req(req)</code>: Decrements node's <code>lock_ref</code> for completed requests.</li>
+<li><code>stream_output()</code>: Pushes results to client.</li>
+<li><code>cache_unfinished_req(req)</code>: Updates Radix Cache (L1) nodes for future sharing.</li>
+</ol>
+<p>Note: <code>token_to_kv_pool</code> (L3) and <code>req_to_token_pool</code> (L2) update in Pre Schedule, while Radix Cache updates in Post Schedule. Updating Radix Cache early could lead concurrent requests to hit prefixes whose KV data isn't fully written yet. Post Schedule ensures KV is safe for sharing.</p>
+<h2 id="overlap-scheduler-hiding-scheduling-overhead-behind-operators">Overlap Scheduler: Hiding Scheduling Overhead Behind Operators</h2>
+<p>In Normal Scheduler, CPU scheduling and GPU computation are serial. This blocking mode limits performance if CPU prep time creates bubbles during fast Decode steps. Profiling shows core scheduling algorithms are fast; the bottleneck is Python's heavy I/O:</p>
+<ol>
+<li><strong>Pre Schedule</strong>: Building complex input tensors, preparing Sampling Info, distributing metadata.</li>
+<li><strong>Post Schedule</strong>: Detokenization, checking termination (EOS/Length).</li>
+</ol>
+<p>Solutions include reducing scheduling frequency (Multi-step Scheduling) or asynchronous masking (Overlap Scheduling). To explain these, why does Sampling happen on the GPU?</p>
+<p>Sampling seems inefficient for a GPU since it's not a matrix multiply, but transmitting logits to the CPU is costly. For Batch Size 256 and Vocabulary 128,000 (Llama-3), logits are <code>[256, 128000]</code>. At bf16 (2 bytes), that's $\approx 65 \text{ MB}$ per step. Even with PCIe 4.0, moving this every step adds latency exceeding inference time. GPU sampling (Argmax or Top-P) reduces this to &lt; 1 KB (just Token IDs). In traditional frameworks, Sampling is on GPU, but CPU still waits (Synchronize) for Token IDs before the next round—this is the Normal Scheduler.</p>
+<p>Scheduling involves four events and their locations:</p>
+<table>
+<thead>
+<tr>
+<th style="text-align: left;">Event</th>
+<th style="text-align: left;">Location</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align: left;">Pre Schedule</td>
+<td style="text-align: left;">CPU Heavy</td>
+</tr>
+<tr>
+<td style="text-align: left;">Compute Batch</td>
+<td style="text-align: left;">GPU Heavy</td>
+</tr>
+<tr>
+<td style="text-align: left;">Sample</td>
+<td style="text-align: left;">GPU Heavy</td>
+</tr>
+<tr>
+<td style="text-align: left;">Post Schedule</td>
+<td style="text-align: left;">CPU Heavy</td>
+</tr>
+</tbody>
+</table>
+<h3 id="multi-step-scheduling-vs-overlap-scheduling">Multi-step Scheduling vs. Overlap Scheduling</h3>
+<p><strong>Multi-step Scheduling</strong></p>
+<p>Can we reduce CPU scheduling frequency by generating multiple tokens per call? This is Multi-step Scheduling: Amortize. The CPU gives the GPU a command for, say, 5 steps. The GPU runs a loop kernel, sampling in VRAM and filling the next input buffer without returning to Python.</p>
+<p>While this cuts CPU overhead, it loses flexibility: EOS response is delayed (GPU continues for the full 5 steps even if a request ends at step 2), and high-priority requests must wait for the cycle to end.</p>
+<p><strong>Overlap Scheduling</strong></p>
+<p>Overlap Scheduling keeps single-step scheduling but hides CPU overhead inside GPU computation. However, step $N+1$ depends on step $N$'s token. If the CPU schedules $N+1$ without $N$'s token, it lacks input.</p>
+<p>SGLang's <code>FutureMap</code> enables a pre-fill strategy:</p>
+<ol>
+<li>
+<p><strong>CPU Side: Symbolic Linking</strong>: When preparing Batch N, the CPU reserves slots in the GPU <code>FutureMap</code>. Even before Batch N finishes, the CPU knows its tokens will go to <code>FutureMap</code> slot X. When prepping Batch N+1, it uses a symbolic reference to slot X for the input position, linking N (Output) to N+1 (Input) logically.</p>
+</li>
+<li>
+<p><strong>GPU Side: Lazy Resolution</strong>: Batch N+1's command is sent to <code>forward_stream</code>. Before inference, a tiny Resolve Kernel runs. Since <code>forward_stream</code> is FIFO, Batch N's Sample has already written real tokens to <code>FutureMap[X]</code>. The Resolve Kernel reads these and replaces the symbolic input.</p>
+</li>
+<li>
+<p>This allows the CPU to launch subsequent batches without touching real data or cross-device sync, achieving Overlap Scheduling.</p>
+</li>
+</ol>
+<p>As batches pipeline, GPU Compute N+1 and Sample N+1 overlap with Post Schedule N and Pre Schedule N+1. Overlap Scheduling remains flexible with fine-grained control, EOS response, and preemption, at the cost of complex implementation with CUDA Streams and Future mapping.</p>
+<h3 id="overlap-event-loop">Overlap Event Loop</h3>
+<p>Finally, let's see how <code>event_loop_overlap</code> in <code>scheduler.py</code> ensures maximum parallelism:</p>
+<pre><code class="language-python">def event_loop_overlap(self):
+    self.result_queue = deque()  # Stores (batch, result)
+    while True:
+        # 1. Pre Schedule (Batch N+1)
+        recv_reqs = self.recv_requests()
+        self.process_input_requests(recv_reqs)
+        batch = self.get_next_batch_to_run() 
+
+        if batch:
+            # 2. Launch Compute Batch (Batch N+1) -&gt; Non-blocking submission
+            batch_result = self.run_batch(batch) 
+            self.result_queue.append((batch.copy(), batch_result))
+
+        # 3. Post Schedule (Batch N)
+        # Realizes CPU (Post-Schedule N) and GPU (Compute N+1) parallelism
+        if self.last_batch:
+            tmp_batch, tmp_result = self.result_queue.popleft()
+            # Sync for CPU data readiness, without affecting GPU's Compute N+1
+            self.process_batch_result(tmp_batch, tmp_result)
+
+        # 4. Launch Sample (Batch N+1)
+        # Runs after Post-Schedule N to ensure vocab mask for N+1 is updated
+        self.launch_batch_sample_if_needed(batch_result)
+
+        self.last_batch = batch
+</code></pre></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/scheduler/readme-en.md">sglang/scheduler/readme-en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

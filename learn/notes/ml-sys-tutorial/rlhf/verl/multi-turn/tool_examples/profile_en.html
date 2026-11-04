@@ -1,0 +1,319 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Systemic Profiling of Time Consumption in verl Multi-Turn Training</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/tool_examples/profile_en.md</div>
+<article class="note"><h1 id="systemic-profiling-of-time-consumption-in-verl-multi-turn-training">Systemic Profiling of Time Consumption in verl Multi-Turn Training</h1>
+<p>Multi-turn training systems are inherently complex and resource-intensive, left large space for optimization. This document won't directly propose solutions to optimize multi-turn training. But the first step in problem-solving is always to identify the problem at the finest granularity.</p>
+<p>We are sharing a set of systematic analysis methods here; WandB can only show the time consumed by each training step, but our analysis granularity goes far beyond that. Based on our analysis method, we can specifically observe the <strong>time consumed by each event in each turn of each request of each rollout DP worker in the rollout phase of each step.</strong></p>
+<p>Acknowledgements: Zhuoran Yinn (CMU), Changyi Yang (CMU), Chengxi Li (CMU), Huapeng Zhou (UW), Hongyu Lu (TikTok), Chenyang Zeng (Amazon)</p>
+<p>Additionally, verl is testing features like agent loop on multi-turn, which we expect to provide stable acceleration for multi-turn training. This content will be shared later.</p>
+<h2 id="profiling-principle">Profiling Principle</h2>
+<p>Intuitively, we've added no more than 50 lines of profiling code to <a href="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/verl/workers/rollout/sglang_rollout/sglang_rollout.py">sglang_rollout.py</a> to record timestamps at the end of each event. When actually profiling, please add similar logic to your workflow and run your training. After training, use the scripts in <a href="https://github.com/PrinsYin/verl/tree/multiturn_profile_log/profile-multiturn-scripts">profile-multiturn-scripts</a> for analysis.</p>
+<p>Specifically, Ray's logs are automatically compressed and optimized, which speeds up Ray's logging. However, different workers, requests, and turns are mixed together, making it difficult to find the truly slow workers and requests. Our method is simple and effective: by forcing synchronization, all requests for each worker in each step are written to <code>{step_id}/{worker_id}.jsonl</code>. Then, our <a href="https://github.com/PrinsYin/verl/tree/multiturn_profile_log/profile-multiturn-scripts">visualization script</a> reads the relevant data and visualizes it.</p>
+<h2 id="specific-usage">Specific Usage</h2>
+<p>In your <code>sglang_rollout.py</code>, define <a href="https://github.com/PrinsYin/verl/blob/f1c6ee60ae701789875b00616e45bd0ae5cb171c/verl/workers/rollout/sglang_rollout/sglang_rollout.py#L93"><code>SGLangLogManager</code></a>. Its usage is very simple.</p>
+<details>
+<summary>SGLangLogManager</summary>
+
+
+<pre><code class="language-python"># logging tool for sglang multi-turn rollout
+class SGLangLogManager:
+    def __init__(self):
+        self.file_handles = {}
+        atexit.register(self.close_all)
+
+    def get_handle(self, log_path):
+        if log_path not in self.file_handles:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            self.file_handles[log_path] = open(log_path, 'a', buffering=1)
+        return self.file_handles[log_path]
+
+    def log(self, log_path, event, duration=None, extra=None, workid=None, step=None,**extra_keys):
+        handle = self.get_handle(log_path)
+        log_entry = {
+            &quot;timestamp&quot;: datetime.now().isoformat(),
+            &quot;event&quot;: event,
+        }
+        if duration is not None:
+            log_entry[&quot;duration_sec&quot;] = duration
+        if extra is not None:
+            log_entry[&quot;extra&quot;] = extra
+        if workid is not None:
+            log_entry[&quot;workid&quot;] = workid
+        if step is not None:
+            log_entry[&quot;step&quot;] = step
+        if extra_keys is not None:
+            for key in extra_keys:
+                log_entry[key] = extra_keys[key]
+        ordered_keys = [&quot;timestamp&quot;, &quot;event&quot;, &quot;duration_sec&quot;] + [k for k in log_entry.keys() if k not in (&quot;timestamp&quot;, &quot;event&quot;, &quot;duration_sec&quot;)]
+        ordered_entry = {k: log_entry[k] for k in ordered_keys if k in log_entry}
+        handle.write(json.dumps(ordered_entry) + '\n')
+        handle.flush()
+
+    def close_all(self):
+        for handle in self.file_handles.values():
+            handle.close()
+</code></pre>
+
+
+</details>
+
+<p>Subsequently, in the <code>SGLangRollout</code> class, define <a href="https://github.com/PrinsYin/verl/blob/f1c6ee60ae701789875b00616e45bd0ae5cb171c/verl/workers/rollout/sglang_rollout/sglang_rollout.py#L330"><code>log_manager</code></a>, <a href="https://github.com/PrinsYin/verl/blob/f1c6ee60ae701789875b00616e45bd0ae5cb171c/verl/workers/rollout/sglang_rollout/sglang_rollout.py#L331"><code>log_dir</code></a>, and <a href="https://github.com/PrinsYin/verl/blob/f1c6ee60ae701789875b00616e45bd0ae5cb171c/verl/workers/rollout/sglang_rollout/sglang_rollout.py#L326"><code>step</code></a>, and initialize them:</p>
+<details>
+<summary>SGLangRollout</summary>
+
+
+<pre><code class="language-python">class SGLangRollout(BaseRollout):
+    def __init__(
+        self,
+        actor_module: str,
+        config: DictConfig,
+        processing_class: Union[PreTrainedTokenizer, PreTrainedTokenizerFast, ProcessorMixin],
+        model_hf_config,
+        port=None,
+        trust_remote_code: bool = False,
+        device_mesh: DeviceMesh | None = None,
+        **kwargs,
+    ):
+        &quot;&quot;&quot;Synchronized SGLang rollout engine.
+
+        Args:
+            actor_module: Huggingface model name or path to the model. The
+                model should be supported by SGLang.
+            config: A DictConfig object containing SGLang-specific operational
+                parameters and rollout settings.
+                Refer to https://docs.sglang.ai/backend/server_arguments.html
+            processing_class: The tokenizer or processor instance compatible with the actor_module.
+            model_hf_config: The Hugging Face model's configuration (e.g.,
+                `transformers.PretrainedConfig`). It provides architectural
+                details and hyperparameters like `max_position_embeddings`,
+                used by SGLang for correct model initialization. This is
+                the model's inherent design, not SGLang's runtime behavior.
+            port: Optional port for multi-node initialization when nnodes &gt; 1.
+            trust_remote_code: Whether or not to allow for custom models
+                defined on the Hub in their own modeling files.
+            device_mesh: Optional `DeviceMesh` object for distributed setup.
+            **kwargs: Additional keyword arguments, primarily `train_tp` for
+                Megatron Backend integration to initialize hybrid engine
+                process groups.
+        &quot;&quot;&quot;
+        super().__init__()
+        self.step = 0
+        self.config = config
+        self._device_mesh_cpu = device_mesh
+        os.environ.setdefault(&quot;SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK&quot;, &quot;true&quot;)
+        # Added log_manager
+        self.log_manager = SGLangLogManager()
+        # Added log_dir. If your experiment does not set EXPERIMENT_NAME, it defaults to multiturn_log_dir.
+        self.log_dir = &quot;logs/&quot;+os.getenv(&quot;EXPERIMENT_NAME&quot;, &quot;multiturn_log_dir&quot;)
+</code></pre>
+
+
+</details>
+
+<p>Add <a href="https://github.com/PrinsYin/verl/blob/f1c6ee60ae701789875b00616e45bd0ae5cb171c/verl/workers/rollout/sglang_rollout/sglang_rollout.py#L619"><code>self.step += 1</code></a> in the <code>generate_sequences</code> function.</p>
+<p>Then, call <code>self.log_manager.log</code> before and after the specific event you want to profile. For example:</p>
+<details>
+<summary>Timing for engine_async_generate</summary>
+
+
+<pre><code class="language-python">torch.cuda.synchronize()
+generate_start_time = time.time()
+
+### Event start
+if self._tp_rank == 0:
+    loop = asyncio.get_event_loop()
+    output = loop.run_until_complete(
+        self._engine.async_generate(
+            prompt=None,  # because we have already convert it to prompt token id
+            sampling_params=request_sampling_params,
+            return_logprob=True,
+            input_ids=idx_list,
+            image_data=image_list,
+        )
+    )
+    torch.cuda.synchronize()
+    generate_end_time = time.time()
+    log_path = os.path.join(
+        self.log_dir,
+        f&quot;step_{self.step}&quot;,
+        f&quot;worker_{self._rank}.jsonl&quot;
+    )
+
+    ### Event end
+
+    self.log_manager.log(
+        log_path,
+        event=&quot;engine_async_generate&quot;,
+        duration=generate_end_time - generate_start_time,
+        workid=self._rank,
+        step=self.step
+    )
+</code></pre>
+
+
+</details>
+
+<p>Note that when using <code>time.time()</code> for timing, <code>torch.cuda.synchronize()</code> is required to ensure synchronization between GPU and CPU instructions. The code above also shows the definition of the specific log path:</p>
+<pre><code class="language-python">log_path = os.path.join(
+    self.log_dir,
+    f&quot;step_{self.step}&quot;,
+    f&quot;worker_{self._rank}.jsonl&quot;
+)
+</code></pre>
+<p>In the example <a href="https://github.com/PrinsYin/verl/blob/f1c6ee60ae701789875b00616e45bd0ae5cb171c/verl/workers/rollout/sglang_rollout/sglang_rollout.py">sglang_rollout.py</a>, we called <code>self.log_manager.log</code> 36 times for extremely fine-grained profiling. You are welcome to decide which events you want to profile, discover the events that genuinely slow down multi-turn training, and optimize them specifically.</p>
+<h2 id="existing-conclusions">Existing Conclusions</h2>
+<p>Next, we'll share the visualization results we obtained from profiling <a href="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/README.md#a-quick-reproduction-of-the-profile">GSM8K multi-turn training</a>. We believe that readers can conduct more thorough analyses using our tools.</p>
+<h3 id="long-tail-effect">Long-Tail Effect</h3>
+<div style="display: flex; align-items: center;">
+  <img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/cdf_per_step.png?raw=true" style="width: 40%;"/>
+  <img src="./pics/wandb.png" style="width: 40%;"/>
+</div>
+
+<ol>
+<li>We first set the <code>max response length</code> for rollout to 1000 and created a CDF graph of the relative times of requests for all DP workers in a specific step (top right image). We observed that the long-tail effect of rollout is very significant; in the rollout process of a step's requests, 80% of requests complete in the first 40% of the time, with the rest solving the remaining long-tail problems.</li>
+<li>We then combined this with WandB's visualization (red line in the top left image) and found that during the stable increase of reward, the mean response length does not change significantly, or even decreases, remaining around 500. However, in any given step, we found that the maximum response length of the model directly reached our set <code>max rollout length</code>.</li>
+</ol>
+<p>Based on the observation from the top right image, we initially planned to implement an oversampling strategy, for example, oversampling 20% of requests in each round. After a specified number of requests were collected into the data buffer, the oversampled and unfinished rollout data would be directly discarded. This differs from partial rollout, where these oversampled but unfinished requests would be saved and continued in the next step based on the previous step.</p>
+<p>However, after further observing the red curve in the left image, we chose a more direct solution. Instead of oversampling, we directly adjusted the <code>max response length</code> downwards. For example, we tried setting the <code>max response length</code> to 600, expecting a significant optimization of the rollout time per step, with the reward not being significantly affected. <strong>In fact, we believe that the requests with very long tails tend to have lower rewards, as the response length sharply increases after the reward collapses.</strong></p>
+<p>Fortunately, we achieved considerable results, as shown by the green line in the top left image, with equally good convergence. Furthermore, when we observed the throughput and the time consumed per step, we found that a <code>max length</code> of 600 was consistently faster than 1000.</p>
+<div align="center">
+<img src="./pics/wandb_600.png" style="width: 40%;"/>
+</div>
+
+<ol>
+<li><strong>Response length min</strong> was not affected.</li>
+<li><strong>Response length mean</strong> initially decreased slightly (because the outlier response lengths dropped from 1000 to 600); as time progressed, the response length mean remained consistently lower, but the reward was equally good, and even consistently better after 80 steps.</li>
+<li><strong>Response length max</strong> was not affected, always reaching the highest length. This is also the core of our strategy—we believe that long-tailed requests severely slow down rollout speed and do not contribute positively to the reward. Directly reducing <code>max response length</code> can increase rollout speed while maintaining the reward.</li>
+<li>Clearly, <strong>time per step</strong> consistently decreased, and the relative advantage became even more significant after the sharp increase in response length.</li>
+<li>In addition, <strong>perf/throughput</strong> was consistently higher.</li>
+</ol>
+<p>Overall, we believe that a direct, large-scale reduction of <code>max response length</code> is a very effective and simple solution. In fact, we further verified that 500, 600, 700, and 800 still converged very well. More surprisingly, we directly reduced the <code>max response length</code> to 400 (note that when <code>max length</code> was 1000, the mean response length at step 0 already exceeded 420), and surprisingly, the final convergence effect was still equally good. On one hand, GSM8K itself is very simple and doesn't require that many tokens. On the other hand, using 400 as the max would obviously affect the reward at step 0, dropping it by 0.1. But it still converged to 0.95 in the end, and the mean response length never reached 400 in between. However, after reducing from 600 to 400, there was no significant improvement in time per step.</p>
+<h3 id="analyzing-a-specific-slow-request-in-an-abnormally-slow-rollout-step">Analyzing a specific slow request in an abnormally slow Rollout step</h3>
+<p>CDF is just the basic use of our analysis tool. We can further analyze the time consumption of each event for each worker. Based on the case where max length was 600, in 7 repeated experiments, we found that step 67 of one experiment was a severe peak, spending significantly more time on rollout.</p>
+<p>Further examining each rollout worker in step 67, we found:</p>
+<div style="display: flex; align-items: center;">
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/worker_0.png?raw=true" style="width: 40%;"/>
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/worker_1.png?raw=true" style="width: 40%;"/>
+</div>
+
+<p>Worker 0's rollout took a very long time, and the other 7 workers were barraged here, waiting for worker 0 to finish. Looking further at the requests in worker 0, we noticed that worker 0 had a total of 512 requests (note that we enabled the <a href="https://github.com/volcengine/verl/pull/2258">repetitive sampling</a> feature):</p>
+<pre><code class="language-python">data.train_batch_size=256
+actor_rollout_ref.rollout.n=16
+</code></pre>
+<p>We further obtained the CDF graphs for worker 0 and other workers:</p>
+<div style="display: flex; align-items: center;">
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/request_analysis_and_cdf1.png?raw=true" style="width: 40%;"/>
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/request_analysis_and_cdf2.png?raw=true" style="width: 40%;"/>
+</div>
+
+<p>We found that the request CDF for worker 0 was very strange: about 400 requests returned in the first 25 seconds, followed by 150 seconds where no requests returned; then the remaining requests returned. Additionally, the slopes at 175s and 15s were consistent, which suggests that the GPU was idle during the middle blank period. We observed this peak once and then conducted 6 repeated experiments, but the same situation never occurred again.</p>
+<p>We then looked into those 100 abnormal requests and found two typical ones:</p>
+<div style="display: flex; align-items: center;">
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/outlier_req_1.png?raw=true" style="width: 40%;"/>
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/outlier_req_2.png?raw=true" style="width: 40%;"/>
+</div>
+
+<p>Both are very abnormal: the <strong>reward calculation</strong> on the left is very slow; the <strong>engine generation</strong> on the right is very slow. We further analyze:</p>
+<ol>
+<li>Why is the reward calculation in the left image so slow? I remember GSM8K's reward calculation is just a string comparison, a pure CPU function, it shouldn't be that slow; this is a very suspicious point; and it's worth noting: I'm not sure if the reward calculated during the rollout phase is used during the training phase.</li>
+</ol>
+<blockquote>
+<p>The reward calculation during the rollout phase is for calculating the end-to-end reward, including tool calling and interaction reward. The reason for the high proportion of <code>reward_cal</code> might be that the full response was input. We submitted <a href="https://github.com/volcengine/verl/pull/2568">a PR</a> to only use the last 300 characters of the last turn to see.</p>
+</blockquote>
+<ol start="3">
+<li>Why is the engine call in the right image so slow?</li>
+</ol>
+<blockquote>
+<p>Note that based on our profiling tool, we can actually get the time consumption for turn 1 and turn 2. The time for turn 1 is very normal, only 20 seconds, but turn 2 took 150 seconds, and we observed significantly more engine generation than normal. Unfortunately, we did not synchronously capture GPU behavior with nsys at that time. We then conducted 6 repeated experiments, and no peak occurred again. However, no peak might be a good thing, lol.</p>
+</blockquote>
+<h3 id="long-preprocessing-time">Long Preprocessing Time</h3>
+<p>Next, we'll demonstrate what insights we can gain through the profiling tool. We further analyzed the percentage of time consumed by each request. It can be seen that only three events are significant:</p>
+<ul>
+<li><code>async_generate_duration</code>: the actual rollout</li>
+<li><code>preprocessing_duration</code>: preprocessing</li>
+<li><code>barrier_wait_duration</code>: waiting for all workers to finish rollout</li>
+</ul>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Avg % of Total Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>async_generate_duration</td>
+<td>74.05%</td>
+</tr>
+<tr>
+<td>preprocessing_duration</td>
+<td>18.57%</td>
+</tr>
+<tr>
+<td>barrier_wait_duration</td>
+<td>6.39%</td>
+</tr>
+<tr>
+<td>broadcast_duration</td>
+<td>0.52%</td>
+</tr>
+<tr>
+<td>data_extraction_duration</td>
+<td>0.35%</td>
+</tr>
+<tr>
+<td>cache_flush_duration</td>
+<td>0.08%</td>
+</tr>
+<tr>
+<td>padding_duration</td>
+<td>0.04%</td>
+</tr>
+<tr>
+<td>sorting_duration</td>
+<td>0.00%</td>
+</tr>
+<tr>
+<td>final_construction_duration</td>
+<td>0.00%</td>
+</tr>
+<tr>
+<td>batch_construction_duration</td>
+<td>0.00%</td>
+</tr>
+<tr>
+<td>concatenation_duration</td>
+<td>0.00%</td>
+</tr>
+</tbody>
+</table>
+<p>We further analyzed the curve of the average percentage of each event in each step. We found that as the response length increased, the proportion of preprocessing also decreased. We believe that the time consumption of preprocessing is almost constant and has little relation to the response length. Furthermore, preprocessing is independent of the step status and can be done during dataset construction. Additionally, the agent loop feature further optimized the time consumption of preprocessing. We will analyze this in a future article.</p>
+<div style="display: flex; align-items: center;">
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/event_percentage_step.png?raw=true" style="width: 40%;"/>
+</div>
+
+<h3 id="turn-analysis">Turn Analysis</h3>
+<p>Finally, we analyze the distribution of turns:</p>
+<div style="display: flex; align-items: center;">
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/turn_difference.png?raw=true" style="width: 25%;"/>
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/turn_distribution.png?raw=true" style="width: 33.33%;"/>
+<img src="https://github.com/PrinsYin/verl/blob/multiturn_profile_log/profile-multiturn-scripts/script-examples/turns_num.png?raw=true" style="width: 33.33%;"/>
+</div>
+
+<p>From left to right, these are the average engine generation time for different turns in each step for the first 80 steps; the average time consumed by requests with different numbers of turns; and the average proportion of requests with different numbers of turns in each step.</p>
+<p>Intuitively, the actual time spent on engine generation is not much, and most requests have only one or two turns.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/tool_examples/profile_en.md">rlhf/verl/multi-turn/tool_examples/profile_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

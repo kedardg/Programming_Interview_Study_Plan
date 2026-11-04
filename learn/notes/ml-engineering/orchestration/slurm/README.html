@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Working in SLURM Environment</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › orchestration/slurm/README.md</div>
+<article class="note"><h1 id="working-in-slurm-environment">Working in SLURM Environment</h1>
+<p>Unless you're lucky and you have a dedicated cluster that is completely under your control chances are that you will have to use SLURM to timeshare the GPUs with others. But, often, if you train at HPC, and you're given a dedicated partition you still will have to use SLURM.</p>
+<p>The SLURM abbreviation stands for: <strong>Simple Linux Utility for Resource Management</strong> - though now it's called The SLURM Workload Manager. It is a free and open-source job scheduler for Linux and Unix-like kernels, used by many of the world's supercomputers and computer clusters.</p>
+<p>These chapters will not try to exhaustively teach you SLURM as there are many manuals out there, but will cover some specific nuances that are useful to help in the training process.</p>
+<ul>
+<li><a href="../../orchestration/slurm/users.html">SLURM For Users</a> - everything you need to know to do your training in the SLURM environment.</li>
+<li><a href="../../orchestration/slurm/admin.html">SLURM Administration</a> - if you're unlucky to need to also manage the SLURM cluster besides using it, there is a growing list of recipes in this document to get things done faster for you.</li>
+<li><a href="../../orchestration/slurm/performance.html">Performance</a> - SLURM performance nuances.</li>
+<li><a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm/launchers">Launcher scripts</a> - how to launch with <code>torchrun</code>, <code>accelerate</code>, pytorch-lightning, etc. in the SLURM environment</li>
+</ul></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/orchestration/slurm/README.md">orchestration/slurm/README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

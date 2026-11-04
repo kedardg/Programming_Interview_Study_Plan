@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System Design for Interviews</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html" class="here">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>System Design for Interviews</h1>
+<p class="dim">The companion to Step 21 of the study plan — the Alex Xu Vol 1/2 material (via the <a href="https://github.com/liquidslr/system-design-notes">liquidslr notes</a>) compressed into one page: the interview framework, back-of-the-envelope math you can do live, every core building block with the animation that makes it stick, and the one-line trick behind all 28 book problems.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (10:14)</h3><audio controls preload="none" src="audio/system-design.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/system-design.txt">Read the transcript</a>.</p></div>
+<h2 id="framework">1. The 4-step framework (and the clock)</h2>
+<p>A system design interview is 45 minutes of structured collaboration, not a monologue. The framework from the plan, with a realistic clock:</p>
+<table class="cmp">
+<tr><th>Step</th><th>Time</th><th>What you do</th><th>What they score</th></tr>
+<tr><td><strong>1. Understand &amp; scope</strong></td><td>5–10 min</td><td>Ask about users, scale (DAU, QPS), features in vs out, read/write mix, latency and consistency needs. Write the agreed requirements down.</td><td>Do you design for the actual problem or a memorized one?</td></tr>
+<tr><td><strong>2. High-level design</strong></td><td>10–15 min</td><td>Draw the end-to-end box diagram: clients → LB → services → cache → storage → async pipelines. Get buy-in before going deep.</td><td>Can you decompose a system and defend each box?</td></tr>
+<tr><td><strong>3. Deep dive</strong></td><td>10–15 min</td><td>The interviewer (or you) picks 1–2 components: data model, sharding, the hot path, a failure mode. This is where seniority shows.</td><td>Depth, tradeoff fluency, bottleneck instinct.</td></tr>
+<tr><td><strong>4. Wrap-up</strong></td><td>~5 min</td><td>Bottlenecks, failure handling, monitoring, what you'd do with more time. Never say "it's done."</td><td>Operational maturity.</td></tr>
+</table>
+<p>Two habits separate strong candidates: they <strong>quantify before designing</strong> (step 2 of the book is back-of-the-envelope for a reason — a 3K-QPS system and a 300K-QPS system are different designs), and they <strong>volunteer tradeoffs</strong> ("fanout-on-write gives cheap reads but celebrities break it, so for them I'd…") instead of waiting to be cross-examined.</p>
+
+<h2 id="estimation">2. Back-of-the-envelope estimation</h2>
+<p>The point is not precision — it's catching order-of-magnitude design errors in 90 seconds. Memorize three anchors: <strong>1 day ≈ 86,400 s</strong> (round to 100K for mental math), <strong>1M requests/day ≈ 12 QPS</strong>, and the latency ladder below. Then every estimate is multiplication.</p>
+
+<div class="card">
+<h3>Interactive: the estimation you'll do at the whiteboard</h3>
+<div class="controls">
+  <label class="ctl">Daily active users <input type="range" id="estDAU" min="0" max="6" value="4" step="1"> <span id="estDAULabel"></span></label>
+  <label class="ctl">Writes per user per day <input type="range" id="estW" min="1" max="50" value="2"> <span id="estWLabel"></span></label>
+</div>
+<div class="controls">
+  <label class="ctl">Read : write ratio <input type="range" id="estR" min="1" max="200" value="100"> <span id="estRLabel"></span></label>
+  <label class="ctl">Avg write payload <select id="estP"><option value="500">500 B (tweet)</option><option value="5000" selected>5 KB (post+meta)</option><option value="1048576">1 MB (photo)</option></select></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="estWQPS">–</div><div class="l">write QPS (avg)</div></div>
+  <div class="box"><div class="v" id="estRQPS">–</div><div class="l">read QPS (avg)</div></div>
+  <div class="box"><div class="v" id="estPeak">–</div><div class="l">peak read QPS (×2.5)</div></div>
+  <div class="box"><div class="v" id="estStore">–</div><div class="l">storage / year</div></div>
+  <div class="box"><div class="v" id="estCache">–</div><div class="l">cache (80/20 of a day's reads)</div></div>
+</div>
+<p class="caption">Defaults ≈ Twitter from the book: 300M DAU × 2 tweets/day ≈ 7K write QPS avg, 100:1 reads ≈ 700K read QPS at peak ≈ the moment you say "so reads dominate — I'll design around caching and fanout," you've earned the next 10 minutes. (The book's worked numbers: ~3.5K write QPS with 150M DAU; scale is the input that matters, not the exact figure.)</p>
+</div>
+
+<h3>The numbers you're allowed to bring</h3>
+<table class="cmp">
+<tr><th>Latency</th><th>≈</th><th>Implication</th></tr>
+<tr><td>L1 cache ref / branch mispredict</td><td>0.5 / 5 ns</td><td rowspan="2">memory is ~100× slower than cache → locality matters</td></tr>
+<tr><td>Main memory reference</td><td>100 ns</td></tr>
+<tr><td>Compress 1 KB (Snappy)</td><td>~3 µs</td><td>compress before you ship or store</td></tr>
+<tr><td>Read 1 MB sequentially from memory</td><td>~10 µs</td><td rowspan="2">memory ≫ SSD ≫ disk; sequential ≫ random</td></tr>
+<tr><td>Read 1 MB from SSD / disk</td><td>~0.2 ms / 2 ms</td></tr>
+<tr><td>SSD random read</td><td>~100 µs</td><td>DB index hit budget</td></tr>
+<tr><td>Round trip in one datacenter</td><td>~0.5 ms</td><td>a request can afford a handful of internal hops</td></tr>
+<tr><td>Round trip CA ↔ Netherlands</td><td>~150 ms</td><td>cross-region sync replication is a product decision</td></tr>
+</table>
+<p>Availability nines: <strong>99.9%</strong> ≈ 8.7 h down/year, <strong>99.99%</strong> ≈ 52 min, <strong>99.999%</strong> ≈ 5 min. Powers of two: 2¹⁰≈1 K, 2²⁰≈1 M, 2³⁰≈1 G, 2⁴⁰≈1 T — so "1 billion 100-byte records" is ~100 GB without touching a calculator.</p>
+
+<h2 id="blocks">3. The building blocks</h2>
+<p><strong>Load balancers.</strong> The front door. L4 balances on IP/port (fast, blind to content); L7 reads the request (can route by path, cookie, or model name — an LLM gateway is an L7 balancer). Health checks plus a second LB in standby remove the single point of failure. Behind the LB, keep web tier <strong>stateless</strong> — session state goes to a shared store — so any server can serve any request and autoscaling is just adding boxes.</p>
+<p><strong>Caching.</strong> The 80/20 rule: a cache sized for 20% of daily objects serves ~80% of reads. <em>Cache-aside</em> (app reads cache, misses to DB, fills cache) is the default; <em>write-through</em> keeps cache and DB in sync at write cost. Set TTLs, pick an eviction policy (LRU almost always), and defend against the <em>thundering herd</em> — one hot key expiring and 10K requests stampeding the DB — with request coalescing or staggered TTLs. CDNs are the same idea pushed to the network edge for static (and increasingly dynamic) content.</p>
+<p><strong>Sharding.</strong> When one database can't hold the data or the write load, split rows across shards by key. Hash sharding spreads load evenly but kills range queries; range sharding keeps scans cheap but invites hotspots. Two interview-famous pains: <em>resharding</em> (adding a shard under naive <code>hash % N</code> moves nearly every key — consistent hashing below is the fix) and the <em>celebrity problem</em> (Bieber's row melts its shard; fix with dedicated shards or app-level splitting).</p>
+<p><strong>Replication.</strong> Leader takes writes, followers serve reads and take over on failure. Async replication is fast but can lose the last writes in a failover; sync is safe but slow across regions. Mention replication lag whenever you put a read replica in a design — "read your own writes" breaks the moment a user's read hits a stale follower.</p>
+
+<div class="card">
+<h3>Animation: consistent hashing — why keys barely move</h3>
+<canvas id="ringViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="ringAdd">+ Add node</button>
+  <button class="btn secondary" id="ringDrop">− Remove node</button>
+  <button class="btn secondary" id="ringReset">Reset</button>
+  <span class="dim" id="ringStats"></span>
+</div>
+<p class="caption">Keys and nodes hash onto the same circle; each key belongs to the first node clockwise. Add or remove a node and watch: only the keys in the <em>affected arc</em> change owner (flashing), everything else stays put — versus <code>hash % N</code>, where changing N remaps almost every key. Real systems give each physical node many <em>virtual nodes</em> to even out the arcs; this demo uses 3 per node.</p>
+</div>
+
+<p><strong>Message queues.</strong> A buffer between producers and consumers: the web tier acknowledges fast, workers process at their own pace, and traffic spikes become queue depth instead of dropped requests (backpressure made visible). They decouple failure domains — a dead thumbnail worker doesn't take down uploads. Kafka is a replayable, ordered log for streams and fan-out at scale; RabbitMQ is a classic broker for task queues. In an interview, a queue is the answer whenever work can be async: notifications, feed fanout, video transcoding, analytics.</p>
+
+<div class="card">
+<h3>Animation: rate limiting with a token bucket</h3>
+<canvas id="bucketViz" class="viz" width="900" height="270"></canvas>
+<div class="controls">
+  <button class="btn" id="bktReq">Send request</button>
+  <button class="btn secondary" id="bktBurst">Send burst of 8</button>
+  <label class="ctl">Refill rate <input type="range" id="bktRate" min="1" max="10" value="3"> <span id="bktRateLabel">3/s</span></label>
+</div>
+<p class="caption">The bucket holds up to 10 tokens and refills at a steady rate; each request spends one. A burst drains saved-up tokens (allowed!), then further requests bounce with 429 until refill catches up. That's the token bucket's signature: it permits short bursts while enforcing a long-run average — which is why it guards most public APIs. Alternatives trade differently: leaky bucket smooths to a constant outflow; fixed windows are simple but allow 2× bursts at window edges; sliding window fixes that for more memory.</p>
+</div>
+
+<div class="card">
+<h3>Animation: Snowflake IDs — time-ordered, no coordination</h3>
+<canvas id="snowViz" class="viz" width="900" height="200"></canvas>
+<div class="controls">
+  <button class="btn" id="snowGen">Generate ID</button>
+  <span class="dim" id="snowNote"></span>
+</div>
+<p class="caption">64 bits: 1 sign + 41 timestamp (ms) + 5 datacenter + 5 machine + 12 sequence. Each machine mints up to 4096 IDs per millisecond with zero coordination, and IDs sort by creation time — which a UUID can't do and an auto-increment column can't do across shards. Generate a few in a row: the timestamp field ticks, the sequence counts within a millisecond.</p>
+</div>
+
+<h2 id="storage">4. Storage engines and distributed KV stores</h2>
+<p><strong>SQL vs NoSQL, honestly.</strong> Start with a relational database: transactions, joins, secondary indexes, and 50 years of tooling are features you give up, not defaults you escape. Reach for NoSQL when you have a concrete reason — write volume beyond what sharded SQL handles gracefully, genuinely schema-less data, or access patterns that are pure key-value at massive scale. "NoSQL because scale" without a QPS number is an interview red flag; "DynamoDB because our access pattern is get/put by user_id at 500K QPS" is the sentence they want.</p>
+<p><strong>Inside a Dynamo-style KV store</strong> (book Ch. 6 — the deepest chapter and a favorite deep-dive):</p>
+<ul>
+<li><strong>Quorum N/W/R</strong> — each key lives on N replicas; a write succeeds after W acks, a read queries R. If <code>W + R &gt; N</code>, read and write sets overlap, so a read sees at least one up-to-date copy. Tune it: W=1 fast writes, R=1 fast reads, W=R=⌈(N+1)/2⌉ balanced.</li>
+<li><strong>Vector clocks</strong> — version counters per replica that detect <em>concurrent</em> writes (neither happened-before the other). The store keeps both siblings and the client reconciles — or you accept last-write-wins and quietly drop data (what many real systems choose).</li>
+<li><strong>Merkle trees</strong> — hash trees over key ranges; two replicas compare roots and descend only into differing subtrees, syncing gigabytes of divergence by exchanging kilobytes of hashes (anti-entropy).</li>
+<li><strong>Hinted handoff</strong> — if a replica is briefly down, another node accepts its writes with a "hint" and replays them when it returns: availability through temporary stand-ins, repaired by Merkle sync if the outage was long.</li>
+</ul>
+
+<div class="card">
+<h3>Animation: LSM tree — how write-optimized storage works</h3>
+<canvas id="lsmViz" class="viz" width="900" height="330"></canvas>
+<div class="controls">
+  <button class="btn" id="lsmWrite">Write 5 keys</button>
+  <button class="btn secondary" id="lsmCompact">Compact</button>
+  <button class="btn secondary" id="lsmReset">Reset</button>
+  <span class="dim" id="lsmNote"></span>
+</div>
+<p class="caption">Writes go to an in-memory <em>memtable</em> (sorted, fast). When it fills, it's flushed as an immutable sorted file (SSTable) — sequential I/O, the thing disks love. Reads check memtable, then SSTables newest-first (Bloom filters skip files that can't contain the key). <em>Compaction</em> merges SSTables, dropping overwritten and deleted versions. B-trees (Postgres, MySQL) instead update pages in place: faster point reads, slower random writes. LSM = Cassandra, RocksDB, LevelDB — the write-heavy half of every "design a chat system / metrics store" answer.</p>
+</div>
+
+<h2 id="cap">5. CAP, consistency, and exactly-once</h2>
+<p><strong>CAP in one breath:</strong> when a network partition happens (and it will), you choose — refuse requests to stay consistent (CP) or answer with possibly-stale data to stay available (AP). No partition, no tradeoff; "CA" is a fiction in distributed systems. Banks pick CP for balances; social feeds pick AP and converge later (<em>eventual consistency</em>). The useful interview move is picking per-feature: the payment ledger is CP, the like counter is AP, and you say so.</p>
+<p><strong>Idempotency</strong> is how retries become safe: give every mutating request a client-generated key, dedupe server-side, and a retried payment charges once. This is also the honest story behind "exactly-once delivery": messaging systems give you <em>at-least-once</em>, and exactly-once <em>processing</em> is at-least-once delivery plus idempotent consumers. Say that sentence in an interview and watch the interviewer relax.</p>
+
+<h2 id="map">6. The 28 problems, one trick each</h2>
+<p>Every Alex Xu problem has one core idea the rest of the design hangs on. Design it yourself first (the plan's rule), then check — but walk in knowing these:</p>
+<table class="cmp">
+<tr><th>#</th><th>Problem</th><th>The trick</th></tr>
+<tr><td>1</td><td>Scale to millions</td><td>The standard stack evolution: LB → stateless web → cache/CDN → replicas → shards → queues → multi-DC</td></tr>
+<tr><td>2</td><td>Back-of-envelope</td><td>§2 above — anchors + multiplication</td></tr>
+<tr><td>3</td><td>Framework</td><td>§1 above — scope before boxes, buy-in before depth</td></tr>
+<tr><td>4</td><td>Rate limiter</td><td>Token bucket in Redis at the gateway; return 429 + headers; counters are racy → Lua/atomic ops</td></tr>
+<tr><td>5</td><td>Consistent hashing</td><td>Virtual nodes on a ring → adding a node moves ~1/N of keys</td></tr>
+<tr><td>6</td><td>Key-value store</td><td>Ring + N/W/R quorums + vector clocks + Merkle repair (§4)</td></tr>
+<tr><td>7</td><td>Unique ID generator</td><td>Snowflake: timestamp|machine|sequence = sortable, coordination-free</td></tr>
+<tr><td>8</td><td>URL shortener</td><td>Counter → base62; 301 vs 302 is the cache-vs-analytics tradeoff</td></tr>
+<tr><td>9</td><td>Web crawler</td><td>URL frontier with politeness (per-host queues) + dedupe (Bloom filter/fingerprint)</td></tr>
+<tr><td>10</td><td>Notification system</td><td>Queues per channel + dedupe + retry + user-preference gate; everything async</td></tr>
+<tr><td>11</td><td>News feed</td><td>Fanout-on-write to followers' feed caches — except celebrities, who are fanout-on-read, merged at query time</td></tr>
+<tr><td>12</td><td>Chat system</td><td>WebSockets + per-user inbox queues; message IDs per channel for ordering; presence via heartbeat</td></tr>
+<tr><td>13</td><td>Autocomplete</td><td>Trie with precomputed top-k at every node, rebuilt offline, served from cache</td></tr>
+<tr><td>14</td><td>YouTube</td><td>Upload ≠ watch paths: async transcoding DAG; serve via CDN; pre-signed URLs</td></tr>
+<tr><td>15</td><td>Google Drive</td><td>Block-level sync: chunk files, hash chunks, upload only changed blocks; metadata DB is the brain</td></tr>
+<tr><td>16</td><td>Proximity service</td><td>Geohash (or quadtree) turns 2-D nearness into 1-D prefix match</td></tr>
+<tr><td>17</td><td>Nearby friends</td><td>Same geo-index but <em>live</em>: locations via WebSocket into Redis pub/sub, TTL'd</td></tr>
+<tr><td>18</td><td>Google Maps</td><td>Precomputed map tiles + routing as shortest path over a sharded graph; ETA from live traffic</td></tr>
+<tr><td>19</td><td>Message queue</td><td>Append-only log + consumer offsets (you're designing baby Kafka); ack = moving the offset</td></tr>
+<tr><td>20</td><td>Metrics system</td><td>Time-series: write-optimized store (LSM), downsample old data, pull model + push gateway</td></tr>
+<tr><td>21</td><td>Ad click aggregation</td><td>Stream processing (exactly-once via idempotency+watermarks) + nightly batch reconciliation — the lambda answer</td></tr>
+<tr><td>22</td><td>Hotel reservation</td><td>Inventory as rows with optimistic locking / constraint checks — never double-book under concurrency</td></tr>
+<tr><td>23</td><td>Email service</td><td>Metadata DB + object storage for bodies; search index; spam/virus pipeline async</td></tr>
+<tr><td>24</td><td>S3-like storage</td><td>Separate metadata service from immutable data chunks; erasure coding beats 3× replication for cost</td></tr>
+<tr><td>25</td><td>Leaderboard</td><td>Redis sorted set (ZINCRBY/ZRANK) — the whole design is one data structure + persistence</td></tr>
+<tr><td>26</td><td>Payment system</td><td>Idempotency keys + ledger (double-entry, append-only) + reconciliation; never update balances in place</td></tr>
+<tr><td>27</td><td>Digital wallet</td><td>Balance transfers as distributed transactions: event sourcing + saga/TCC instead of 2PC</td></tr>
+<tr><td>28</td><td>Stock exchange</td><td>In-memory matching engine, single-threaded per symbol for determinism; sequencer + replicated event log</td></tr>
+</table>
+
+<h2 id="llm">7. LLM-flavored system design</h2>
+<p>Increasingly the deep-dive is "design an LLM serving system" — and this repo has a whole <a href="inference.html">chapter</a> of the internals. The sketch interviewers expect:</p>
+<div class="formula">client → API gateway (auth, token-bucket rate limit, usage metering)
+      → router: prefix-aware + load-aware (send same-session traffic where its KV cache lives)
+      → prefill pool (compute-bound; chunked prefill; TP across GPUs for big models)
+      → KV transfer (NIXL/RDMA)
+      → decode pool (bandwidth-bound; continuous batching; speculative decoding)
+      → token stream back via SSE/WebSocket</div>
+<p>Then hit the systems notes: <strong>SLOs</strong> are TTFT and TPOT, not just availability; <strong>autoscale on goodput</strong> (SLO-passing requests), scaling prefill and decode pools independently (that's the point of disaggregation); KV cache is the scarce resource, so admission control and preemption replace naive queueing; multi-tenancy needs fair scheduling in <em>tokens</em>, not requests. A "design a RAG pipeline / AI assistant" question is the <a href="agents.html">Agents chapter</a> drawn as boxes: ingestion DAG (chunk → embed → index) as the write path, retrieve → rerank → generate as the read path, with evals and feedback loops as the ops story.</p>
+
+<h2 id="reading">8. Where to go deeper</h2>
+<ul>
+<li>The <a href="https://github.com/liquidslr/system-design-notes">System Design Interview notes</a> — chapter by chapter, per the plan's Fri/Sun rhythm (design it yourself first, then compare).</li>
+<li><a href="https://pagefy.io/system-design/system-design-interview-by-alex-xu">Pagefy mirror</a> of the same material, and the <a href="https://www.goodreads.com/book/show/54109255-system-design-interview-an-insider-s-guide">books</a> themselves.</li>
+<li><em>Designing Data-Intensive Applications</em> (Kleppmann) — the depth behind §4–5 when an interviewer keeps digging.</li>
+<li>The <a href="inference.html">Inference</a> and <a href="parallelism.html">Parallelism</a> chapters — your unfair advantage on the LLM-flavored questions.</li>
+<li>The <a href="flashcards.html">System Design flashcard deck</a> to retain this chapter.</li>
+</ul>
+
+<div class="footer-nav"><a href="agents.html">← Agents</a><a href="coding-patterns.html">Coding Patterns →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------- 2. estimation calculator ----------
+(function(){
+const $=id=>document.getElementById(id);
+const DAUS=[100e3,1e6,10e6,50e6,300e6,1e9,2e9];
+function fmtN(n){if(n>=1e9)return (n/1e9).toFixed(n>=1e10?0:1)+'B';if(n>=1e6)return (n/1e6).toFixed(n>=1e7?0:1)+'M';if(n>=1e3)return (n/1e3).toFixed(n>=1e4?0:1)+'K';return Math.round(n)+'';}
+function fmtB(b){const u=['B','KB','MB','GB','TB','PB'];let i=0;while(b>=1024&&i<5){b/=1024;i++;}return b.toFixed(b>=100?0:1)+' '+u[i];}
+function upd(){
+  const dau=DAUS[parseInt($('estDAU').value)],w=parseInt($('estW').value),r=parseInt($('estR').value),p=parseInt($('estP').value);
+  $('estDAULabel').textContent=fmtN(dau);$('estWLabel').textContent=w;$('estRLabel').textContent=r+':1';
+  const wqps=dau*w/86400,rqps=wqps*r;
+  $('estWQPS').textContent=fmtN(wqps);$('estRQPS').textContent=fmtN(rqps);$('estPeak').textContent=fmtN(rqps*2.5);
+  $('estStore').textContent=fmtB(dau*w*p*365);
+  $('estCache').textContent=fmtB(dau*w*r*p*0.2);
+}
+['estDAU','estW','estR','estP'].forEach(id=>$(id).oninput=upd);upd();
+})();
+
+// ---------- 3a. consistent hashing ring ----------
+(function(){
+const cv=document.getElementById('ringViz'),ctx=cv.getContext('2d');
+const CX=240,CY=180,R=130,VNODES=3,KEYS=28;
+const PALETTE=['#5b8cff','#38c6a0','#f2a65a','#e5604c','#b07cff','#4cc3e5','#9ad24c','#e5a0c3'];
+let nodes=[],keys=[],moved=new Set(),nextId=0;
+function hash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return (h>>>0)/4294967296;}
+function vpoints(){const out=[];nodes.forEach(n=>{for(let v=0;v<VNODES;v++)out.push({node:n,a:hash(n.name+'#'+v)*2*Math.PI});});return out.sort((a,b)=>a.a-b.a);}
+function owner(a){const vp=vpoints();if(!vp.length)return null;for(const p of vp)if(p.a>=a)return p.node;return vp[0].node;}
+function assign(){moved.clear();keys.forEach(k=>{const o=owner(k.a);if(k.owner&&o&&k.owner!==o)moved.add(k.id);k.owner=o;});}
+function init(){nodes=[];nextId=0;for(let i=0;i<4;i++)addNode(true);
+  keys=Array.from({length:KEYS},(_,i)=>({id:i,a:hash('key'+i*7)*2*Math.PI,owner:null}));assign();moved.clear();draw();}
+function addNode(silent){nodes.push({name:'N'+(++nextId),color:PALETTE[(nextId-1)%PALETTE.length]});if(!silent){assign();draw();}}
+function dropNode(){if(nodes.length<=1)return;nodes.splice(Math.floor(Math.random()*nodes.length),1);assign();draw();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.strokeStyle=bd;ctx.lineWidth=2;ctx.beginPath();ctx.arc(CX,CY,R,0,7);ctx.stroke();
+  // keys
+  keys.forEach(k=>{const x=CX+R*Math.cos(k.a-Math.PI/2),y=CY+R*Math.sin(k.a-Math.PI/2);
+    ctx.fillStyle=k.owner?k.owner.color:'#888';
+    if(moved.has(k.id)){ctx.strokeStyle=css('--danger');ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(x,y,8,0,7);ctx.stroke();}
+    ctx.beginPath();ctx.arc(x,y,4.5,0,7);ctx.fill();});
+  // vnodes
+  vpoints().forEach(p=>{const x=CX+(R+16)*Math.cos(p.a-Math.PI/2),y=CY+(R+16)*Math.sin(p.a-Math.PI/2);
+    ctx.fillStyle=p.node.color;ctx.beginPath();ctx.moveTo(x,y-7);ctx.lineTo(x+7,y+6);ctx.lineTo(x-7,y+6);ctx.closePath();ctx.fill();});
+  // legend + counts
+  ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('Nodes (▲ = virtual node)',480,40);ctx.font='12px sans-serif';
+  nodes.forEach((n,i)=>{const cnt=keys.filter(k=>k.owner===n).length;
+    ctx.fillStyle=n.color;ctx.fillRect(480,54+i*24,13,13);
+    ctx.fillStyle=txt;ctx.fillText(n.name+' — '+cnt+' keys',500,65+i*24);});
+  ctx.fillStyle=dim;
+  ctx.fillText('○ keys on the ring · red ring = key that just changed owner',480,54+nodes.length*24+16);
+  document.getElementById('ringStats').textContent=moved.size?('last change moved '+moved.size+'/'+KEYS+' keys ('+Math.round(100*moved.size/KEYS)+'%) — hash % N would move ~'+Math.round(100*(1-1/Math.max(nodes.length,1)))+'%'):'';
+}
+document.getElementById('ringAdd').onclick=()=>addNode(false);
+document.getElementById('ringDrop').onclick=dropNode;
+document.getElementById('ringReset').onclick=init;
+init();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3b. token bucket ----------
+(function(){
+const cv=document.getElementById('bucketViz'),ctx=cv.getContext('2d');
+const CAP=10;let tokens=CAP,history=[];//history: {ok, t}
+const rate=document.getElementById('bktRate'),rl=document.getElementById('bktRateLabel');
+rate.oninput=()=>rl.textContent=rate.value+'/s';
+setInterval(()=>{tokens=Math.min(CAP,tokens+parseInt(rate.value)/5);draw();},200);
+function req(){const ok=tokens>=1;if(ok)tokens-=1;history.push({ok,t:Date.now()});if(history.length>24)history.shift();draw();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),danger=css('--danger'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  // bucket
+  const bx=80,by=40,bw=120,bh=170;
+  ctx.strokeStyle=bd;ctx.lineWidth=2.5;
+  ctx.beginPath();ctx.moveTo(bx,by);ctx.lineTo(bx,by+bh);ctx.lineTo(bx+bw,by+bh);ctx.lineTo(bx+bw,by);ctx.stroke();
+  const full=Math.floor(tokens);
+  for(let i=0;i<full;i++){ctx.fillStyle=acc;ctx.beginPath();ctx.arc(bx+bw/2+(i%3-1)*30,by+bh-14-Math.floor(i/3)*26,10,0,7);ctx.fill();}
+  const frac=tokens-full;if(frac>0.05){ctx.globalAlpha=frac;ctx.fillStyle=acc;ctx.beginPath();ctx.arc(bx+bw/2+(full%3-1)*30,by+bh-14-Math.floor(full/3)*26,10,0,7);ctx.fill();ctx.globalAlpha=1;}
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='center';
+  ctx.fillText(tokens.toFixed(1)+' / '+CAP+' tokens',bx+bw/2,by+bh+24);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('↓ refill '+rate.value+'/s',bx+bw/2,by-10);
+  // request lane
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillText('Requests (newest right)',300,50);
+  history.forEach((h,i)=>{const x=300+i*24,y=90;
+    ctx.fillStyle=h.ok?acc2:danger;
+    ctx.beginPath();ctx.arc(x,y,9,0,7);ctx.fill();
+    ctx.fillStyle='#fff';ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText(h.ok?'✓':'429',x,y+3);});
+  const ok=history.filter(h=>h.ok).length;
+  if(history.length){ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+    ctx.fillText(ok+' allowed, '+(history.length-ok)+' rejected of last '+history.length,300,130);}
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.font='12px sans-serif';
+  ctx.fillText('Try: let it fill, then "Send burst of 8" — the burst passes. Do it again immediately — 429s.',300,170);
+}
+document.getElementById('bktReq').onclick=req;
+document.getElementById('bktBurst').onclick=()=>{let i=0;const t=setInterval(()=>{req();if(++i>=8)clearInterval(t);},90);};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3c. snowflake ----------
+(function(){
+const cv=document.getElementById('snowViz'),ctx=cv.getContext('2d');
+const EPOCH=1288834974657;let last={ts:0,seq:0},current=null;
+function gen(){const ts=Date.now();if(ts===last.ts)last.seq++;else last={ts,seq:0};
+  current={ts,seq:last.seq,dc:3,m:17};draw();
+  document.getElementById('snowNote').textContent='decimal: '+(BigInt(ts-EPOCH)<<22n|BigInt(3<<17)|BigInt(17<<12)|BigInt(last.seq)).toString();}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text');
+  const fields=[{bits:1,label:'sign',v:'0',color:'#888'},
+    {bits:41,label:'timestamp (ms since epoch)',v:current?(current.ts-EPOCH).toString(2).padStart(41,'0'):'…',color:'#5b8cff'},
+    {bits:5,label:'datacenter',v:current?(3).toString(2).padStart(5,'0'):'…',color:'#38c6a0'},
+    {bits:5,label:'machine',v:current?(17).toString(2).padStart(5,'0'):'…',color:'#f2a65a'},
+    {bits:12,label:'sequence',v:current?current.seq.toString(2).padStart(12,'0'):'…',color:'#e5604c'}];
+  let x=30;const total=64,w=W-60,y=50,h=46;
+  fields.forEach(f=>{
+    const fw=f.bits/total*w;
+    ctx.fillStyle=f.color;ctx.globalAlpha=0.85;ctx.fillRect(x,y,fw-3,h);ctx.globalAlpha=1;
+    ctx.fillStyle='#fff';ctx.font=f.bits>6?'11px monospace':'9px monospace';ctx.textAlign='center';
+    if(current)ctx.fillText(f.v.length>26?f.v.slice(0,12)+'…'+f.v.slice(-10):f.v,x+fw/2,y+28);
+    ctx.fillStyle=txt;ctx.font='11px sans-serif';
+    ctx.save();ctx.translate(x+fw/2,y+h+14);ctx.fillText(f.label+' ('+f.bits+'b)',0,0);ctx.restore();
+    x+=fw;});
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText(current?('ts='+current.ts+'  seq='+current.seq+(current.seq?' (same millisecond → sequence incremented)':'')):'Press Generate.',30,160);
+}
+document.getElementById('snowGen').onclick=gen;
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4. LSM tree ----------
+(function(){
+const cv=document.getElementById('lsmViz'),ctx=cv.getContext('2d');
+const MEMCAP=6;let mem=[],sst=[],nextKey=0,note='';
+const WORDS=['user','post','like','feed','img','tag','msg','key','doc','job'];
+function wr(){
+  for(let i=0;i<5;i++){
+    const k=WORDS[Math.floor(Math.random()*WORDS.length)]+':'+Math.floor(Math.random()*30);
+    const ix=mem.findIndex(e=>e.k===k);if(ix>=0)mem[ix].v++;else mem.push({k,v:1});
+    if(mem.length>=MEMCAP){mem.sort((a,b)=>a.k<b.k?-1:1);sst.unshift(mem.map(e=>({...e})));mem=[];note='memtable full → flushed to SSTable (sorted, immutable, sequential write)';}
+  }
+  if(sst.length>4)note='many SSTables → reads check each one; time to compact';
+  draw();
+}
+function compact(){
+  if(sst.length<2){note='need ≥2 SSTables to compact';draw();return;}
+  const merged={};[...sst].reverse().forEach(t=>t.forEach(e=>merged[e.k]=(merged[e.k]||0)+e.v));
+  sst=[Object.entries(merged).map(([k,v])=>({k,v})).sort((a,b)=>a.k<b.k?-1:1)];
+  note='compaction: merged all SSTables, dropped stale versions — read now checks 1 file';
+  draw();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillStyle=txt;
+  ctx.fillText('Memtable (RAM, sorted) — '+mem.length+'/'+MEMCAP,30,30);
+  ctx.strokeStyle=acc;ctx.strokeRect(30,40,250,150);
+  ctx.font='11px monospace';
+  [...mem].sort((a,b)=>a.k<b.k?-1:1).forEach((e,i)=>{ctx.fillStyle=txt;ctx.fillText(e.k+' = v'+e.v,42,60+i*21);});
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('flush when full →',30,210);
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  ctx.fillText('SSTables on disk (newest left, each sorted & immutable)',320,30);
+  sst.slice(0,4).forEach((t,ti)=>{
+    const x=320+ti*142;
+    ctx.strokeStyle=bd;ctx.strokeRect(x,40,130,Math.min(t.length,10)*17+16);
+    ctx.fillStyle=ti===0?acc2:dim;ctx.font='10px sans-serif';ctx.fillText(ti===0?'newest':'older',x+4,52);
+    ctx.font='10px monospace';
+    t.slice(0,10).forEach((e,i)=>{ctx.fillStyle=txt;ctx.fillText(e.k+'=v'+e.v,x+6,66+i*17);});
+    if(t.length>10){ctx.fillStyle=dim;ctx.fillText('… +'+(t.length-10),x+6,66+10*17);}});
+  if(sst.length>4){ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('+'+(sst.length-4)+' more…',320+4*142,60);}
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText('read path: memtable → SSTables newest→oldest (Bloom filters skip most) · write path: memtable only',30,H-32);
+  document.getElementById('lsmNote').textContent=note;
+}
+document.getElementById('lsmWrite').onclick=wr;
+document.getElementById('lsmCompact').onclick=compact;
+document.getElementById('lsmReset').onclick=()=>{mem=[];sst=[];note='';draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

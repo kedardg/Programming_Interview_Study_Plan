@@ -1,0 +1,124 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multimodal Video Search System</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-mm-video-search.md</div>
+<article class="note"><h1 id="multimodal-video-search-system">Multimodal Video Search System</h1>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<ul>
+<li>
+<p>Clarifying questions</p>
+<ul>
+<li>What is the primary (business) objective of the search system?</li>
+<li>What are the specific use cases and scenarios where it will be applied?</li>
+<li>What are the system requirements (such as response time, accuracy, scalability, and integration with existing systems or platforms)?</li>
+<li>What is the expected scale of the system in terms of data and user interactions?</li>
+<li>Is their any data available? What format? </li>
+<li>Can we use video metadata? Yes </li>
+<li>Personalized? not required </li>
+<li>How many languages needs to be supported?</li>
+</ul>
+</li>
+<li>
+<p>Use case(s) and business goal</p>
+</li>
+<li>Use case: user enters text query into search box, system shows the most relevant videos </li>
+<li>business goal: increase click through rate, watch time, etc.  </li>
+<li>Requirements</li>
+<li>response time, accuracy, scalability (50M DAU)</li>
+<li>Constraints</li>
+<li>budget limitations, hardware limitations, or legal and privacy constraints</li>
+<li>Data: sources and availability</li>
+<li>Sources: videos (1B), text </li>
+<li>10M pairs of <video, text_query>. Videos have metadata (title, description, tags) in text format </li>
+<li>Assumptions</li>
+<li>ML formulation: </li>
+<li>ML Objective: retrieve videos that are relevant to a text query  </li>
+<li>ML I/O: I: text query from a user, O: ranked list of relevant videos on a video sharing platform  </li>
+<li>ML category: Visual search + Text Search systems </li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<ul>
+<li>Offline</li>
+<li>Precision@k, mAP, Recall@k, MRR </li>
+<li>we choose MRR (avg rank of first relevant element in results) due to the format of our eval data <video, text> pair </li>
+<li>Online </li>
+<li>CTR: problem: doesn't track relevancy, click baits  </li>
+<li>video completion rate: partially watched videos might still found relevant by user </li>
+<li>total watch time</li>
+<li>we choose total watch time: good indicator of relevance </li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<p>Multimodal search (video, text) for video content from text query: 
+- Visual search system 
+  - Text query -&gt; videos (based on similarity of text and visual content) 
+  - Two tower embedding architecture (video and text_query encoders)
+- Textual search system 
+  - search for most similar titles, descs, and tags  w/ text query 
+  - we can use Inverted Index (e.g. elastic search) for efficient full text search 
+    - An inverted index is a data structure that maps terms (words) to the documents or locations where they appear, enabling efficient text-based document retrieval, commonly used in search engines.</p>
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<p>We use provided annotated data in the format of <video_id, query>. </p>
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<ul>
+<li>Preprocessing unstructured data </li>
+<li>Text pre-processing : normalization, tokenization, token to ids</li>
+<li>Video preprocessing: decode into frames -&gt; sample -&gt; resize -&gt; scale, normalize, color correct </li>
+</ul>
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<ul>
+<li>Model Selection  </li>
+<li>
+<p>Text encoders: </p>
+<ul>
+<li>Text -&gt; Vector (Embeddings)  </li>
+<li>Two approaches: </li>
+<li>Statistical (BoW, TF-IDF)</li>
+<li>ML encoders (word2vec, transformer based e.g. BERT)  </li>
+<li>We chose transformer based (BERT). </li>
+</ul>
+</li>
+<li>
+<p>Video encoders: </p>
+<ul>
+<li>Video-level</li>
+<li>more expensive, but captures temporal understanding</li>
+<li>Example: ViViT (Video Vision Transformer)</li>
+<li>Frame-level (from sample frames and aggregate)</li>
+<li>less expensive (training and serving speed, compute power) </li>
+<li>Example: ViT </li>
+</ul>
+</li>
+<li>
+<p>Model Training   </p>
+</li>
+<li>contrastive learning (similar to visual search system). </li>
+</ul>
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<p>Components: 
+- Visual search from text query 
+  - text -&gt; preprocess -&gt; encoder -&gt; embedding 
+  - videos are indexed by their encoded embeddings 
+  - search: using approximate nearest neighbor search (ANN)
+- Textual search
+  - using Elasticsearch (full text / fuzzy search)
+- Fusion<br>
+  - re-rank based on weighted sum of rel scores 
+  - re-rank using a model 
+- Re-ranking 
+  - business level logic and policies </p>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-mm-video-search.md">src/MLSD/mlsd-mm-video-search.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

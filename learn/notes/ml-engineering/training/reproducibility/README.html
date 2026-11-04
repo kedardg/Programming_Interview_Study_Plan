@@ -1,0 +1,148 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reproducibility</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-engineering">Machine Learning Engineering Open Book</a> › training/reproducibility/README.md</div>
+<article class="note"><h1 id="reproducibility">Reproducibility</h1>
+<h2 id="achieve-determinism-in-randomness-based-software">Achieve determinism in randomness based software</h2>
+<p>When debugging always set a fixed seed for all the used Random Number Generators (RNG) so that you get the same data / code path on each re-run.</p>
+<p>On GPU, seeding alone isn't enough for bitwise-reproducible results: cuDNN and cuBLAS are free to pick different (but individually valid) algorithms from run to run for the same op, so a truly deterministic re-run also requires forcing them to always pick the same, deterministic ones - that's what the <code>cudnn.benchmark</code>, <code>use_deterministic_algorithms()</code> and <code>CUBLAS_WORKSPACE_CONFIG</code> settings below take care of.</p>
+<p>There are many different systems involved, so it's tricky to cover them all - here is an attempt to cover the most common deterministic knobs:</p>
+<pre><code class="language-python">import os, random, torch, numpy as np
+def enforce_reproducibility(use_seed=None):
+    seed = use_seed if use_seed is not None else random.randint(1, 1000000)
+    print(f&quot;Using seed: {seed}&quot;)
+
+    if use_seed is not None: # slower speed! https://docs.pytorch.org/docs/stable/notes/randomness.html#cuda-convolution-benchmarking
+        # CUBLAS_WORKSPACE_CONFIG must be set before any CUDA context gets created, i.e. before
+        # the torch.cuda.* calls below - if CUDA is initialized earlier elsewhere it's too late,
+        # and silently so, hence the explicit assert instead of letting it fail quietly
+        if &quot;CUBLAS_WORKSPACE_CONFIG&quot; not in os.environ and torch.cuda.is_initialized():
+            raise RuntimeError(
+                &quot;CUDA was already initialized before enforce_reproducibility() got to set &quot;
+                &quot;CUBLAS_WORKSPACE_CONFIG - move this call earlier, or export &quot;
+                &quot;CUBLAS_WORKSPACE_CONFIG=:4096:8 before the process starts&quot;
+            )
+        os.environ.setdefault(&quot;CUBLAS_WORKSPACE_CONFIG&quot;, &quot;:4096:8&quot;)
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark = False
+
+    random.seed(seed)    # python RNG
+    np.random.seed(seed) # numpy RNG
+
+    # pytorch RNGs
+    torch.manual_seed(seed)          # cpu + cuda
+    torch.cuda.manual_seed_all(seed) # multi-gpu - can be called without gpus
+
+    return seed
+</code></pre>
+<p>Notes:</p>
+<ul>
+<li>
+<p>Comment out whichever RNG seeding call you don't need - e.g. if you don't use <code>numpy</code> directly. However, some module you depend on might use it internally without your knowledge, so it's usually best to leave them all in and be safe.</p>
+</li>
+<li>
+<p><code>CUBLAS_WORKSPACE_CONFIG</code> plugs a gap <code>use_deterministic_algorithms(True)</code> doesn't close on its own: cuBLAS - the library behind <code>torch.mm</code>/<code>mv</code>/<code>bmm</code> and other <code>matmul</code>-based ops - can be non-deterministic on CUDA &gt;= 10.2, because it dynamically picks internal workspace memory for routines running in parallel CUDA streams on the same handle, so results can differ from run to run even with the same seed. Without this env var set, <code>use_deterministic_algorithms(True)</code> will raise a <code>RuntimeError</code> the moment it hits a <code>matmul</code> op - that's your signal it needs to be set. It <strong>must be set before the CUDA context is created</strong>, i.e. before the first CUDA call; if set after CUDA has already been initialized elsewhere in the process, it's silently ignored, which is why it's set at the very top of <code>enforce_reproducibility()</code> above, ahead of the <code>torch.cuda.*</code> calls.</p>
+</li>
+</ul>
+<p>Since a silently-ignored env var is easy to miss, <a href="https://docs.pytorch.org/docs/stable/generated/torch.cuda.is_initialized.html"><code>torch.cuda.is_initialized()</code></a> is used above to <code>raise</code> instead, if <code>CUBLAS_WORKSPACE_CONFIG</code> isn't set yet and CUDA has already been lazily initialized by some earlier call (e.g. a <code>.cuda()</code> tensor, <code>torch.cuda.set_device()</code>, or another library touching CUDA first) by the time <code>enforce_reproducibility()</code> runs. Note that this only catches initialization that went through PyTorch's own lazy-init path - if some non-PyTorch library created a raw CUDA context first, <code>is_initialized()</code> won't know about it. Therefore, try to run <code>enforce_reproducibility()</code> as early as possible in your program.</p>
+<p>NVIDIA's cuBLAS docs sanction exactly two values for deterministic behavior, and both involve a memory-vs-performance tradeoff - a smaller workspace leaves cuBLAS with fewer algorithm choices, which can limit performance, while a larger workspace gives it more room to pick a faster algorithm at the cost of extra GPU memory:
+  - <code>:16:8</code> - deterministic, minimal extra memory, but the smaller workspace may limit performance
+  - <code>:4096:8</code> - deterministic, costs ~24MiB of extra GPU memory, but leaves more performance headroom (the more commonly used of the two, and what's used above)</p>
+<p>There's no third, cost-free option - determinism is structurally at odds with letting cuBLAS freely pick whichever algorithm/workspace layout is fastest across concurrent streams, so pinning it down always gives up some of that freedom. <code>:4096:8</code> tends to have the smaller performance penalty of the two (more workspace room means fewer algorithms get ruled out), but "smaller" isn't "zero" - the actual hit is workload- and <code>matmul</code>-shape-dependent, and can range from negligible to significant (some reports show throughput cut roughly in half on specific workloads).</p>
+<p>The general format is <code>:[SIZE]:[COUNT]</code>, and you'll see it chained into multiple <code>SIZE:COUNT</code> pairs (e.g. the default, unset behavior is equivalent to <code>CUBLAS_WORKSPACE_CONFIG=:4096:2:16:8</code>). That chained form comes from cuBLAS's own internal workspace-pool config, where each pair originally described a distinct bucket size/count so the pool could efficiently serve both large and small workspace requests. PyTorch, however, just sums every <code>SIZE * COUNT</code> pair it finds into a single total byte count and hands that one fixed-size buffer to cuBLAS - so <code>:4096:2:16:8</code> simply means <code>2*4096 + 8*16</code> KiB in total, and chaining more pairs only changes <em>how many KiB you add up</em>, not the determinism behavior. In practice you don't need to chain anything yourself: pick one of NVIDIA's two blessed single-pair values above, or set <code>:0:0</code> to force cuBLAS to not use any workspace at all (not recommended - this is the most restrictive and slowest option).</p>
+<ul>
+<li>
+<p><code>torch.use_deterministic_algorithms(True)</code> makes cuDNN convolutions deterministic and it additionally covers hundreds of other ops throughout PyTorch (<code>index_add_</code>, <code>scatter_</code>, interpolation, etc.). Instead of silently doing its best, it raises a <code>RuntimeError</code> the moment it hits an op with no deterministic implementation, so nondeterminism can't sneak in unnoticed.</p>
+</li>
+<li>
+<p><code>torch.backends.cudnn.benchmark = False</code> is a separate, complementary knob that stops cuDNN from timing several convolution algorithms on the first call with each new input shape and caching whichever was fastest. That benchmarking step is itself a source of run-to-run variation - which algorithm "wins" the timing race can depend on incidental system noise - independently of whether the algorithm it settles on is deterministic.</p>
+</li>
+</ul>
+<blockquote>
+<p><strong>PyTorch version note</strong>: <code>torch.use_deterministic_algorithms()</code> requires <strong>PyTorch &gt;= 1.8</strong>. On PyTorch &lt; 1.8, fall back to the narrower <code>torch.backends.cudnn.deterministic = True</code>, which only makes cuDNN convolutions deterministic and leaves everything else (<code>matmul</code>s, <code>index_add_</code>, <code>scatter_</code>, etc.) untouched - <code>CUBLAS_WORKSPACE_CONFIG</code> is independent of the PyTorch version and still applies:
+<code>python
+if use_seed:
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.backends.cudnn.benchmark     = False
+    torch.backends.cudnn.deterministic = True # PyTorch &lt; 1.8 fallback - cuDNN convolutions only</code></p>
+</blockquote>
+<p>Resources:
+- <a href="https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility">NVIDIA cuBLAS docs - Reproducibility</a> - the canonical explanation of cuBLAS non-determinism and the accepted <code>CUBLAS_WORKSPACE_CONFIG</code> values
+- <a href="https://docs.pytorch.org/docs/stable/generated/torch.use_deterministic_algorithms.html"><code>torch.use_deterministic_algorithms</code></a> - the full list of affected ops and how <code>warn_only</code> works
+- <a href="https://docs.pytorch.org/docs/stable/cuda_environment_variables.html">PyTorch CUDA environment variables reference</a> - the exact <code>:[SIZE]:[COUNT]</code> format spec for <code>CUBLAS_WORKSPACE_CONFIG</code>
+- <a href="https://docs.pytorch.org/docs/stable/notes/randomness.html">PyTorch Reproducibility notes</a> - ties this together with seeding, <code>cudnn.deterministic</code> and <code>cudnn.benchmark</code> for the full picture</p>
+<p>If your code also touches other accelerator backends or frameworks besides CPU/CUDA - e.g. NPU, XPU, or TensorFlow - seed their RNGs too:</p>
+<pre><code class="language-python">    torch.npu.manual_seed_all(seed)
+    torch.xpu.manual_seed_all(seed)
+    tf.random.set_seed(seed)
+</code></pre>
+<p>When you rerun the same code again and again to solve some problem, set a specific seed at the beginning of your code with:</p>
+<pre><code>enforce_reproducibility(42)
+</code></pre>
+<p>As mentioned above, <strong>this is for debug only</strong>: it activates various <code>torch</code> flags that help with determinism, but can slow things down, so you don't want this in production.</p>
+<p>However, you can call this instead to use in production:</p>
+<pre><code>enforce_reproducibility()
+</code></pre>
+<p>i.e. w/o the explicit seed. And then it'll pick a random seed and log it! So if something happens in production, you can now reproduce the same RNG state the issue occurred under. And no performance penalty this time, as the determinism settings (<code>cudnn.benchmark</code> / <code>use_deterministic_algorithms</code> / <code>CUBLAS_WORKSPACE_CONFIG</code>) are only set if you provided the seed explicitly. Say it logged:</p>
+<pre><code>Using seed: 1234
+</code></pre>
+<p>you then just need to change the code to:</p>
+<pre><code>enforce_reproducibility(1234)
+</code></pre>
+<p>and you will get the same RNGs setup.</p>
+<p>As mentioned earlier, there could be many other RNGs involved in a system - for example, if you want the data to be fed in the same order for a <code>DataLoader</code>, you need <a href="https://docs.pytorch.org/docs/stable/notes/randomness.html#dataloader">to have its seed set as well</a>.</p>
+<p>See also <a href="../../debug/pytorch.html#floating-point-math-discrepancies-on-different-devices">Floating point math discrepancies on different devices</a> in the debugging chapter.</p>
+<h2 id="reproduce-the-software-and-system-environment">Reproduce the software and system environment</h2>
+<p>This methodology is useful when discovering some discrepancy in outcomes - quality or a throughput for example.</p>
+<p>The idea is to log the key components of the environment used to launch a training (or inference) so that if at a later stage it needs to be reproduced exactly as it was it can be done.</p>
+<p>Since there is a huge variety of systems and components being used it's impossible to prescribe a way that will always work. So let's discuss one possible recipe and you can then adapt it to your particular environment.</p>
+<p>This is added to your slurm launcher script (or whatever other way you use to launch the training) - this is Bash script:</p>
+<pre><code class="language-bash">SAVE_DIR=/tmp # edit to a real persistent path
+export REPRO_DIR=$SAVE_DIR/repro/$SLURM_JOB_ID
+mkdir -p $REPRO_DIR
+# 1. modules (writes to stderr) (remove if you don't use lmod or similar modules implementation)
+module list 2&gt; $REPRO_DIR/modules.txt
+# 2. shell env vars
+/usr/bin/printenv | sort &gt; $REPRO_DIR/env.txt
+# 3. pip (this includes devel installs SHA)
+pip freeze &gt; $REPRO_DIR/requirements.txt
+# 4. uncommitted diff in git clones installed into conda
+perl -nle 'm|&quot;file://(.*?/([^/]+))&quot;| &amp;&amp; qx[cd $1; if [ ! -z &quot;\$(git diff)&quot; ]; then git diff &gt; \$REPRO_DIR/$2.diff; fi]' $CONDA_PREFIX/lib/python*/site-packages/*.dist-info/direct_url.json
+</code></pre>
+<p>As you can see this recipe is used in a SLURM environment, so every new training will dump the environment specific to the SLURM job. But you can adapt it to any other environment.</p>
+<p>Let's expend on each step in the recipe:</p>
+<ol>
+<li>We save which <code>modules</code> were loaded, e.g. in cloud cluster/HPC setups you're like to be loading the CUDA and cuDNN libraries using this.</li>
+</ol>
+<p>If you don't use <code>modules</code> then remove that entry</p>
+<ol start="2">
+<li>
+<p>We dump the shell environment variables. This can be crucial since a single env var like <code>LD_PRELOAD</code> or <code>LD_LIBRARY_PATH</code> could make a huge impact on performance in some environments</p>
+</li>
+<li>
+<p>We then dump the python environment packages and their versions - this should work with any virtual python environment like <code>conda</code>, <code>venv</code> or even if you don't use a virtual environment.</p>
+</li>
+</ol>
+<p>If you use <code>uv</code> instead of <code>pip</code>, switch to <code>uv pip freeze</code> as it'd be much faster.</p>
+<ol start="4">
+<li>If you use a devel install with <code>pip install -e .</code> it doesn't know anything about the git clone repository it was installed from other than its git SHA. But the issue is that it's likely that you have modified the files locally and now <code>pip freeze</code> will miss those changes. So this part will go through all packages that are not installed into the conda environment (we find them by looking inside <code>site-packages/*.dist-info/direct_url.json</code>) and, for each one that has uncommitted changes, save its <code>git diff</code> to <code>$REPRO_DIR/&lt;package&gt;.diff</code>.</li>
+</ol>
+<p>To save the <code>apt</code> packages add:</p>
+<pre><code class="language-bash">apt list --installed &gt; $REPRO_DIR/apt-packages.txt
+</code></pre>
+<p>If using <code>conda</code> an additionally useful tool is <a href="https://github.com/stas00/conda-tools/blob/master/conda-env-compare.md">conda-env-compare.pl</a> which helps you to find out the exact differences 2 conda environments have.</p>
+<p>Anecdotally, me and my colleague were getting very different training TFLOPS on a cloud cluster running the exact same code - literally launching the same slurm script from the same shared directory. We first compared our conda environments using <a href="https://github.com/stas00/conda-tools/blob/master/conda-env-compare.md">conda-env-compare.pl</a> and found some differences - I installed the exact packages she had to match her environment and it was still showing a huge performance difference. We then compared the output of <code>printenv</code> and discovered that I had <code>LD_PRELOAD</code> set up whereas she didn't - and that made a huge difference since this particular cloud provider required multiple env vars to be set to custom paths to get the most of their hardware.</p></article>
+<div class="attrib">Source: <a href="https://github.com/stas00/ml-engineering/blob/main/training/reproducibility/README.md">training/reproducibility/README.md</a> from <strong>Machine Learning Engineering Open Book</strong> by Stas Bekman, reproduced under CC BY-SA 4.0 (see <code>learn/vendor/notes/ml-engineering/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

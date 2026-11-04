@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Framework Stack</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+.infobox { background: var(--bg-inset); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-top: 10px; font-size: 0.9rem; min-height: 64px; }
+.infobox b { color: var(--accent); }
+</style>
+</head>
+<body>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html" class="here">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<main>
+<h1>The Framework Stack: What Each Tool Is, What It Does, and How You Use It</h1>
+<p class="dim">The training, RL, inference, and accelerator frameworks you actually operate when you customize a model and take it to production: PyTorch FSDP2, Megatron-LM, Axolotl and TRL; verl, Miles, NeMo RL/NeMo Gym and OpenEnv; vLLM, SGLang and TensorRT-LLM; the AWS Neuron SDK; Ray and the checkpoint formats that tie them together; and the managed paths in Amazon Bedrock and SageMaker AI. Every other chapter explains <em>why</em> these systems work; this one explains <em>what each one is</em>, what it does for you, and how you drive it. APIs move fast — the code blocks are representative shapes, labelled illustrative; the abstractions behind them are what to learn.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (14:38)</h3><audio controls preload="none" src="audio/frameworks.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/frameworks.txt">Read the transcript</a>.</p></div>
+<h2 id="map">1. The map: where each framework lives</h2>
+<p>A model customization program is a pipeline with five stations, and every framework in this chapter lives at exactly one of them (a few straddle two). Hold this picture before the details: <strong>data</strong> flows into an <strong>SFT trainer</strong>; the SFT checkpoint flows into an <strong>RL trainer</strong>, which cannot work alone — it needs <strong>rollout engines</strong> to generate samples and <strong>environments</strong> to score them; checkpoints flow through <strong>evals</strong> that gate releases; the winner flows into <strong>serving</strong>; and <strong>monitoring</strong> feeds production traffic back into data. Weights, rollouts, rewards and metrics are the four things that travel along the edges, and the hard engineering problems (resharding weights between trainer and engine, scaling environments, keeping evals honest) are all <em>edge</em> problems, not box problems.</p>
+
+<div class="card">
+<h3>Interactive: the customization pipeline (click a box)</h3>
+<canvas id="mapViz" class="viz" width="900" height="300"></canvas>
+<div class="infobox" id="mapInfo">Click any station to see which frameworks run there and what flows in and out.</div>
+<div class="controls"><button class="btn" id="mapPlay">▶ Trace a run</button><button class="btn secondary" id="mapReset">Reset</button></div>
+<p class="caption">Boxes are stations; arrows carry weights (blue), rollouts and rewards (green), and metrics (orange). "Trace a run" animates one full cycle from data to production and back. Notice the RL station is really three cooperating systems — trainer, rollout engine, environment — which is why its frameworks are the most complex in the stack.</p>
+</div>
+
+<h2 id="training">2. Training frameworks</h2>
+
+<h3>PyTorch FSDP2: shard every parameter, gather on demand</h3>
+<p>FSDP2 (<code>torch.distributed.fsdp.fully_shard</code>) is PyTorch's native implementation of ZeRO-3-style data parallelism (<a href="parallelism.html">Chapter 12</a>): every parameter, gradient and optimizer state is sharded across the data-parallel group, and each module's parameters are all-gathered just before its forward or backward, used, then freed. What changed from the original FSDP ("FSDP1") is the representation: FSDP2 shards <em>per parameter</em> as a <strong>DTensor</strong> (a tensor that carries its own placement over a <strong>DeviceMesh</strong>) instead of flattening a module's parameters into one buffer. That one change buys composability — the same DTensor machinery implements tensor parallelism, so FSDP2 + TP is a 2-D mesh rather than a special case — plus simpler checkpoints (each parameter is addressable), partial-parameter freezing (LoRA works naturally), and <code>torch.compile</code> compatibility.</p>
+<p>The core concepts you configure:</p>
+<ul>
+<li><strong>Where to apply <code>fully_shard</code></strong>: on each transformer block (so only one block's parameters are materialized at a time) and once on the root module. Granularity is the memory/communication trade: finer sharding = less peak memory, more collectives.</li>
+<li><strong>Mixed precision policy</strong>: <code>MixedPrecisionPolicy(param_dtype=bf16, reduce_dtype=fp32)</code> — compute in BF16, keep sharded master parameters and gradient reductions in FP32 (<a href="training.html">Chapter 13</a>'s mixed-precision recipe, made explicit).</li>
+<li><strong>reshard_after_forward</strong>: free gathered parameters after forward (re-gather in backward) to save memory at the cost of a second all-gather; set false for the last blocks or small models.</li>
+<li><strong>Activation checkpointing</strong>: wrap blocks with <code>checkpoint_wrapper</code> or <code>torch.utils.checkpoint</code>; orthogonal to sharding, composes freely.</li>
+<li><strong>DeviceMesh</strong>: <code>init_device_mesh("cuda", (dp, tp), mesh_dim_names=("dp","tp"))</code>; apply TP with <code>parallelize_module</code> (Colwise/Rowwise plans) on the <code>tp</code> dimension, then <code>fully_shard</code> on the <code>dp</code> dimension. HSDP (replicate across nodes, shard within) is a 2-D mesh too.</li>
+</ul>
+<div class="formula"># Illustrative FSDP2 + TP (PyTorch 2.5+ shapes; check your version's docs)
+import torch
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.fsdp import fully_shard, MixedPrecisionPolicy
+from torch.distributed.tensor.parallel import parallelize_module, ColwiseParallel, RowwiseParallel
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import checkpoint_wrapper
+
+mesh = init_device_mesh("cuda", (dp_size, tp_size), mesh_dim_names=("dp", "tp"))
+model = build_transformer().cuda()              # any nn.Module with .layers (blocks)
+
+# 1) tensor parallel inside each block: column-split up-projections, row-split down-projections
+for block in model.layers:
+    parallelize_module(block, mesh["tp"], {
+        "attn.q_proj": ColwiseParallel(), "attn.k_proj": ColwiseParallel(),
+        "attn.v_proj": ColwiseParallel(), "attn.o_proj": RowwiseParallel(),
+        "mlp.up_proj": ColwiseParallel(),  "mlp.gate_proj": ColwiseParallel(),
+        "mlp.down_proj": RowwiseParallel(),
+    })
+
+# 2) FSDP2 across the data-parallel dimension, one unit per block, then the root
+mp = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
+for i, block in enumerate(model.layers):
+    model.layers[i] = checkpoint_wrapper(block)          # activation checkpointing
+    fully_shard(model.layers[i], mesh=mesh["dp"], mp_policy=mp, reshard_after_forward=True)
+fully_shard(model, mesh=mesh["dp"], mp_policy=mp)
+
+opt = torch.optim.AdamW(model.parameters(), lr=1e-5)      # optimizer state is sharded too
+# training loop is ordinary: loss.backward(); opt.step() — collectives are implicit
+# checkpoints: torch.distributed.checkpoint (DCP) saves DTensors shard-wise, reshards on load</div>
+<p><strong>When to use it</strong>: fine-tuning and post-training of dense models up to ~100B on a few nodes, anything LoRA/QLoRA, and any time you want plain PyTorch modules with no model rewrite. It is the default trainer behind Axolotl, TRL, verl's FSDP backend, NeMo RL's DTensor backend and TorchTitan.</p>
+
+<h3>Megatron-LM / Megatron-Core: the pretraining-scale toolkit</h3>
+<p>Megatron-Core is NVIDIA's library of parallel transformer building blocks (parallel embeddings and linears, fused attention via Transformer Engine, MoE layers, pipeline schedules) and <code>Megatron-LM</code> is the training harness around it. Where FSDP2 gives you <em>one</em> parallelism in native PyTorch, Megatron gives you all of them as first-class flags, each implemented with hand-optimized kernels:</p>
+<table class="cmp">
+<tr><th>Flag (illustrative)</th><th>Parallelism</th><th>What it does</th></tr>
+<tr><td><code>--tensor-model-parallel-size 8</code></td><td>TP</td><td>Column/row-split every linear inside the NVLink island (<a href="parallelism.html">Ch. 12</a>)</td></tr>
+<tr><td><code>--sequence-parallel</code></td><td>SP</td><td>Shard the LayerNorm/dropout activations along sequence between TP ranks — reclaims the activation memory TP leaves replicated</td></tr>
+<tr><td><code>--pipeline-model-parallel-size 4</code> + <code>--num-layers-per-virtual-pipeline-stage</code></td><td>PP (interleaved)</td><td>Layer stages across nodes with 1F1B / interleaved schedules to shrink bubbles</td></tr>
+<tr><td><code>--context-parallel-size 2</code></td><td>CP</td><td>Ring/Ulysses-style attention over sequence shards for long context</td></tr>
+<tr><td><code>--expert-model-parallel-size 8</code></td><td>EP</td><td>Experts across GPUs with all-to-all dispatch (and <code>--moe-grouped-gemm</code>, token dropping/capacity options)</td></tr>
+<tr><td><code>--use-distributed-optimizer</code></td><td>ZeRO-1</td><td>Shard optimizer state across DP ranks (the memory win of ZeRO without sharding parameters)</td></tr>
+</table>
+<p>Two more concepts matter in practice. The <strong>model spec</strong> (<code>get_gpt_layer_with_transformer_engine_spec()</code> and friends) declares which submodule implementations compose a layer — swapping attention or norm kernels is a spec change, not a model rewrite. And the <strong>distributed checkpoint</strong> format (<code>--ckpt-format torch_dist</code>) stores tensors with their parallel layout so a checkpoint saved at TP=8/PP=2 can be loaded at TP=4/PP=4; converting to and from Hugging Face format is a separate tool step (see <a href="#orchestration">§6</a>).</p>
+<div class="formula"># Illustrative Megatron-LM pretraining launch (8 nodes × 8 GPUs, dense 70B-class)
+torchrun --nnodes 8 --nproc_per_node 8 pretrain_gpt.py \
+  --tensor-model-parallel-size 8 --pipeline-model-parallel-size 4 --sequence-parallel \
+  --num-layers 80 --hidden-size 8192 --num-attention-heads 64 --group-query-attention --num-query-groups 8 \
+  --seq-length 8192 --micro-batch-size 1 --global-batch-size 512 \
+  --bf16 --use-distributed-optimizer --overlap-grad-reduce --overlap-param-gather \
+  --use-mcore-models --transformer-impl transformer_engine --recompute-activations \
+  --lr 1.5e-4 --min-lr 1.5e-5 --lr-decay-style cosine --lr-warmup-iters 2000 --train-iters 200000 \
+  --data-path $DATA --tokenizer-type HuggingFaceTokenizer --tokenizer-model meta-llama/Llama-3.1-70B \
+  --save $CKPT --load $CKPT --ckpt-format torch_dist --save-interval 500</div>
+<p><strong>When Megatron wins</strong>: pretraining or continued pretraining of large dense and MoE models across many nodes, anything that needs pipeline parallelism, and MoE training where grouped GEMMs and expert parallelism decide throughput. The cost is that your model must be expressed in Megatron's module zoo (or converted into it), and the learning curve is real. The RL frameworks below that target frontier scale (verl's Megatron backend, Miles, NeMo RL's Megatron backend) exist precisely so that RL can reuse these kernels.</p>
+
+<div class="card">
+<h3>Animation: the same linear layer under FSDP2 and under Megatron TP</h3>
+<canvas id="shardViz" class="viz" width="900" height="320"></canvas>
+<div class="controls"><button class="btn" id="shardStep">Step</button><button class="btn secondary" id="shardReset">Reset</button><span class="dim" id="shardLabel"></span></div>
+<p class="caption">Left: FSDP2 shards the weight by rows across four GPUs and must <em>all-gather the full matrix</em> before this layer computes, then frees it. Right: Megatron TP keeps a column slice resident on each GPU, computes a partial output locally, and <em>all-reduces the activation</em>. Same layer, opposite trade: FSDP2 moves parameters per step and tolerates slow interconnects between steps; TP moves activations every layer and needs NVLink. Real systems combine them on a 2-D mesh.</p>
+</div>
+
+<h3>DeepSpeed, Axolotl and TRL: the layers above</h3>
+<p><strong>DeepSpeed</strong> predates FSDP and implements the same ZeRO idea (stages 1/2/3) plus CPU/NVMe offload and its own pipeline engine, configured through a JSON file passed to the trainer. It remains common because Hugging Face's <code>Trainer</code> and Axolotl accept a DeepSpeed config directly; choose it when you need offload for a model that will not fit otherwise, or when an existing recipe uses it. FSDP2 is where new PyTorch-native work lands.</p>
+<p><strong>Axolotl</strong> (<a href="training.html">Chapter 13</a>) is the YAML layer: one config names the base model, datasets and prompt format, adapter (LoRA/QLoRA), sequence packing, FSDP2 or DeepSpeed settings, and context parallelism, and <code>axolotl train config.yml</code> does the rest. It is the fastest path from "we have 50K examples" to a trained adapter without writing trainer code.</p>
+<p><strong>Hugging Face TRL</strong> is the Python-API counterpart: <code>SFTTrainer</code> (supervised fine-tuning with packing and chat templates), <code>DPOTrainer</code> (preference optimization from chosen/rejected pairs), <code>GRPOTrainer</code> (RL with reward functions, optionally generating with a co-located or remote vLLM), and reward-model trainers. Each is a subclass of the HF <code>Trainer</code>, so it inherits FSDP/DeepSpeed support via <code>accelerate</code>. It is the right tool for experiments up to a node or two; at frontier scale you graduate to the RL frameworks in §3.</p>
+<div class="formula"># Illustrative TRL: SFT then GRPO with a verifiable reward
+from trl import SFTTrainer, SFTConfig, GRPOTrainer, GRPOConfig
+sft = SFTTrainer(model="Qwen/Qwen2.5-7B", train_dataset=sft_ds,
+                 args=SFTConfig(output_dir="sft", packing=True, bf16=True, max_length=4096))
+sft.train()
+
+def math_reward(completions, answer, **kw):          # one float per completion
+    return [1.0 if extract_final(c) == a else 0.0 for c, a in zip(completions, answer)]
+
+grpo = GRPOTrainer(model="sft", reward_funcs=[math_reward], train_dataset=prompts_ds,
+                   args=GRPOConfig(output_dir="grpo", num_generations=8, max_completion_length=2048,
+                                   use_vllm=True, bf16=True))   # use_vllm: rollouts on a vLLM server
+grpo.train()</div>
+
+<h2 id="rl">3. RL post-training frameworks</h2>
+<p>RL post-training is the one workload where <em>three</em> different systems must cooperate inside a single training step: a <strong>trainer</strong> that holds parameters and does backward passes (FSDP2 or Megatron), a <strong>rollout engine</strong> that generates samples fast (vLLM or SGLang), and <strong>environments and reward functions</strong> that score them (<a href="rl-systems.html">Chapter 15</a> covers the systems theory; here is what the frameworks do about it).</p>
+
+<h3>verl: HybridFlow in practice</h3>
+<p><strong>verl</strong> (from ByteDance's Seed team, built on the HybridFlow paper) is the most widely used open RL framework for LLMs. Its design has three ideas worth internalizing:</p>
+<ul>
+<li><strong>Single-controller programming model</strong>: one Python driver on Ray expresses the RL algorithm as ordinary sequential code — <code>batch = rollout.generate(prompts); batch = ref.compute_log_prob(batch); batch = reward.compute(batch); actor.update(batch)</code> — while each call fans out to a <strong>worker group</strong> of GPUs. The dataflow of PPO/GRPO stays readable; the distributed execution is hidden in the worker groups.</li>
+<li><strong>Worker groups per role</strong>: <code>ActorRolloutRef</code> (the policy being trained, its rollout engine, and the frozen reference model, usually co-located so they share GPUs by time-slicing), <code>Critic</code> (PPO only), <code>RewardModel</code> (optional; rule-based rewards are just Python). Each group has a backend: FSDP2 or Megatron for training, vLLM or SGLang for generation.</li>
+<li><strong>3D-HybridEngine</strong>: the actor's weights live in the trainer's sharding (FSDP/Megatron layout) during the update and must be <em>resharded</em> into the engine's tensor-parallel layout for generation, in place, without a round trip through disk. verl does this each step; the cost of the reshard-and-sync is the "weight sync" bar in the timeline animation below.</li>
+</ul>
+<p>Algorithms are a config switch (<code>algorithm.adv_estimator = gae | grpo | rloo | reinforce_plus_plus</code>), and DAPO-style refinements (clip-higher, dynamic sampling, token-level loss, overlong shaping) are flags on the actor config. Multi-turn tool-calling rollouts, LoRA RL, and MoE-with-Megatron are supported paths; recipes directory holds reproductions of DAPO, PRIME, and others.</p>
+<div class="formula"># Illustrative verl launch for GRPO on math with a rule-based reward (config keys move; see docs)
+python3 -m verl.trainer.main_ppo \
+  algorithm.adv_estimator=grpo \
+  data.train_files=$HOME/data/gsm8k/train.parquet data.val_files=$HOME/data/gsm8k/test.parquet \
+  data.train_batch_size=512 data.max_prompt_length=1024 data.max_response_length=4096 \
+  actor_rollout_ref.model.path=Qwen/Qwen2.5-7B-Instruct \
+  actor_rollout_ref.actor.strategy=fsdp2 actor_rollout_ref.actor.optim.lr=1e-6 \
+  actor_rollout_ref.actor.ppo_mini_batch_size=128 actor_rollout_ref.actor.use_kl_loss=true \
+  actor_rollout_ref.rollout.name=vllm actor_rollout_ref.rollout.tensor_model_parallel_size=2 \
+  actor_rollout_ref.rollout.n=8 actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
+  reward_model.reward_manager=naive custom_reward_function.path=rewards/gsm8k.py \
+  trainer.n_gpus_per_node=8 trainer.nnodes=2 trainer.total_epochs=3 trainer.logger='["console","wandb"]'</div>
+
+<h3>Miles: SGLang-native, disaggregated, asynchronous</h3>
+<p><strong>Miles</strong> descends from <strong>slime</strong>, the RL framework built by the GLM team around SGLang (rollouts) and Megatron-Core (training). Where verl began from a colocated, synchronous design and added asynchrony, the slime/Miles lineage starts from a <em>disaggregated</em> one: rollout engines and the trainer are separate resource pools connected by a <strong>data buffer</strong>; rollout workers keep generating (including long multi-turn agentic trajectories) while the trainer consumes batches, with bounded policy staleness and importance-weight correction. Its appeal is operational — rollout and training can be scaled and failed independently, SGLang's prefix caching and MLA/DP-attention paths are used natively for DeepSeek-class MoE rollouts, and the Megatron trainer gives frontier-scale parallelism. Choose it when rollout throughput dominates and you already run Megatron; choose verl when you want the broadest algorithm/recipe coverage and FSDP2 simplicity. Both expose the same mental model: a rollout side, a training side, a weight-sync path, a reward/environment side.</p>
+
+<h3>NeMo RL and NeMo Gym: environments as services</h3>
+<p><strong>NeMo RL</strong> is NVIDIA's post-training library (successor to NeMo-Aligner): Ray-orchestrated, with DTensor (FSDP2) and Megatron backends, vLLM generation, and recipes for SFT, DPO and GRPO. Its distinctive companion is <strong>NeMo Gym</strong>, which turns the environment side into <em>servers</em>: a "resource server" hosts tools, a sandbox, or a reward model behind an HTTP interface; an "agent" definition describes how the policy interacts with it (single-turn verification, multi-turn tool use); and a recipe binds environments, rewards, data and the trainer. Scaling the environment is then an ordinary service-scaling problem, and the same environment serves evaluation and training — the connection the FDE role calls "defining how agent workflows, tools, environments and reward functions connect to training and evaluation".</p>
+
+<h3>OpenEnv: an open environment interface</h3>
+<p><strong>OpenEnv</strong> (initiated by Meta with the PyTorch ecosystem) standardizes what an agentic environment <em>is</em>: a Gym-style API — <code>reset()</code>, <code>step(action)</code>, <code>state()</code> — served over HTTP from an isolated container, with typed action/observation schemas, tool exposure (including MCP), and a hub for sharing environments. A trainer consumes an OpenEnv environment through a client; rollouts become sequences of model actions and environment observations; the reward comes back as part of the step result. The point is decoupling: environment authors (a coding sandbox, a browser task, a customer's internal workflow) publish once, and any trainer — verl, NeMo RL, TRL, Miles — can train against it.</p>
+<div class="formula"># Illustrative: the shape of a Gym-style environment client used inside a rollout loop
+env = CodingEnv.from_docker_image("my-org/repo-task-env:latest")   # isolated container per episode
+obs = env.reset(task_id="fix-flaky-test-1182")
+done, turns = False, []
+while not done:
+    action = policy.generate(obs.prompt)             # model emits an edit / run_tests call
+    result = env.step(action)                        # observation, reward, done
+    turns.append((obs, action, result))
+    obs, done = result.observation, result.done
+reward = result.reward                               # terminal: tests pass → 1.0
+# the trainer then masks environment tokens out of the loss and trains on model tokens only</div>
+
+<div class="card">
+<h3>Animation: one RL step across worker groups (verl-style)</h3>
+<canvas id="rlViz" class="viz" width="900" height="300"></canvas>
+<div class="controls"><button class="btn" id="rlPlay">▶ Play</button><button class="btn secondary" id="rlReset">Reset</button><label class="ctl"><input type="checkbox" id="rlDisagg"> disaggregated (rollout pool separate from trainer)</label></div>
+<p class="caption">Rows are GPU pools; bars are phases of one step. Colocated: the same GPUs time-slice generation, reference log-probs, reward, and the update, with a reshard/weight-sync between generation and training. Disaggregated (Miles-style): the rollout pool generates continuously while the trainer updates on slightly stale samples; the weight sync becomes a broadcast between pools. Either way, generation is the longest bar — the reason <a href="rl-systems.html">Chapter 15</a> is mostly about rollout throughput.</p>
+</div>
+
+<h2 id="inference">4. Inference engines</h2>
+
+<h3>vLLM</h3>
+<p>vLLM is the default open-source serving engine and the default rollout engine inside RL frameworks. Its architecture (the "V1" engine) separates a front-end process — tokenization, the OpenAI-compatible API, streaming — from an <strong>EngineCore</strong> process that runs the scheduler and model executor in a tight loop. The concepts you configure map directly onto <a href="inference.html">Chapter 11</a>:</p>
+<ul>
+<li><strong>Scheduler</strong>: continuous batching with chunked prefill by default; <code>--max-num-seqs</code> and <code>--max-num-batched-tokens</code> bound the batch; preemption when KV runs out.</li>
+<li><strong>KV cache manager</strong>: PagedAttention blocks (<code>--block-size</code>), <strong>prefix caching</strong> on by default (hash of block contents → reuse across requests), <code>--gpu-memory-utilization</code> decides how much HBM becomes KV.</li>
+<li><strong>Parallelism</strong>: <code>--tensor-parallel-size</code>, <code>--pipeline-parallel-size</code>, <code>--data-parallel-size</code> (replicas; with DP attention for MLA models), expert parallelism for MoE.</li>
+<li><strong>LoRA adapters</strong>: <code>--enable-lora --max-loras N --max-lora-rank R</code>; requests name an adapter and the scheduler batches different adapters over the shared base (multi-adapter serving, <a href="customization.html">Chapter 14</a>).</li>
+<li><strong>Speculative decoding</strong>: <code>--speculative-config</code> with n-gram, draft-model, EAGLE/MTP methods.</li>
+<li><strong>Quantization</strong>: FP8 (<code>--quantization fp8</code>), AWQ/GPTQ/compressed-tensors checkpoints, FP8 KV cache (<code>--kv-cache-dtype fp8</code>).</li>
+<li><strong>Structured outputs</strong>: grammar backends (xgrammar by default) for JSON schema / regex / grammar constrained decoding.</li>
+</ul>
+<div class="formula"># Illustrative serve command and Python API
+vllm serve meta-llama/Llama-3.1-70B-Instruct --tensor-parallel-size 4 \
+  --max-model-len 32768 --gpu-memory-utilization 0.92 --kv-cache-dtype fp8 \
+  --enable-lora --max-loras 16 --max-lora-rank 64 \
+  --speculative-config '{"method":"eagle","model":"yuhuili/EAGLE-LLaMA3.1-Instruct-70B","num_speculative_tokens":4}'
+
+# offline / rollout use
+from vllm import LLM, SamplingParams
+llm = LLM("Qwen/Qwen2.5-7B-Instruct", tensor_parallel_size=2, enable_prefix_caching=True)
+outs = llm.generate(prompts, SamplingParams(n=8, temperature=1.0, max_tokens=2048))
+# RL frameworks drive this same object in-process and push new weights into it each step</div>
+
+<h3>SGLang</h3>
+<p>SGLang shares most of vLLM's feature list and differs in emphasis. Its runtime is built around <strong>RadixAttention</strong> — the KV cache is a radix tree over token prefixes, so any request sharing a prefix with a live or recently finished request (system prompts, few-shot headers, multi-turn history, the eight samples of a GRPO group) reuses it automatically. Its <strong>frontend language</strong> (<code>@sgl.function</code> with <code>gen</code>, <code>select</code>, <code>fork</code>) lets you write multi-call programs — branch, constrain, reuse — that the runtime schedules as one prefix-sharing tree. It has been the reference implementation for DeepSeek-class serving: <strong>DP attention</strong> (replicate the MLA attention per data-parallel rank while sharding the experts) and prefill/decode disaggregation, and the <strong>SGLang Router</strong> does prefix-aware load balancing across replicas. Constrained decoding (xgrammar/outlines/llguidance) is a flag. Choose SGLang when prefix reuse dominates (agents, RL rollouts, multi-turn) or when serving DeepSeek/MoE models at scale; both engines are excellent and most teams benchmark both.</p>
+<div class="formula"># Illustrative SGLang launch
+python -m sglang.launch_server --model-path deepseek-ai/DeepSeek-V3 --tp 8 --dp 2 --enable-dp-attention \
+  --context-length 65536 --grammar-backend xgrammar --port 30000
+python -m sglang_router.launch_router --worker-urls http://n1:30000 http://n2:30000 --policy cache_aware
+
+# the frontend language: one prefix, many branches, scheduled as a tree
+import sglang as sgl
+@sgl.function
+def triage(s, ticket):
+    s += sgl.system("You are a support triager.") + sgl.user(ticket)
+    s += sgl.assistant("Category: " + sgl.gen("cat", choices=["billing","bug","howto"]) +
+                       "\nSummary: " + sgl.gen("summary", max_tokens=64))</div>
+
+<h3>TensorRT-LLM</h3>
+<p>TensorRT-LLM is NVIDIA's engine for peak performance on NVIDIA hardware. Historically you <em>built an engine</em> (<code>trtllm-build</code>) — a compiled, shape-specialized graph with fused kernels — and served it via Triton or <code>trtllm-serve</code>; the newer PyTorch-backend flow runs models directly with the same kernels and in-flight batching, lowering the compile step. Its differentiators are the lowest-level access to FP8 and NVFP4 paths (via ModelOpt quantization), hand-tuned attention and MoE kernels, and disaggregated serving on NVIDIA Dynamo. Choose it when you own the NVIDIA fleet, the model is stable, and the last 10–20% of throughput is worth an engine-build pipeline; vLLM/SGLang remain the choice for breadth and velocity.</p>
+
+<div class="card">
+<h3>Animation: a request's journey through vLLM</h3>
+<canvas id="reqViz" class="viz" width="900" height="280"></canvas>
+<div class="controls"><button class="btn" id="reqPlay">▶ Play</button><button class="btn secondary" id="reqStep">Step</button><button class="btn secondary" id="reqReset">Reset</button><span class="dim" id="reqLabel"></span></div>
+<p class="caption">Front-end tokenizes and enqueues; the scheduler admits the request when KV blocks are available; prefill runs in chunks interleaved with other requests' decode steps; blocks are allocated as the sequence grows (the shared system-prompt prefix is a cache hit); tokens stream back per decode step; on completion the blocks return to the pool. Every box is a concept from <a href="inference.html">Chapter 11</a> with a config flag attached.</p>
+</div>
+
+<h2 id="neuron">5. The AWS Neuron SDK</h2>
+<p>The Neuron SDK is the software stack for Trainium and Inferentia (<a href="hardware.html">Chapter 18</a> covers the hardware and NKI kernels). The mental shift from the GPU stack is that <strong>Neuron compiles graphs ahead of time</strong>: PyTorch code is traced into a graph, compiled by <code>neuronx-cc</code> into a NEFF executable for fixed shapes, and executed by the runtime. Dynamic shapes become <em>buckets</em> (a small set of compiled sequence lengths/batch sizes); anything the compiler cannot lower falls back to CPU and must be found and eliminated (the Deepgram lesson: zero fallbacks). The components:</p>
+<ul>
+<li><strong>neuronx-cc</strong>: the compiler. You rarely call it directly; the frontends do. Flags control optimization level, precision casting (<code>--auto-cast</code>), and model-type hints; the compile log and <code>neuron-cc</code> reports show unsupported ops and fallbacks.</li>
+<li><strong>torch-neuronx</strong> (and the newer native <strong>TorchNeuron</strong> backend): PyTorch integration — tracing (<code>torch_neuronx.trace</code>), XLA-style lazy execution for training, and the device abstraction.</li>
+<li><strong>NeuronX Distributed (NxD)</strong>: the parallelism library. <em>NxD Core</em> provides parallel layers (<code>ParallelEmbedding</code>, <code>ColumnParallelLinear</code>, <code>RowParallelLinear</code>) and tensor/pipeline-parallel model wrappers — Megatron's ideas, for NeuronCores. <em>NxD Inference</em> (NxDI) ships ready model implementations (Llama, Qwen, Mixtral, DeepSeek-class), continuous batching, bucketing, speculative decoding and quantization, and is what vLLM's Neuron path calls into. <em>NxD Training</em> (NxDT) is the Megatron-style training harness with data/tensor/pipeline parallel and ZeRO-1.</li>
+<li><strong>vLLM on Neuron</strong>: a plugin that makes <code>vllm serve ... --device neuron</code> work with the vLLM API and scheduler while NxDI executes the model; you get continuous batching, OpenAI-compatible serving and multi-LoRA with Neuron underneath.</li>
+<li><strong>Neuron profiler and tools</strong>: <code>neuron-profile</code> for per-engine (Tensor/Vector/Scalar/GpSIMD) timelines and DMA stalls, <code>neuron-top</code>/<code>neuron-ls</code> for utilization and topology, <strong>NKI</strong> for custom kernels when the profile says a hot layer needs one, and the <strong>NKI Library</strong> of reference kernels (bundled with the compiler, overridable via <code>pip install nki-library</code>).</li>
+<li><strong>LNC</strong> (logical NeuronCore configuration): on Trn2, two physical cores can present as one logical core with doubled memory and compute — a compile-time choice that interacts with tensor-parallel degree.</li>
+</ul>
+<div class="formula"># Illustrative compile-and-serve flow on a trn2 instance (NxD Inference + vLLM plugin)
+pip install neuronx-cc torch-neuronx neuronx-distributed neuronx-distributed-inference vllm-neuron   # versions pinned by the Neuron release
+
+# 1) compile the model for fixed buckets (first run compiles and caches the NEFFs)
+export NEURON_COMPILE_CACHE_URL=s3://my-bucket/neuron-cache          # share compiled artifacts
+vllm serve meta-llama/Llama-3.1-70B-Instruct --device neuron --tensor-parallel-size 32 \
+  --max-model-len 8192 --max-num-seqs 16 --block-size 32 \
+  --override-neuron-config '{"sequence_parallel_enabled": true, "logical_nc_config": 2, "buckets": [1024, 4096, 8192]}'
+
+# 2) profile a representative request to see where time goes
+neuron-profile capture -n /path/to/neff --output-dir prof/   # then view per-engine timelines
+# 3) parity + benchmark against the GPU baseline with the SAME harness (see hardware.html migration playbook)</div>
+<p>What differs from the GPU workflow, concretely: a compile step you must budget for (and cache); bucketing instead of arbitrary shapes; parallelism degrees chosen with the core topology in mind (TP across 32 or 64 logical cores on trn2 is normal); and a profiling loop that looks at engine utilization rather than SM occupancy. The payoff is the cost-per-token case made in <a href="hardware.html">Chapter 18</a>.</p>
+
+<h2 id="orchestration">6. Orchestration, data and checkpoints</h2>
+<h3>Ray: why RL frameworks are built on it</h3>
+<p>Ray provides <strong>actors</strong> (stateful processes on specific resources), <strong>tasks</strong>, an object store for passing large tensors between them, and <strong>placement groups</strong> that reserve bundles of GPUs with a packing strategy. That is exactly the vocabulary an RL framework needs: "a worker group of 8 actors, each pinned to one GPU, co-located on one node" is a placement group; "send this batch to the reward group" is an object-store transfer; "the driver calls generate() on the rollout group" is a remote method on an actor handle. verl, NeMo RL, OpenRLHF and Miles all use Ray this way — a single Python driver with a global view, worker groups doing the heavy lifting. For plain SFT you do not need Ray; <code>torchrun</code> (one process per GPU, rendezvous by environment variables) is enough, and clusters schedule it under Slurm or Kubernetes (Kubeflow/Volcano jobs, or SageMaker HyperPod on either).</p>
+<h3>Data and checkpoint formats</h3>
+<p>Hugging Face <strong>datasets</strong> is the lingua franca for training data (Arrow-backed, memory-mapped, streaming from S3), and <strong>tokenizers</strong> ships the fast tokenizers every framework loads by name. Checkpoints are where frameworks disagree, so know the three formats and the conversions between them:</p>
+<table class="cmp">
+<tr><th>Format</th><th>Produced by</th><th>Properties</th><th>Convert</th></tr>
+<tr><td><strong>safetensors</strong> (HF layout)</td><td>transformers, TRL, Axolotl (merged), vLLM/SGLang consume it</td><td>One tensor map per shard file, no parallel layout, safe to load, the universal exchange format</td><td>—</td></tr>
+<tr><td><strong>DCP</strong> (torch.distributed.checkpoint)</td><td>FSDP2, TorchTitan, verl FSDP backend, NeMo RL DTensor</td><td>Shard-wise save, <em>reshards on load</em> to a different DP/TP layout</td><td><code>dcp_to_torch_save</code>, framework "merge" tools → HF</td></tr>
+<tr><td><strong>Megatron dist-ckpt</strong> (torch_dist)</td><td>Megatron-LM/Core, Miles, verl Megatron backend</td><td>Tensors stored with parallel metadata, loadable at a different TP/PP</td><td>Megatron <code>tools/checkpoint/convert.py</code> (Megatron ↔ HF loaders/savers)</td></tr>
+</table>
+<p>The practical rule: train in whatever sharded format your trainer wants, but every eval and every deployment consumes <strong>HF safetensors</strong>, so the "merge/convert to HF" step is part of your pipeline from day one (verl ships <code>verl.model_merger</code>; Axolotl merges LoRA with <code>axolotl merge-lora</code>). Keep the tokenizer and chat template with the weights — most "my fine-tune is worse in production" bugs are template mismatches, not weights.</p>
+<h3>LeRobot: the same stack for robots</h3>
+<p>For embodied work (<a href="robot-learning.html">Chapter 17</a>), Hugging Face's <strong>LeRobot</strong> plays all the roles above at once: a dataset format (parquet + video + episode index on the Hub), policy implementations (ACT, Diffusion Policy, VLAs like SmolVLA and π0), and CLIs — <code>lerobot-train</code>, <code>lerobot-eval</code>, dataset visualization — plus hardware drivers for teleoperation. Its design mirrors this chapter's lesson: a standard data format and a standard policy interface are what let training, evaluation and deployment be separate, swappable systems.</p>
+
+<h2 id="aws">7. The AWS managed paths</h2>
+<p>Self-managing the stack above is the right call for frontier-scale, bespoke or Trainium-first programs. For many customers the faster route is a managed service, and an FDE's job includes knowing when to say so.</p>
+<p><strong>Amazon Bedrock</strong> is the fully managed model service. For customization it offers <em>fine-tuning</em> and <em>continued pre-training</em> jobs on supported foundation models (you bring JSONL data; Bedrock runs the job and hosts the result), <em>model distillation</em> jobs (a teacher generates synthetic responses and a smaller student is fine-tuned on them — the on-policy distillation pattern from <a href="customization.html">Chapter 14</a> as a managed job), and <strong>Custom Model Import</strong>, which lets you bring your own fine-tuned open weights (Llama, Mistral, Qwen and other supported architectures, in HF safetensors) and serve them through the Bedrock API on-demand or with <em>provisioned throughput</em>. Bedrock Evaluations (automatic, human and LLM-as-judge), Guardrails, Knowledge Bases (managed RAG) and Agents complete the picture. The trade: minimal operations and a single API, at the cost of control over serving internals (no custom kernels, fixed engine behavior) and a supported-architecture list.</p>
+<p><strong>Amazon SageMaker AI</strong> is the managed <em>infrastructure</em> layer. <em>Training jobs</em> run your container or framework script on managed instances (including trn1/trn2 and p5/p6 GPUs) with managed data channels, spot capacity, and distributed-training libraries; <strong>HyperPod</strong> provides persistent, resilient clusters (Slurm- or EKS-orchestrated) with automatic faulty-node replacement, checkpoint-aware resume and task governance — the right home for multi-week pretraining or large RL runs where node failures are a certainty; <em>inference endpoints</em> host containers (including vLLM/SGLang/TRT-LLM/Neuron images) with autoscaling, multi-model endpoints, and inference components for packing several models on one endpoint; JumpStart offers one-click open models. The trade: you still own the frameworks and their configs, but not the cluster plumbing.</p>
+<table class="cmp">
+<tr><th></th><th>Self-managed (EC2/EKS + this chapter's stack)</th><th>SageMaker AI</th><th>Bedrock</th></tr>
+<tr><td>You control</td><td>Everything: kernels, engines, parallelism, scheduling</td><td>Frameworks and configs; cluster is managed</td><td>Data, hyperparameters, and which model; serving is managed</td></tr>
+<tr><td>Best for</td><td>Frontier scale, Trainium-first, custom RL harnesses, bespoke serving</td><td>Large but standard training/RL runs needing resilience; hosted custom containers</td><td>Fast customization of supported models; serving your fine-tuned open weights without ops</td></tr>
+<tr><td>Cost model</td><td>Instances (reserved/on-demand), your ops</td><td>Instance-hours with a management premium; HyperPod reservations</td><td>Per-token, or provisioned throughput; job pricing for customization</td></tr>
+<tr><td>Watch out</td><td>Operational load, capacity reservation, reliability engineering</td><td>Container/network setup; endpoint limits</td><td>Supported-model list, less serving control, data residency terms</td></tr>
+</table>
+
+<h2 id="choose">8. Choosing a stack</h2>
+<table class="cmp">
+<tr><th>Need</th><th>Pick</th><th>Why</th></tr>
+<tr><td>SFT / LoRA on ≤ 70B, a few nodes</td><td>Axolotl or TRL on FSDP2</td><td>No model rewrite, YAML/Python, packing and adapters built in</td></tr>
+<tr><td>Pretrain / CPT a large dense or MoE model</td><td>Megatron-LM (or NxD Training on Trainium)</td><td>PP, EP, grouped GEMMs, distributed optimizer, dist-ckpt</td></tr>
+<tr><td>GRPO/DAPO on a dense model, broad recipes</td><td>verl (FSDP2 + vLLM/SGLang)</td><td>Single-controller clarity, most reproductions, HybridEngine resharding</td></tr>
+<tr><td>RL on DeepSeek-class MoE, rollout-dominated, async</td><td>Miles / slime lineage (SGLang + Megatron)</td><td>Disaggregated, SGLang-native MoE serving paths</td></tr>
+<tr><td>Agentic RL with many environments and reward services</td><td>NeMo RL + NeMo Gym, or any trainer + OpenEnv environments</td><td>Environments as scalable services with a standard interface</td></tr>
+<tr><td>Quick RL experiment on one node</td><td>TRL GRPOTrainer</td><td>Smallest surface area</td></tr>
+<tr><td>Serving, general</td><td>vLLM</td><td>Breadth, velocity, multi-LoRA, speculative decoding</td></tr>
+<tr><td>Serving, prefix-heavy or DeepSeek/MoE</td><td>SGLang (+ router)</td><td>RadixAttention, DP attention, PD disaggregation</td></tr>
+<tr><td>Serving, peak NVIDIA throughput, stable model</td><td>TensorRT-LLM</td><td>Compiled kernels, FP8/NVFP4 paths</td></tr>
+<tr><td>Serving on Trainium</td><td>vLLM on Neuron (NxD Inference)</td><td>Same API, Neuron execution, cost per token</td></tr>
+<tr><td>No ops team, supported model</td><td>Bedrock customization / Custom Model Import</td><td>Managed jobs and serving</td></tr>
+<tr><td>Weeks-long runs, node failures expected</td><td>SageMaker HyperPod</td><td>Resilient managed clusters</td></tr>
+</table>
+<div class="card">
+<h3>Worked example: "post-train a 70B coding model with RL on tests, then serve with multi-LoRA"</h3>
+<p><strong>Data and SFT.</strong> Curate repository tasks with executable tests (the customer's own CI history is the gold source); build an SFT set from successful trajectories; train a LoRA (rank 64) on a Llama-3.1-70B base with <strong>Axolotl on FSDP2</strong> across 2×8 H100 — a day, not a week. Merge to HF safetensors; establish the eval baseline (pass@1 on a held-out task suite, p95 latency, cost per solved task — <a href="customization.html">Ch. 14</a>).</p>
+<p><strong>RL.</strong> Package the repo-task environment as an <strong>OpenEnv</strong> container (reset to a commit, step = apply edit or run tests, reward = tests pass); run <strong>verl</strong> with GRPO/DAPO: actor on FSDP2 (or Megatron if you go full-parameter), rollouts on <strong>vLLM</strong> TP=4 with prefix caching (every group shares the repo context), 8 samples per prompt, multi-turn tool calling, environment-token loss masking. Expect generation to dominate; size the rollout share of GPUs accordingly (<a href="rl-systems.html">Ch. 15</a>). If rollout throughput is the wall and you already run Megatron, evaluate <strong>Miles</strong>'s disaggregated path.</p>
+<p><strong>Serve.</strong> Export the RL'd policy as a LoRA over the shared base (or merge if a single tenant); serve with <strong>vLLM</strong> <code>--enable-lora --max-loras 16</code> so per-team adapters batch over one copy of the 70B weights; FP8 weights and FP8 KV for cost; EAGLE speculation for latency. Benchmark the same harness on <strong>Trainium via vLLM on Neuron</strong> and let the cost-per-token table (<a href="hardware.html">Ch. 18</a>) decide the fleet. Gate releases with the eval suite; stream production failures back into the task set.</p>
+</div>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li>PyTorch: <a href="https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html">FSDP2 (fully_shard) docs</a>, <a href="https://docs.pytorch.org/tutorials/intermediate/TP_tutorial.html">tensor parallel tutorial</a>, <a href="https://github.com/pytorch/torchtitan">TorchTitan</a> (the reference FSDP2+TP+PP training stack; GPU MODE Lecture 39).</li>
+<li>NVIDIA: <a href="https://github.com/NVIDIA/Megatron-LM">Megatron-LM / Megatron-Core</a>, <a href="https://github.com/NVIDIA-NeMo/RL">NeMo RL</a>, <a href="https://github.com/NVIDIA-NeMo/Gym">NeMo Gym</a>, <a href="https://github.com/NVIDIA/TensorRT-LLM">TensorRT-LLM</a>.</li>
+<li>RL frameworks: <a href="https://github.com/volcengine/verl">verl</a> and the <a href="https://arxiv.org/abs/2409.19256">HybridFlow paper</a>; the <a href="https://github.com/THUDM/slime">slime</a> lineage behind Miles; <a href="https://github.com/meta-pytorch/OpenEnv">OpenEnv</a>; <a href="https://github.com/huggingface/trl">TRL</a>.</li>
+<li>Engines: <a href="https://docs.vllm.ai/">vLLM docs</a> (GPU MODE Lecture 22 on speculative decoding in vLLM), <a href="https://docs.sglang.ai/">SGLang docs</a> (Lecture 35), <a href="https://github.com/axolotl-ai-cloud/axolotl">Axolotl</a>.</li>
+<li>AWS: <a href="https://awsdocs-neuron.readthedocs-hosted.com/">Neuron SDK docs</a> (NxD Core/Inference/Training, vLLM on Neuron, profiler), <a href="https://github.com/aws-neuron/nki-library">NKI Library</a>, <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/custom-models.html">Bedrock custom models</a>, <a href="https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html">SageMaker HyperPod</a>.</li>
+<li>Orchestration: <a href="https://docs.ray.io/">Ray docs</a> (actors, placement groups), <a href="https://docs.pytorch.org/docs/stable/distributed.checkpoint.html">torch.distributed.checkpoint</a>, <a href="https://huggingface.co/docs/lerobot">LeRobot</a>.</li>
+<li>Then the <a href="flashcards.html">Frameworks flashcard deck</a>, and Steps 14–16 of the <a href="../index.html">study plan</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="rl-systems.html">← RL Systems</a><a href="robot-learning.html">RL &amp; Robotics →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+function arrow(c,x1,y1,x2,y2,col,w){c.strokeStyle=col;c.fillStyle=col;c.lineWidth=w||2;c.beginPath();c.moveTo(x1,y1);c.lineTo(x2,y2);c.stroke();const a=Math.atan2(y2-y1,x2-x1);c.beginPath();c.moveTo(x2,y2);c.lineTo(x2-9*Math.cos(a-0.4),y2-9*Math.sin(a-0.4));c.lineTo(x2-9*Math.cos(a+0.4),y2-9*Math.sin(a+0.4));c.closePath();c.fill();}
+
+// ---------- 1. the map ----------
+(function(){
+const cv=document.getElementById('mapViz'),ctx=cv.getContext('2d'),info=document.getElementById('mapInfo');
+const B=[
+ {id:'data',x:20,y:110,w:120,h:70,t:'Data',fw:'HF datasets, tokenizers, S3; synthetic-data pipelines (Ch. 14)',io:'in: production logs, curated corpora · out: SFT sets, RL prompts, eval suites'},
+ {id:'sft',x:170,y:110,w:140,h:70,t:'SFT trainer',fw:'Axolotl / TRL over FSDP2; Megatron-LM or NxD Training at pretraining scale; DeepSpeed',io:'in: base weights + data · out: SFT checkpoint (DCP / dist-ckpt → HF safetensors)'},
+ {id:'rl',x:340,y:30,w:160,h:70,t:'RL trainer',fw:'verl (HybridFlow), Miles (slime lineage), NeMo RL, TRL GRPOTrainer',io:'in: SFT weights, rollouts + rewards · out: policy weights (synced to engines each step)'},
+ {id:'roll',x:340,y:115,w:160,h:60,t:'Rollout engines',fw:'vLLM, SGLang (in-process or as servers; TP-sharded; prefix caching)',io:'in: prompts, fresh weights · out: sampled trajectories'},
+ {id:'env',x:340,y:190,w:160,h:60,t:'Environments / rewards',fw:'NeMo Gym resource servers, OpenEnv containers, verifiers, sandboxes, reward models',io:'in: trajectories · out: rewards, observations (multi-turn)'},
+ {id:'eval',x:530,y:110,w:120,h:70,t:'Evals',fw:'lm-eval-harness style suites, judges, task benchmarks, Bedrock Evaluations (Ch. 14)',io:'in: candidate checkpoints · out: go/no-go, metrics'},
+ {id:'serve',x:680,y:110,w:120,h:70,t:'Serving',fw:'vLLM / SGLang / TensorRT-LLM on GPU; vLLM on Neuron (NxD Inference) on Trainium; Bedrock / SageMaker endpoints',io:'in: HF safetensors (+ LoRA adapters) · out: tokens, latency/cost metrics'},
+ {id:'mon',x:830,y:110,w:60,h:70,t:'Monitor',fw:'metrics, traces, feedback → back to Data',io:'in: production traffic · out: failure cases, drift signals'}];
+const E=[['data','sft','w'],['sft','rl','w'],['rl','roll','w'],['roll','env','g'],['env','rl','g'],['rl','eval','w'],['sft','eval','w'],['eval','serve','w'],['serve','mon','o']];
+let sel=null,trace=-1,timer=null;
+function center(b){return [b.x+b.w/2,b.y+b.h/2]}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const txt=css('--text'),dim=css('--text-dim'),bd=css('--border'),card=css('--bg-card');
+  const col={w:'#5b8cff',g:'#38c6a0',o:'#f2a65a'};
+  E.forEach((e,i)=>{const a=B.find(b=>b.id===e[0]),b=B.find(x=>x.id===e[1]);let [x1,y1]=center(a),[x2,y2]=center(b);
+    const hot=trace===i;ctx.globalAlpha=hot?1:0.55;
+    // clip to box edges
+    const dx=x2-x1,dy=y2-y1,L=Math.hypot(dx,dy);const ux=dx/L,uy=dy/L;
+    const r1=Math.min(a.w/2/Math.abs(ux||1e-9),a.h/2/Math.abs(uy||1e-9)),r2=Math.min(b.w/2/Math.abs(ux||1e-9),b.h/2/Math.abs(uy||1e-9));
+    arrow(ctx,x1+ux*r1,y1+uy*r1,x2-ux*r2,y2-uy*r2,col[e[2]],hot?4:2);ctx.globalAlpha=1;});
+  B.forEach(b=>{const on=sel===b.id||(trace>=0&&(E[trace][0]===b.id||E[trace][1]===b.id));
+    ctx.fillStyle=on?css('--accent'):card;ctx.strokeStyle=on?css('--accent'):bd;ctx.lineWidth=1.5;rr(ctx,b.x,b.y,b.w,b.h,10);ctx.fill();ctx.stroke();
+    ctx.fillStyle=on?'#fff':txt;ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(b.t,b.x+b.w/2,b.y+b.h/2+4);});
+  ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillStyle=col.w;ctx.fillText('■ weights',20,H-12);ctx.fillStyle=col.g;ctx.fillText('■ rollouts & rewards',100,H-12);ctx.fillStyle=col.o;ctx.fillText('■ metrics / feedback',230,H-12);
+  ctx.fillStyle=dim;ctx.fillText('(monitor → data loop closes off-canvas)',380,H-12);
+}
+cv.addEventListener('click',ev=>{const r=cv.getBoundingClientRect();const x=(ev.clientX-r.left)*cv.width/r.width,y=(ev.clientY-r.top)*cv.height/r.height;
+  const b=B.find(b=>x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h);if(!b)return;sel=b.id;info.innerHTML='<b>'+b.t+'</b> — '+b.fw+'<br><span class="dim">'+b.io+'</span>';draw();});
+const steps=['Data → SFT trainer: curated and synthetic examples become an SFT run (Axolotl/TRL on FSDP2).','SFT → RL trainer: the SFT checkpoint initializes the policy (and the frozen reference).','RL trainer → rollout engines: weights are resharded into vLLM/SGLang TP layout (HybridEngine sync).','Rollout engines → environments: sampled trajectories (tool calls, answers) go to sandboxes / reward functions.','Environments → RL trainer: rewards return; advantages are computed; the policy updates.','RL trainer → evals: checkpoints are scored on held-out suites (pass@k, judges, latency).','SFT → evals: the SFT baseline is scored the same way — RL must beat it.','Evals → serving: the winner is exported as HF safetensors (+ adapters) to vLLM/SGLang/TRT-LLM or Neuron.','Serving → monitor: production metrics and failure cases flow back into the data station.'];
+function tick(){trace++;if(trace>=E.length){stop();trace=-1;info.innerHTML='<b>Cycle complete.</b> Production failures become new data; the loop runs again.';draw();return;}info.innerHTML='<b>Step '+(trace+1)+'/'+E.length+'.</b> '+steps[trace];draw();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('mapPlay').textContent='▶ Trace a run';}}
+document.getElementById('mapPlay').onclick=function(){if(timer){stop();return;}sel=null;trace=-1;this.textContent='⏸ Pause';timer=setInterval(tick,1400);tick();};
+document.getElementById('mapReset').onclick=()=>{stop();sel=null;trace=-1;info.textContent='Click any station to see which frameworks run there and what flows in and out.';draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 2. FSDP2 vs TP sharding ----------
+(function(){
+const cv=document.getElementById('shardViz'),ctx=cv.getContext('2d'),lab=document.getElementById('shardLabel');
+let step=0;const N=4;
+const L=['Idle: FSDP2 holds a 1/4 row-shard per GPU; TP holds a 1/4 column-slice per GPU.','Before compute — FSDP2: all-gather the full weight onto every GPU (parameter traffic). TP: nothing to move.','Compute — FSDP2: each GPU multiplies its own batch rows by the FULL weight. TP: each GPU multiplies the full batch by its column slice → partial output.','After compute — FSDP2: free the gathered copy (reshard_after_forward). TP: all-reduce the partial outputs (activation traffic).','Result: FSDP2 moved parameters once per layer per step; TP moved activations and kept parameters resident. On a 2-D mesh you do both.'];
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const txt=css('--text'),dim=css('--text-dim'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),warn='#f2a65a';
+  ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillStyle=txt;
+  ctx.fillText('FSDP2 (row shards, gather on demand)',30,26);ctx.fillText('Megatron TP (column slices, resident)',480,26);
+  // weights: 4 gpus side by side, each shows a 100x100 matrix block
+  for(let g=0;g<N;g++){
+    const xL=30+g*108,xR=480+g*108,y=50;
+    ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('GPU '+g,xL,y-4);ctx.fillText('GPU '+g,xR,y-4);
+    // FSDP side
+    for(let r=0;r<N;r++){const own=r===g;const gathered=step===1||step===2;
+      ctx.fillStyle=own?acc:(gathered?acc:'transparent');ctx.globalAlpha=own?1:(gathered?0.55:1);
+      ctx.strokeStyle=bd;ctx.fillRect(xL,y+r*22,88,20);ctx.globalAlpha=1;ctx.strokeRect(xL,y+r*22,88,20);}
+    // TP side: column slices
+    for(let c=0;c<N;c++){const own=c===g;ctx.fillStyle=own?acc2:'transparent';ctx.strokeStyle=bd;ctx.fillRect(xR+c*22,y,20,88);ctx.strokeRect(xR+c*22,y,20,88);}
+  }
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('rows of W (solid = owned shard, faded = gathered copy)',30,160);ctx.fillText('columns of W (solid = resident slice)',480,160);
+  // traffic indicators
+  const yT=200;
+  if(step===1){ctx.fillStyle=acc;ctx.font='bold 12px sans-serif';ctx.fillText('⇄ all-gather parameters: each GPU receives 3/4 of W',30,yT);}
+  if(step===2){ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.fillText('y = x · W (full W, local batch rows)',30,yT);ctx.fillText('y_g = x · W[:, slice g]  (partial output per GPU)',480,yT);}
+  if(step===3){ctx.fillStyle=warn;ctx.font='bold 12px sans-serif';ctx.fillText('free gathered copies (back to 1/4 each)',30,yT);ctx.fillStyle=acc2;ctx.fillText('⇄ all-reduce activations: y = Σ_g y_g',480,yT);}
+  if(step===4){ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('traffic per layer: parameters (bytes of W) — tolerant of inter-node links',30,yT);ctx.fillText('traffic per layer: activations (batch × hidden) every layer — wants NVLink',480,yT);}
+  lab.textContent=L[step];
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('See Parallelism (Ch. 12) for the collectives and their costs.',30,H-14);
+}
+document.getElementById('shardStep').onclick=()=>{step=(step+1)%L.length;draw();};
+document.getElementById('shardReset').onclick=()=>{step=0;draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3. RL step timeline ----------
+(function(){
+const cv=document.getElementById('rlViz'),ctx=cv.getContext('2d');
+let t=0,timer=null;const T=100;
+function phases(){
+  const dis=document.getElementById('rlDisagg').checked;
+  if(!dis)return [{row:0,name:'generate (vLLM, TP layout)',s:0,e:52,c:'#38c6a0'},{row:0,name:'reshard → train layout',s:52,e:58,c:'#f2a65a'},{row:0,name:'ref/old log-probs',s:58,e:68,c:'#4cc3e5'},{row:1,name:'rewards / env',s:50,e:66,c:'#b07cff'},{row:0,name:'advantages + policy update',s:68,e:92,c:'#5b8cff'},{row:0,name:'reshard → TP + weight sync',s:92,e:100,c:'#f2a65a'}];
+  return [{row:0,name:'generate continuously (SGLang pool)',s:0,e:100,c:'#38c6a0'},{row:1,name:'rewards / env',s:10,e:100,c:'#b07cff'},{row:2,name:'log-probs',s:20,e:30,c:'#4cc3e5'},{row:2,name:'update on buffered (slightly stale) batch',s:30,e:62,c:'#5b8cff'},{row:2,name:'broadcast new weights → pool',s:62,e:70,c:'#f2a65a'},{row:2,name:'log-probs',s:70,e:80,c:'#4cc3e5'},{row:2,name:'update',s:80,e:100,c:'#5b8cff'}];
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const txt=css('--text'),dim=css('--text-dim'),bd=css('--border');const dis=document.getElementById('rlDisagg').checked;
+  const rows=dis?['rollout GPU pool','environment servers','trainer GPU pool']:['actor/rollout/ref GPUs (colocated)','reward / env servers'];
+  const x0=200,pw=W-x0-30,rh=44,y0=40;
+  rows.forEach((r,i)=>{ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='right';ctx.fillText(r,x0-10,y0+i*rh+26);ctx.strokeStyle=bd;ctx.strokeRect(x0,y0+i*rh,pw,rh-8);});
+  phases().forEach(p=>{const s=x0+pw*p.s/100,e=x0+pw*Math.min(p.e,t)/100;if(e<=s)return;ctx.fillStyle=p.c;ctx.globalAlpha=0.85;ctx.fillRect(s,y0+p.row*rh+4,e-s,rh-16);ctx.globalAlpha=1;
+    if(e-s>60){ctx.fillStyle='#fff';ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText(p.name,s+6,y0+p.row*rh+24);}});
+  // idle marker for colocated
+  if(!dis&&t>=52){ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('↑ generation ~50% of the step: rollout throughput is the lever',x0,y0+rows.length*rh+10);}
+  if(dis){ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('rollout never waits for the trainer; staleness is bounded by the buffer and corrected by importance weights',x0,y0+rows.length*rh+10);}
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText('one RL step → time ('+Math.round(t)+'%)',x0,24);
+}
+function tick(){if(t<T){t+=2;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('rlPlay').textContent='▶ Play';}}
+document.getElementById('rlPlay').onclick=function(){if(timer){stop();return;}if(t>=T)t=0;this.textContent='⏸ Pause';timer=setInterval(tick,60);};
+document.getElementById('rlReset').onclick=()=>{stop();t=0;draw();};
+document.getElementById('rlDisagg').onchange=()=>{stop();t=0;draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4. request journey through vLLM ----------
+(function(){
+const cv=document.getElementById('reqViz'),ctx=cv.getContext('2d'),lab=document.getElementById('reqLabel');
+const S=[{t:'API / tokenize',d:'Front-end process: chat template applied, tokens produced, request enqueued (AsyncLLM → EngineCore).'},
+ {t:'scheduler admits',d:'EngineCore scheduler: enough free KV blocks? Admit. Budget: --max-num-seqs, --max-num-batched-tokens.'},
+ {t:'prefix cache hit',d:'KV manager: the system-prompt blocks hash to blocks already in the pool → reused, not recomputed.'},
+ {t:'chunked prefill',d:'The remaining prompt is prefilled in chunks, co-scheduled with other requests’ decode steps (no TPOT stall).'},
+ {t:'decode steps',d:'One token per step; a new KV block is allocated each time the last one fills (PagedAttention). Speculative decoding verifies several tokens per step if enabled.'},
+ {t:'stream tokens',d:'Each step’s token is detokenized in the front end and streamed to the client (SSE).'},
+ {t:'finish → free blocks',d:'EOS or max_tokens: the sequence leaves the batch; its private blocks return to the pool; cached prefix blocks stay for the next request.'}];
+let i=-1,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const txt=css('--text'),dim=css('--text-dim'),bd=css('--border'),acc=css('--accent'),card=css('--bg-card');
+  const bw=112,gap=12,x0=20,y=60;
+  S.forEach((s,k)=>{const x=x0+k*(bw+gap);const on=k===i,done=k<i;
+    ctx.fillStyle=on?acc:(done?css('--bg-inset'):card);ctx.strokeStyle=on?acc:bd;ctx.lineWidth=1.5;rr(ctx,x,y,bw,54,8);ctx.fill();ctx.stroke();
+    ctx.fillStyle=on?'#fff':txt;ctx.font='bold 11px sans-serif';ctx.textAlign='center';ctx.fillText(s.t,x+bw/2,y+31);
+    if(k<S.length-1)arrow(ctx,x+bw,y+27,x+bw+gap-1,y+27,bd,1.5);});
+  // KV block pool
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('KV block pool (this request’s blocks highlighted; striped = shared prefix)',20,150);
+  const used=i<2?0:(i===2?2:(i===3?4:(i<=5?4+Math.min(3,i-3)+2:0)));
+  for(let b=0;b<24;b++){const x=20+b*34,yy=160;ctx.strokeStyle=bd;ctx.strokeRect(x,yy,28,22);
+    if(b<2&&i>=2&&i<=6){ctx.fillStyle='#d2b84c';ctx.fillRect(x,yy,28,22);ctx.fillStyle='#fff';ctx.fillText('pre',x+5,yy+15);}
+    else if(b>=2&&b<used&&i<=5){ctx.fillStyle=acc;ctx.fillRect(x,yy,28,22);}}
+  if(i===6){ctx.fillStyle=dim;ctx.fillText('private blocks freed; prefix blocks remain cached',20,200);}
+  lab.textContent=i<0?'Press play or step.':S[i].d;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('One request through vLLM',20,30);
+}
+function step(){if(i<S.length-1){i++;draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('reqPlay').textContent='▶ Play';}}
+document.getElementById('reqPlay').onclick=function(){if(timer){stop();return;}if(i>=S.length-1)i=-1;this.textContent='⏸ Pause';timer=setInterval(step,1300);};
+document.getElementById('reqStep').onclick=()=>{stop();step();};
+document.getElementById('reqReset').onclick=()=>{stop();i=-1;draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

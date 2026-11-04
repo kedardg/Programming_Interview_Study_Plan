@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Learn — Interactive Notebook</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="../index.html">Study plan ↗</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>The Interactive Notebook</h1>
+<p>Twenty-three chapters that replace passive reading with animations you can step through, calculators you can argue with, and flashcards that make it stick. The arc runs from the math under everything, through deep learning and transformers, into GPUs, kernels, and the systems that train and serve LLMs — the same ground as the <a href="../index.html">study plan</a>, in notebook form. Every page works offline; open this folder with any static server (<code>python3 -m http.server</code>) or straight from disk.</p>
+
+<h2>Foundations</h2>
+<div class="grid">
+  <a class="tile" href="math.html"><span class="t-tag">Chapter 1</span><div class="t-title">Math Foundations</div><div class="t-desc">Dot products, matrices as maps, the chain rule, gradient descent you can steer, softmax &amp; cross-entropy, floating-point intuition.</div></a>
+  <a class="tile" href="deep-learning.html"><span class="t-tag">Chapter 2</span><div class="t-title">Deep Learning</div><div class="t-desc">Watch a forward and backward pass flow through an MLP edge by edge; optimizers racing on a loss surface; scaling laws.</div></a>
+  <a class="tile" href="transformers.html"><span class="t-tag">Chapter 3</span><div class="t-title">Transformers &amp; LLMs</div><div class="t-desc">BPE merges live, the transformer block animated stage by stage, sampling knobs, GPT-2 → Llama → DeepSeek architecture tour.</div></a>
+  <a class="tile" href="attention.html"><span class="t-tag">Chapter 4</span><div class="t-title">Attention &amp; FlashAttention</div><div class="t-desc">Attention from first principles, MHA/GQA/MQA/MLA, RoPE rotations, and the FlashAttention tiling + online softmax animation.</div></a>
+  <a class="tile" href="architectures.html"><span class="t-tag">Chapter 5</span><div class="t-title">LLM Architecture Evolution</div><div class="t-desc">GPT-2 → Llama → DeepSeek fix by fix; MoE routing (and collapse) animated, SSM hybrids vs the KV cache, MTP, and a data-driven adoption chart of 2025–26 developments.</div></a>
+  <a class="tile" href="gallery.html"><span class="t-tag">Chapter 6 · Vendored data · Apache-2.0</span><div class="t-title">LLM Architecture Gallery</div><div class="t-desc">109 open-weight architectures on one card format from Sebastian Raschka's gallery dataset: filter by family/feature, diff any two models side by side.</div></a>
+  <a class="tile" href="multimodal.html"><span class="t-tag">Chapter 7</span><div class="t-title">Multimodal LLMs</div><div class="t-desc">How text, images, audio, video, and 3D become tokens: patchify, CLIP, mel spectrograms and codec tokens, M-RoPE, point clouds, fusion architectures — concepts and code.</div></a>
+</div>
+
+<h2>GPUs &amp; Kernels</h2>
+<div class="grid">
+  <a class="tile" href="gpu.html"><span class="t-tag">Chapter 8</span><div class="t-title">GPU Architecture</div><div class="t-desc">SIMT, warps and divergence, the memory hierarchy, coalescing, occupancy, and an interactive roofline for H100 and your 5080.</div></a>
+  <a class="tile" href="kernels.html"><span class="t-tag">Chapter 9</span><div class="t-title">Writing Kernels</div><div class="t-desc">CUDA and Triton side by side: vector add, tree reduction, transpose, online softmax, and the full matmul optimization ladder.</div></a>
+  <a class="tile" href="quantization.html"><span class="t-tag">Chapter 10</span><div class="t-title">Quantization &amp; Numerics</div><div class="t-desc">A clickable bit-layout visualizer for FP32→FP4, GPTQ/AWQ intuition, KV-cache quantization, 2:4 sparsity.</div></a>
+  <a class="tile" href="vendor/mm/index.html"><span class="t-tag">Vendored · MIT</span><div class="t-title">mm — 3D Matmul Visualizer</div><div class="t-desc">Meta's three.js tool: fly through tiled matrix multiplies, attention heads, and MLP stacks. Vendored into this repo.</div></a>
+</div>
+
+<h2>Systems: Training &amp; Serving</h2>
+<div class="grid">
+  <a class="tile" href="inference.html"><span class="t-tag">Chapter 11</span><div class="t-title">Inference Systems</div><div class="t-desc">Prefill vs decode, a KV-cache calculator, continuous batching vs static (animated), PagedAttention, speculative decoding.</div></a>
+  <a class="tile" href="parallelism.html"><span class="t-tag">Chapter 12</span><div class="t-title">Parallelism &amp; Distributed</div><div class="t-desc">Ring all-reduce animated, tensor/pipeline/expert parallelism, FSDP/ZeRO, and a worked 70B-on-4×H100 example.</div></a>
+  <a class="tile" href="training.html"><span class="t-tag">Chapter 13</span><div class="t-title">Training &amp; Fine-tuning</div><div class="t-desc">The 6ND rule, a training-memory calculator with LoRA/QLoRA/checkpointing toggles, DPO/GRPO, Axolotl in practice.</div></a>
+  <a class="tile" href="customization.html"><span class="t-tag">Chapter 14</span><div class="t-title">Customization Strategy, Data &amp; Evals</div><div class="t-desc">The decision ladder from prompting to domain foundation models, distillation, continued pre-training, synthetic data with verifiers, LLM-as-judge and pass@k evals, multi-adapter serving, cost-per-token.</div></a>
+  <a class="tile" href="rl-systems.html"><span class="t-tag">Chapter 15</span><div class="t-title">RL Post-Training Systems</div><div class="t-desc">RLVR, GRPO/DAPO/GSPO, the trainer–rollout machine (colocated vs disaggregated, weight sync), reward hacking, agentic multi-turn RL with loss masks, verl / Miles / NeMo Gym / OpenEnv.</div></a>
+  <a class="tile" href="frameworks.html"><span class="t-tag">Chapter 16</span><div class="t-title">The Framework Stack</div><div class="t-desc">What FSDP2, Megatron-Core, verl, Miles, NeMo RL/Gym, OpenEnv, vLLM, SGLang, TensorRT-LLM, the Neuron SDK, Ray, Bedrock and SageMaker each are, do, and how you use them — with an animated end-to-end map.</div></a>
+  <a class="tile" href="robot-learning.html"><span class="t-tag">Chapter 17</span><div class="t-title">RL &amp; Robot Learning</div><div class="t-desc">Q-learning on a live gridworld, policy gradients to PPO/SAC, imitation and diffusion policies, and the VLA lineage (RT-2 → OpenVLA → π0) with LeRobot code.</div></a>
+  <a class="tile" href="hardware.html"><span class="t-tag">Chapter 18</span><div class="t-title">Beyond NVIDIA</div><div class="t-desc">NeuronCore engines and SBUF/PSUM dataflow animated, NKI kernels, the Deepgram port, TPU systolic arrays, AMD.</div></a>
+</div>
+
+<h2>Applications &amp; Interviews</h2>
+<div class="grid">
+  <a class="tile" href="agents.html"><span class="t-tag">Chapter 19</span><div class="t-title">Agents, Tools &amp; RAG</div><div class="t-desc">The agent loop animated with a real trace, RAG pipeline end to end, compounding-error math, agent-aware serving.</div></a>
+  <a class="tile" href="system-design.html"><span class="t-tag">Chapter 20</span><div class="t-title">System Design</div><div class="t-desc">Back-of-envelope calculator, consistent-hashing ring, rate limiters and LSM trees animated, all 28 Alex Xu problems mapped.</div></a>
+  <a class="tile" href="coding-patterns.html"><span class="t-tag">Chapter 21</span><div class="t-title">Coding Interview Patterns</div><div class="t-desc">The Blind 75 organized by technique — sliding window, binary search, Kahn's algorithm, two-heap median, coin-change DP animated — with Python solutions and a full problem→pattern map.</div></a>
+  <a class="tile" href="notes.html"><span class="t-tag">Chapter 22 · Vendored notes</span><div class="t-title">Notes Library</div><div class="t-desc">164 practitioner notes rendered in-theme: Stas Bekman's ML Engineering book, the SGLang/slime/verl developers' RL-systems notes, an ML &amp; GenAI system-design interview guide, and an AI-engineering Q&amp;A bank.</div></a>
+  <a class="tile" href="flashcards.html"><span class="t-tag">Chapter 23</span><div class="t-title">Flashcards</div><div class="t-desc">210+ cards across 19 decks with flip animation and light spaced repetition. Progress lives in your browser.</div></a>
+</div>
+
+<h2 id="audio">Audio course</h2>
+<p class="dim">Every chapter narrated (21 episodes, about 267 minutes) by a rotating cast of Kokoro voices, generated offline with <code>scripts/build_audio.py</code>. Each episode ends by telling you which animation to open and what to read next. Play from the chapter page, or grab the mp3s from <code>learn/audio/</code> for your phone.</p>
+<ul><li><a href="agents.html">LLM Agents, Tool Use &amp; RAG</a> — 9:53 · <a href="audio/agents.mp3">mp3</a></li><li><a href="architectures.html">LLM Architecture Evolution</a> — 16:47 · <a href="audio/architectures.mp3">mp3</a></li><li><a href="attention.html">Attention &amp; FlashAttention</a> — 16:58 · <a href="audio/attention.mp3">mp3</a></li><li><a href="coding-patterns.html">Coding Interview Patterns</a> — 13:08 · <a href="audio/coding-patterns.mp3">mp3</a></li><li><a href="customization.html">Model Customization Strategy</a> — 14:20 · <a href="audio/customization.mp3">mp3</a></li><li><a href="deep-learning.html">Deep Learning Fundamentals</a> — 16:38 · <a href="audio/deep-learning.mp3">mp3</a></li><li><a href="frameworks.html">The Framework Stack</a> — 14:38 · <a href="audio/frameworks.mp3">mp3</a></li><li><a href="gallery.html">LLM Architecture Gallery</a> — 5:37 · <a href="audio/gallery.mp3">mp3</a></li><li><a href="gpu.html">GPU Architecture</a> — 10:08 · <a href="audio/gpu.mp3">mp3</a></li><li><a href="hardware.html">Beyond NVIDIA: Trainium, TPU &amp; More</a> — 10:21 · <a href="audio/hardware.mp3">mp3</a></li><li><a href="inference.html">LLM Inference Systems</a> — 11:17 · <a href="audio/inference.mp3">mp3</a></li><li><a href="kernels.html">Writing Kernels</a> — 10:51 · <a href="audio/kernels.mp3">mp3</a></li><li><a href="math.html">Math Foundations for Deep Learning</a> — 14:06 · <a href="audio/math.mp3">mp3</a></li><li><a href="multimodal.html">Multimodal LLMs</a> — 18:45 · <a href="audio/multimodal.mp3">mp3</a></li><li><a href="parallelism.html">Multi-GPU &amp; Distributed</a> — 9:37 · <a href="audio/parallelism.mp3">mp3</a></li><li><a href="quantization.html">Quantization, Sparsity &amp; Numerics</a> — 10:12 · <a href="audio/quantization.mp3">mp3</a></li><li><a href="rl-systems.html">RL Post-Training Systems</a> — 20:51 · <a href="audio/rl-systems.mp3">mp3</a></li><li><a href="robot-learning.html">RL &amp; Robot Learning</a> — 20:10 · <a href="audio/robot-learning.mp3">mp3</a></li><li><a href="system-design.html">System Design for Interviews</a> — 10:14 · <a href="audio/system-design.mp3">mp3</a></li><li><a href="training.html">LLM Training &amp; Post-training</a> — 9:43 · <a href="audio/training.mp3">mp3</a></li><li><a href="transformers.html">Transformers &amp; LLMs</a> — 13:00 · <a href="audio/transformers.mp3">mp3</a></li></ul>
+
+<h2>The best of the web</h2>
+<p class="dim">Interactive explainers worth your time that are too large (or not licensed) to vendor into this repo — each is the canonical visualization of its topic.</p>
+<div class="grid">
+  <a class="tile" href="https://bbycroft.net/llm"><span class="t-tag">External</span><div class="t-title">LLM Visualization — Brendan Bycroft</div><div class="t-desc">A 3D, step-by-step walkthrough of a running GPT: every weight, every matmul, inspectable. (MIT on GitHub, but a build-heavy app.)</div></a>
+  <a class="tile" href="https://poloclub.github.io/transformer-explainer/"><span class="t-tag">External</span><div class="t-title">Transformer Explainer — Polo Club</div><div class="t-desc">A live GPT-2 running in your browser: type text, watch attention and next-token probabilities form.</div></a>
+  <a class="tile" href="https://evanw.github.io/float-toy/"><span class="t-tag">External</span><div class="t-title">Float Toy — Evan Wallace</div><div class="t-desc">Flip the bits of FP16/32/64 and watch the value change. Pairs with the quantization chapter.</div></a>
+  <a class="tile" href="https://playground.tensorflow.org/"><span class="t-tag">External</span><div class="t-title">Neural Network Playground</div><div class="t-desc">Train a tiny network live in the browser: features, layers, learning rate, regularization.</div></a>
+  <a class="tile" href="https://seeing-theory.brown.edu/"><span class="t-tag">External</span><div class="t-title">Seeing Theory — Brown</div><div class="t-desc">Probability and statistics taught entirely through interactive visualizations.</div></a>
+  <a class="tile" href="https://distill.pub/2017/momentum/"><span class="t-tag">External</span><div class="t-title">Why Momentum Really Works — Distill</div><div class="t-desc">The classic interactive article on momentum; the standard other explainers are judged by.</div></a>
+  <a class="tile" href="https://poloclub.github.io/cnn-explainer/"><span class="t-tag">External</span><div class="t-title">CNN Explainer — Polo Club</div><div class="t-desc">Convolutions, pooling, and activations animated layer by layer.</div></a>
+  <a class="tile" href="https://www.youtube.com/playlist?list=PLZHQObOWTQDNU6R1_67000Dx_ZCJB-3pi"><span class="t-tag">External</span><div class="t-title">3Blue1Brown — Neural Networks</div><div class="t-desc">The gold-standard animated series: backprop, gradient descent, and the attention/transformer chapters.</div></a>
+</div>
+
+<h2>How to use this with the plan</h2>
+<ul>
+<li><strong>Weeks 1–4:</strong> chapters 1–3 and 8 alongside PMPP, plus Coding Patterns (18) for the Monday/Wednesday problems; decks Math, Deep Learning, GPU, Coding Patterns.</li>
+<li><strong>Weeks 5–8:</strong> chapters 4–7, 9, 10 while you build the kernels; drill Kernels + Quantization decks before each Saturday build.</li>
+<li><strong>Weeks 9–11:</strong> chapters 11–18; inference and parallelism are the mental model for the vLLM exercise, Customization/RL Systems/Frameworks (14–16) are the model-customization track, and RL &amp; Robotics (17) pairs with the Sunday robot-learning slots.</li>
+<li><strong>Weeks 12–13:</strong> chapters 19–21 plus the Notes Library and the System Design deck — then drill <em>all</em> due cards daily in interview mode.</li>
+</ul>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+</script>
+</body>
+</html>

@@ -1,0 +1,155 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motivation</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › sglang/quantization/unsloth.md</div>
+<article class="note"><h1 id="motivation">Motivation</h1>
+<p>The size of state-of-the-art large language models (LLMs) and multi-modal models has continued to increase rapidly, making it challenging to deploy them efficiently on limited hardware resources. Although model quantization techniques, such as those implemented by <strong>Unsloth</strong> and <strong>BitsAndBytes</strong> (BNB), significantly reduce memory footprint, most inference frameworks—including <strong>SGLang</strong>—do not fully support loading and running all of these quantized models.</p>
+<p>This limitation leads to several challenges:
+- <strong>Compatibility</strong>: Quantized models require specialized loading and tensor management that differs from standard full-precision models.
+- <strong>Efficiency</strong>: Without native support, using quantized models may involve inefficient workarounds that negate the memory and speed benefits of quantization.
+- <strong>Accuracy Preservation</strong>: Ensuring that the quantized models run correctly without introducing additional accuracy loss beyond the inherent trade-offs of quantization.</p>
+<p>Our goal is to extend <strong>SGLang</strong> to directly support inference with <strong>Unsloth</strong>-quantized models. We benchmarked a set of Unsloth models on <strong>SGLang</strong> and found that <strong>Phi-4-mini</strong> and <strong>Gemma-3</strong> families are not fully supported. Specifically, we aim to:
+- Implement seamless loading of quantized model weights within <strong>SGLang</strong>. 
+- Preserve model execution fidelity with minimal additional overhead.
+- Validate the effectiveness of our solution on models through empirical evaluation of memory savings, throughput, latency, and accuracy.</p>
+<h1 id="model-families-used-in-experiments">Model Families Used in Experiments</h1>
+<p>To validate our approach, we focus on models from the <strong>Phi-4-mini</strong> family. Phi-4-mini-instruct models are lightweight instruction-tuned LLMs trained on a combination of synthetic and filtered web data, emphasizing high-quality reasoning and long-context capabilities. We also support multi-modality model families such as <strong>Gemma-3</strong>  to further figure out the approach to support diverse model architectures.</p>
+<h1 id="support-method">Support Method</h1>
+<h2 id="overview">Overview</h2>
+<h3 id="general-weight-loading">General Weight Loading</h3>
+<p>As shown in the figure below, <img alt="sglang architecture" src="../../../../vendor/notes/ml-sys-tutorial/sglang/quantization/sglang-architecture.png"> SGLang loads the model weights in the ModelRunner initialization stage. In each model loading, it will initialize the model architecture and quantization method based on the model configuration and quantization configuration file. Then it will generate weight iterators to handle various file formats. By iterating all checkpoints, it will load weights to the stacked parameter classes, such as gate_up_proj and qkv_proj, and update the parameter name with shard information (shard id and offset). This model loading flow is shown in the figure below. <img alt="loading pipeline" src="../../../../vendor/notes/ml-sys-tutorial/sglang/quantization/model_loading_pipeline.png"></p>
+<p>Stacked parameters are for layer fusions. Our target models - <strong>Phi-4-mini</strong> and <strong>Gemma-3</strong> families will go through the weight stacking process for gate_up_proj and qkv_proj, which corresponds to the ColumnParallelLinear layer and QKVParallelLinear layer. ColumnParallelLinear provides parallelism along the second dimension for as $A = [A1, A2, ..., Ap]$ in $Y = XA+b$. QKVParallelLinear concatenates query, key, and value along the output dimension. Since the weights are stacked for this layer, shard size and offset for each stack should be adjusted for quantization.</p>
+<h3 id="bitsandbytes-loader">BitsAndBytes Loader</h3>
+<p>BitsAndBytes (bnb) quantization introduces a set of specialized files to represent compressed model weights efficiently. Instead of storing full-precision parameters, the model saves quantized versions along with additional metadata to support dequantization at inference time. </p>
+<p>In addition to the main weights, multiple auxiliary files are used to store quantization-specific information. Table~\ref{tab:bnb-files} summarizes the meaning and usage of each auxiliary file suffix.</p>
+<h3 id="table-auxiliary-files-generated-for-bitsandbytes-quantized-weights">Table: Auxiliary files generated for BitsAndBytes quantized weights</h3>
+<table>
+<thead>
+<tr>
+<th><strong>Weight Suffix</strong></th>
+<th><strong>Description</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.weight</code></td>
+<td>The quantized low-bit weight tensor (e.g., NF4 or INT4 format).</td>
+</tr>
+<tr>
+<td><code>.weight.absmax</code></td>
+<td>Global absolute maximum value used for scaling during quantization.</td>
+</tr>
+<tr>
+<td><code>.weight.nested_absmax</code></td>
+<td>Layer-wise or block-wise absolute maximum values for nested quantization.</td>
+</tr>
+<tr>
+<td><code>.weight.nested_quant_map</code></td>
+<td>Mapping from blocks to corresponding nested quantization scales.</td>
+</tr>
+<tr>
+<td><code>.weight.quant_map</code></td>
+<td>Mapping from quantized values to approximate floating-point values.</td>
+</tr>
+<tr>
+<td><code>.weight.quant_state.bitsandbytes__nf4</code></td>
+<td>Metadata specifying quantization type (e.g., Normal Float 4 - NF4).</td>
+</tr>
+</tbody>
+</table>
+<p>These auxiliary files enable efficient and accurate reconstruction of approximate floating-point tensors during inference, allowing large models to maintain high performance while significantly reducing memory footprint.</p>
+<p>SGLang already supports all of these quantization metadata handling in its BitsAndBytesModelLoader, which inherits the basic ModelLoader. Generally, the BNB quantized model integration on SGLang is supported by this BitsAndBytesModelLoader. For each model, it loads the weights with corresponding quantization metadata, and indexes the weights by layer name and shard information. Based on the quantization information, it updates the quantization states, shard information, and other states for inference. Therefore, we can skip the quantization process of the whole framework, but focus on support new model architecture and its weight loading manner.</p>
+<h3 id="unsloth-dynamic-quantization-support">Unsloth Dynamic Quantization Support</h3>
+<p>The dynamic quantization provided by Unsloth selects to skip quantization for certain layers to achieve best performance tradeoff between quantization and non-quantization. The skipped layers are specified by llm_int8_skip_modules of the model quantization configuration. The imported dependency VLLM on SGLang already handles this skipping mannar by <a href="https://github.com/vllm-project/vllm/blob/main/vllm/model_executor/layers/quantization/bitsandbytes.py#L126">bitsandbytes bypass source code</a>.  </p>
+<h2 id="model-specific-support-method">Model Specific Support Method</h2>
+<p>In this section we introduce how to implement support for two Unsloth BnB quantized model class, <strong>Phi-4-mini</strong> and <strong>Gemma-3</strong>.</p>
+<h3 id="phi-4-mini">Phi-4-mini</h3>
+<p>To support these models on SGLang, we can reuse most of the existing weight loading logics of Phi-3, but need to fix the shard offsets. For these models, the weights for gate projection and up projection are already concatenated, while the existing gate_up_project weight loading assumes the hugging face model provides non-stacked weights at sharding. Therefore, we would need to handle pre-concatenated weights in checkpoint files, by adjusting shard metadata (size and offset). Details could be found at: <a href="https://github.com/sgl-project/sglang/pull/4982">Phi-4-mini Implementation Pull Request</a>.</p>
+<h3 id="gemma-3">Gemma-3</h3>
+<p>The Gemma-3 model family includes pure text models (e.g., the 1B model) and vision-text multimodal models ($\geq$ 4B), where the latter utilize SigLIP as the vision tower. SGLang fully supports the pure text models of Gemma-3 but does not support multimodal Unsloth quantization. This limitation arises because SGLang does not natively support SigLIP; instead, it uses the AutoModel method from the Transformers library to import the Gemma-3 vision tower parameters. However, this method does not allow specifying complex quantization configurations, such as Unsloth’s use of llm_int8_skip_modules to indicate layers to be skipped during quantization. Moreover, it does not integrate SGLang's optimized operators, leading to foreseeable performance degradation.</p>
+<p>To address these issues, we implemented a SigLIP Vision Model using SGLang operators, based on the reference implementation from Transformers, and integrated it as the vision tower for Gemma-3. Additionally, we fixed bugs related to the concatenation of QKV and gate up/down projection weights when loading the vision tower, as well as mismatches in weight naming for the self attention output projection, ensuring that the vision tower weights are correctly loaded. Further details can be found in the <a href="https://github.com/sgl-project/sglang/pull/5339/files">Gemma-3-mm Implementation Pull Request</a>.</p>
+<h1 id="evaluation">Evaluation</h1>
+<p>After integrating supports for <strong>Phi-4-mini</strong> and <strong>Gemma-3</strong>, more Unsloth models are fully supported on SGLang framework. We evaluated the performance of the two families of models, with addition to their un-quantized models, benchmarking the following metrics: GPU memory usage (GB), Decode throughput (token/s), Throughput (token/s), Decode Latency (ms), Accuracy (MMLU). The results are included in the table below. </p>
+<table>
+<thead>
+<tr>
+<th><strong>Model Name</strong></th>
+<th><strong>GPU Memory (GB)</strong></th>
+<th><strong>Decode Throughput (token/s)</strong></th>
+<th><strong>Throughput (token/s)</strong></th>
+<th><strong>Decode Latency (ms)</strong></th>
+<th><strong>Accuracy (MMLU)</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gemma-3-4b-it</td>
+<td>8.10</td>
+<td>77.81</td>
+<td>3816</td>
+<td>12.85</td>
+<td>0.581</td>
+</tr>
+<tr>
+<td>Gemma-3-4b-it-bnb-4bit</td>
+<td>3.18</td>
+<td>77.72</td>
+<td>3526</td>
+<td>12.87</td>
+<td>0.558</td>
+</tr>
+<tr>
+<td>Gemma-3-4b-it-unsloth-bnb-4bit</td>
+<td>4.37</td>
+<td>76.92</td>
+<td>3538</td>
+<td>13.00</td>
+<td>0.564</td>
+</tr>
+<tr>
+<td>Phi-4-mini-instruct</td>
+<td>7.27</td>
+<td>123.36</td>
+<td>5495</td>
+<td>8.11</td>
+<td>0.658</td>
+</tr>
+<tr>
+<td>Phi-4-mini-instruct-bnb-4bit</td>
+<td>2.86</td>
+<td>135.79</td>
+<td>5378</td>
+<td>7.36</td>
+<td>0.611</td>
+</tr>
+<tr>
+<td>Phi-4-mini-instruct-unsloth-bnb-4bit</td>
+<td>3.17</td>
+<td>134.70</td>
+<td>5375</td>
+<td>7.42</td>
+<td>0.641</td>
+</tr>
+</tbody>
+</table>
+<p>For better illustration, we could compare the performance of three classes of Phi-4-mini and Gemma-3 models: unquantized version (Gemma-3-4b-it, Phi-4-mini-instruct), BNB quantization version (Gemma-3-4b-it-bnb-4bit, Phi-4-mini-instruct-bnb-4bit), and Unsloth dynamic BNB quantization version (Gemma-3-4b-it-unsloth-bnb-4bit, Phi-4-mini-instruct-unsloth-bnb-4bit). The evaluation results in the table above demonstrate that all models achieve good accuracy, with MMLU scores consistently above 0.55. </p>
+<p>Bits-and-bytes (bnb) quantization significantly reduces GPU memory usage across models. For example, for GPU memory perspective show in figure below, <img alt="GPU Memory Experiment Result" src="../../../../vendor/notes/ml-sys-tutorial/sglang/quantization/gpu.png"> compared to their non-quantized counterparts, fully quantized versions achieve drastic memory savings, while dynamic quantized models (e.g., Unsloth-bnb-4bit) exhibit intermediate memory usage, as they skip quantization for certain layers to balance performance and memory consumption.</p>
+<p>In terms of end-to-end throughput shown in figure below, <img alt="end-to-end throughput" src="../../../../vendor/notes/ml-sys-tutorial/sglang/quantization/throughput.png"> all models achieve relatively similar token-level throughput, though quantized versions tend to have slightly lower throughput. This phenomenon can be attributed to the nature of LLM workloads being compute-bound: quantization reduces memory bandwidth pressure but introduces additional compute overhead, which limits throughput gains. </p>
+<p>The performances of decoding speed are shown in the figure below. <img alt="Decode Latency Comparison" src="../../../../vendor/notes/ml-sys-tutorial/sglang/quantization/latency.png"> <img alt="Decode Throughput Comparison" src="./decode_throughput.png"> For Phi-4-mini-instruct, the decode latency improves in quantized versions, suggesting that decoding becomes more memory-bound and benefits from faster memory access. For the Gemma models, quantized models provide lower speed than non-quantized model. This is because <strong>SGLang</strong> does not natively provide full support for bits-and-bytes optimizations. Similar performance degradations are observed in many other models as shown in figure below. <img alt="Performance Degradations" src="../../../../vendor/notes/ml-sys-tutorial/sglang/quantization/decodetp_degrade.png"></p>
+<p>We evaluated the accuracy of the models as shown in the figure below. <img alt="Accuracy" src="../../../../vendor/notes/ml-sys-tutorial/sglang/quantization/acc.png"> For both the Phi-4-mini and Gemma model families, the non-quantized versions achieved the highest MMLU scores, while the fully quantized versions obtained the lowest. As anticipated, the dynamically quantized models yielded intermediate MMLU scores.</p>
+<h1 id="acknowledgement">Acknowledgement</h1>
+<p>We would like to acknowledge that part of the implementation for weight loading in our project draws inspiration from the tutorial post <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/tree/main/sglang/how-model-is-loaded">how-model-is-loaded</a>. This resource provided valuable insights into the internal mechanisms of model weight initialization and significantly informed our approach.</p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/sglang/quantization/unsloth.md">sglang/quantization/unsloth.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

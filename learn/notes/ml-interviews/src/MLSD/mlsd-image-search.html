@@ -1,0 +1,188 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Image Search System (Pinterest)</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-image-search.md</div>
+<article class="note"><h1 id="image-search-system-pinterest">Image Search System (Pinterest)</h1>
+<h3 id="1-problem-formulation">1. Problem Formulation</h3>
+<ul>
+<li>Clarifying questions<ul>
+<li>What is the primary (business) objective of the visual search system?</li>
+<li>What are the specific use cases and scenarios where it will be applied?</li>
+<li>What are the system requirements (such as response time, accuracy, scalability, and integration with existing systems or platforms)?</li>
+<li>How will users interact with the system? (click, like, share, etc)? Click only</li>
+<li>What types of visual content will the system search through (images, videos, etc.)? Images only </li>
+<li>Are there any specific industries or domains where this system will be deployed (e.g., fashion, e-commerce, art, industrial inspection)?</li>
+<li>What is the expected scale of the system in terms of data and user interactions?</li>
+<li>Personalized? not required </li>
+<li>Can we use metadata? In general yes, here let's not. </li>
+<li>Can we assume the platform provides images which are safe? Yes</li>
+</ul>
+</li>
+<li>Use case(s) and business goal</li>
+<li>Use case: allowing users to search for visually similar items, given a query image by the user </li>
+<li>business goal: enhance user experience, increase click through rate, conversion rates, etc (depends on use case)</li>
+<li>Requirements</li>
+<li>response time, accuracy, scalability (billions of images)</li>
+<li>Constraints</li>
+<li>budget limitations, hardware limitations, or legal and privacy constraints</li>
+<li>Data: sources and availability</li>
+<li>sources of visual data: user-generated, product catalogs, or public image databases?</li>
+<li>Available? </li>
+<li>Assumptions</li>
+<li>ML formulation: </li>
+<li>ML Objective: retrieve images that are similar to query image in terms of visual content </li>
+<li>ML I/O: I: a query image, and O: a ranked list of most similar images to the query image </li>
+<li>ML category: Ranking problem (rank a collection of items based on their relevance to a query)</li>
+</ul>
+<h3 id="2-metrics">2. Metrics</h3>
+<ul>
+<li>Offline metrics </li>
+<li>MRR </li>
+<li>Recall@k </li>
+<li>Precision@k </li>
+<li>mAP </li>
+<li>nDCG </li>
+<li>Online metrics </li>
+<li>CTR </li>
+<li>Time spent on images </li>
+</ul>
+<h3 id="3-architectural-components">3. Architectural Components</h3>
+<ul>
+<li>High level architecture </li>
+<li>Representation learning: <ul>
+<li>transform input data into representations (embeddings) - similar images are close in their embedding space </li>
+<li>use distance between embeddings as a similarity measure between images </li>
+</ul>
+</li>
+</ul>
+<h3 id="4-data-collection-and-preparation">4. Data Collection and Preparation</h3>
+<ul>
+<li>Data Sources</li>
+<li>User profile</li>
+<li>Images <ul>
+<li>image file</li>
+<li>metadata</li>
+</ul>
+</li>
+<li>User-image interactions: impressions, clicks: </li>
+<li>Context </li>
+<li>Data storage</li>
+<li>ML Data types</li>
+<li>Labelling</li>
+</ul>
+<h3 id="5-feature-engineering">5. Feature Engineering</h3>
+<ul>
+<li>Feature selection </li>
+<li>User profile : User_id, username, age, gender, location (city, country), lang, timezone</li>
+<li>Image metadata: ID, user ID, tags, upload date, ... </li>
+<li>User-image interactions: impressions, clicks: <ul>
+<li>user id, Query img id, returned img id, interaction type (click, impression), time, location</li>
+</ul>
+</li>
+<li>Feature representation </li>
+<li>Representation learning (embedding)</li>
+<li>Feature preprocessing </li>
+<li>common feature preprocessing for images: <ul>
+<li>Resize (e.g. 224x224), Scale (0-1), normalize (mean 0, var 1), color mode (RGB, CMYK) </li>
+</ul>
+</li>
+</ul>
+<h3 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h3>
+<ul>
+<li>Model selection </li>
+<li>we choose NN because of <ul>
+<li>unstructured data (images, text) -&gt; NN good at it </li>
+<li>embeddings needed </li>
+</ul>
+</li>
+<li>Architecture type: <ul>
+<li>CNN based e.g. ResNet </li>
+<li>Transformer based (ViT)</li>
+<li>Example: Image -&gt; Convolutional layers -&gt; FC layers -&gt; embedding vector  </li>
+</ul>
+</li>
+<li>Model Training </li>
+<li>contrastive learning -&gt; used for image representation learning <ul>
+<li>train to distinguish similar and dissimilar items (images)</li>
+</ul>
+</li>
+<li>Dataset </li>
+<li>each data point: query img, positive sample (similar to q), n - 1 neg samples (dissimilar)<ul>
+<li>query img : randomly choose </li>
+<li>neg samples: randomly choose </li>
+<li>positive samples: human judge, interactions (e.g. click) as a proxy, artificial image generated from q (self supervision)</li>
+<li>human: expensive, time consuming </li>
+<li>interactions: noisy and sparse </li>
+<li>artificial: augment (e.g. rotate) and use as a positive sample (similar to simCLR or MoCo) - data distribution differs in reality </li>
+</ul>
+</li>
+<li>Loss Function: contrastive loss </li>
+<li>contrastive loss: <ul>
+<li>works on pairs (Eq, Ei)</li>
+<li>calculate distance: b/w pairs -&gt; softmax -&gt; cross entropy &lt;- Labels </li>
+</ul>
+</li>
+<li>Model eval and HP tuning </li>
+<li>Iterations </li>
+</ul>
+<h3 id="7-prediction-service">7. Prediction Service</h3>
+<ul>
+<li>
+<p>Prediction pipeline </p>
+</li>
+<li>
+<p>Embedding generation service </p>
+<ul>
+<li>image -&gt; preprocess -&gt; embedding gen (ML model) -&gt; img embedding </li>
+</ul>
+</li>
+<li>NN search service <ul>
+<li>retrieve the most similar images from embedding space </li>
+<li>Exact: O(N.D)</li>
+<li>Approximate(ANN) - sublinear e.g. O(D.logN)<ul>
+<li>Tree based ANN (e.g. R-trees, Kd-trees) </li>
+<li>partition space into two (or more) at each non-leaf node, </li>
+<li>only search the partition for query q </li>
+<li>Locality Sensitive Hashing LSH </li>
+<li>using hash functions to group points into buckets (close points into same buckets)</li>
+<li>Clustering based </li>
+</ul>
+</li>
+<li>We use ANN using an existing library like Faiss (Facebook)</li>
+</ul>
+</li>
+<li>Re-ranking service <ul>
+<li>business level logic and policies (e.g. filter inappropriate or private items, deduplicate, etc)</li>
+</ul>
+</li>
+<li>Indexing pipeline</li>
+<li>Indexing service: indexes images by their embeddings </li>
+<li>keep the table updated for new images </li>
+<li>increases memory usage -&gt; use optimization (vector / product quantization)</li>
+</ul>
+<h3 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h3>
+<ul>
+<li>A/B Test </li>
+<li>Deployment and release </li>
+</ul>
+<h3 id="9-scaling-monitoring-and-updates">9. Scaling, Monitoring, and Updates</h3>
+<ul>
+<li>Scaling (SW and ML systems)</li>
+<li>Monitoring </li>
+<li>Updates </li>
+</ul>
+<h3 id="10-other-points">10. Other points:</h3></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-image-search.md">src/MLSD/mlsd-image-search.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

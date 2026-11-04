@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Training &amp; Post-training</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html" class="here">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>LLM Training, Fine-tuning &amp; Post-training</h1>
+<p class="dim">How a pile of text becomes a chat model: the pretraining→SFT→preference→RL pipeline, the memory anatomy of a training step, LoRA and QLoRA, DPO and GRPO, and Axolotl as the practical map. This is the training-side counterpart of the Inference chapter, and the systems ideas cross-link to <a href="parallelism.html">Parallelism</a>.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (9:43)</h3><audio controls preload="none" src="audio/training.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/training.txt">Read the transcript</a>.</p></div>
+<h2 id="pipeline">1. The pipeline: four kinds of learning, one model</h2>
+<p>Modern LLMs are not trained once — they pass through stages, each with its own data, objective, and scale. The stages are wildly asymmetric: pretraining consumes &gt;99% of the compute and sets almost all of the model's knowledge; everything after it is <em>steering</em>, cheap by comparison but decisive for behavior.</p>
+
+<div class="card">
+<h3>Animation: the training pipeline</h3>
+<canvas id="pipeViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="pipePlay">▶ Play</button>
+  <button class="btn secondary" id="pipeStep">Step</button>
+  <button class="btn secondary" id="pipeReset">Reset</button>
+</div>
+<p class="caption">Each stage transforms the same weights. Watch the annotations: data volume falls ~six orders of magnitude from pretraining (trillions of tokens of web text) to RL (thousands of prompts), while the objective shifts from "predict the corpus" to "satisfy a preference or reward". The model that ships is the sum of all four.</p>
+</div>
+
+<table class="cmp">
+<tr><th>Stage</th><th>Data</th><th>Objective</th><th>Typical scale</th></tr>
+<tr><td><strong>Pretraining</strong></td><td>Trillions of tokens: web, code, books</td><td>Next-token cross-entropy</td><td>10²⁴–10²⁶ FLOPs, weeks on thousands of GPUs</td></tr>
+<tr><td><strong>SFT</strong> (supervised fine-tuning)</td><td>10k–1M curated instruction/response pairs</td><td>Same loss, but only on response tokens</td><td>Hours–days on a node</td></tr>
+<tr><td><strong>Preference tuning</strong></td><td>10k–1M (chosen, rejected) pairs</td><td>DPO-family contrastive loss, or a reward model + PPO</td><td>Similar to SFT</td></tr>
+<tr><td><strong>RL on tasks</strong></td><td>Prompts + verifiable rewards (tests pass, math checks)</td><td>GRPO/PPO: maximize reward, stay near reference</td><td>Growing fast — the "reasoning" stage</td></tr>
+</table>
+
+<h2 id="pretraining">2. Pretraining mechanics</h2>
+<p>The objective could not be simpler: for every position in every sequence, predict the next token. The loss is cross-entropy between the model's distribution and the one-hot actual token, averaged over positions (see <a href="math.html">Math</a> for why cross-entropy = "surprise in nats"). Everything the model knows is a side effect of pushing this one number down on enough diverse text.</p>
+<p><strong>The 6ND rule.</strong> Training compute is well-approximated by:</p>
+<div class="formula">FLOPs ≈ 6 × N (parameters) × D (training tokens)
+<br>— 2ND for the forward pass (each param does one multiply-add per token),
+<br>— 4ND for the backward pass (gradients w.r.t. activations and weights ≈ 2× forward).</div>
+<p>Worked example — Llama-3-70B on 15T tokens:</p>
+<div class="formula">FLOPs = 6 × 70e9 × 15e12 ≈ 6.3e24
+H100 BF16 peak ≈ 989 TFLOP/s; at 40% MFU → ~4.0e14 useful FLOP/s per GPU
+6.3e24 / 4.0e14 ≈ 1.6e10 GPU-seconds ≈ 4.4M GPU-hours
+→ ~16,000 H100s for about 11–12 days (ignoring restarts and stragglers)</div>
+<p><strong>MFU</strong> (model FLOPs utilization) is the honest efficiency metric: achieved model FLOPs over hardware peak. 40–50% is good at scale; the gap is attention's non-matmul work, communication, and stalls — the same roofline logic as the <a href="gpu.html">GPU chapter</a>.</p>
+<p><strong>Chinchilla vs over-training.</strong> Chinchilla (2022) showed that for a fixed compute budget, loss is minimized near D ≈ 20N — a 70B model "wants" ~1.4T tokens. But compute-optimal is not <em>cost</em>-optimal once you count inference: a smaller model trained far past Chinchilla (Llama-3-8B saw ~15T tokens, D/N ≈ 1900) is cheaper to serve forever at slightly higher training cost. Modern frontier models are all heavily over-trained for exactly this reason — a model-economics decision, not a scaling-law violation.</p>
+<p><strong>Data and stability.</strong> The mixture (web/code/math ratios, dedup, quality filters, curriculum — e.g. upweighting high-quality data late in training) is as guarded as the architecture, and ablations show it matters as much. Operationally, runs this long hit <em>loss spikes</em>: a bad batch or numeric instability blows up the loss, and the standard playbook is to rewind to the last checkpoint, skip or reshuffle the offending data window, sometimes lower the LR, and continue — one reason checkpointing cadence (§7) is a first-class design choice.</p>
+
+<h2 id="memory">3. The memory anatomy of a training step</h2>
+<p>Inference needs weights + KV cache. Training needs much more, and knowing the breakdown cold is the most practically useful fact in this chapter. With Adam and standard mixed precision, every parameter costs <strong>16 bytes</strong> before a single activation is stored:</p>
+<div class="formula">BF16 weights: 2 B/param   ─ what the forward pass reads
+BF16 gradients: 2 B/param   ─ produced by the backward pass
+FP32 master weights: 4 B/param   ─ precise copy the optimizer updates
+Adam m (momentum): 4 B/param
+Adam v (variance): 4 B/param
+──────────────────────────────
+total: 16 B/param → 7B model = 112 GB before activations</div>
+<p>That is why "just fine-tune a 7B" does not fit on your 16 GB RTX 5080 — or even an 80 GB H100 — without one of the techniques below. Activations (every layer's intermediate outputs, kept for the backward pass) come on top and scale with batch × sequence length, which is what gradient checkpointing attacks: store only layer <em>inputs</em>, recompute the rest during backward, trading ~30% more compute for an order of magnitude less activation memory.</p>
+
+<div class="card">
+<h3>Interactive: where does training memory go?</h3>
+<div class="controls">
+  <label class="ctl">Model
+    <select id="memModel">
+      <option value="1">1B (h=2048, L=24)</option>
+      <option value="7" selected>7B (h=4096, L=32)</option>
+      <option value="70">70B (h=8192, L=80)</option>
+    </select>
+  </label>
+  <label class="ctl">Mode
+    <select id="memMode">
+      <option value="full" selected>Full fine-tune (Adam)</option>
+      <option value="lora">LoRA (r=16)</option>
+      <option value="qlora">QLoRA (NF4 base, r=16)</option>
+    </select>
+  </label>
+  <label class="ctl">ZeRO / FSDP shards
+    <select id="memZero">
+      <option value="1-1" selected>none (1 GPU)</option>
+      <option value="8-1">ZeRO-1 × 8 (optimizer)</option>
+      <option value="8-2">ZeRO-2 × 8 (+ grads)</option>
+      <option value="8-3">ZeRO-3 / FSDP × 8 (+ params)</option>
+    </select>
+  </label>
+</div>
+<div class="controls">
+  <label class="ctl">Tokens in flight (batch × seq) <input type="range" id="memTok" min="10" max="16" value="13" step="1"> <span id="memTokLabel"></span></label>
+  <label class="ctl"><input type="checkbox" id="memCkpt" checked> gradient checkpointing</label>
+</div>
+<canvas id="memViz" class="viz" width="900" height="300"></canvas>
+<div class="kpi">
+  <div class="box"><div class="v" id="memTotal">–</div><div class="l">per-GPU total</div></div>
+  <div class="box"><div class="v" id="memTrain">–</div><div class="l">trainable params</div></div>
+  <div class="box"><div class="v" id="memFit">–</div><div class="l">fits on</div></div>
+</div>
+<p class="caption">Start with the 7B full fine-tune: 112 GB of states alone. Now flip to LoRA — the base model stays frozen (no grads, no optimizer states for it), so the 16 B/param tax applies only to ~0.5% of parameters. Flip to QLoRA and the frozen base itself shrinks to ~0.6 B/param in NF4. Then try ZeRO-3 on the 70B: states divide by the GPU count. Reference lines: 16 GB (RTX 5080), 24 GB, 80 GB (H100).</p>
+</div>
+
+<h2 id="peft">4. LoRA and QLoRA: fine-tuning on a budget</h2>
+<p><strong>LoRA</strong> (Low-Rank Adaptation) starts from an empirical observation: the weight <em>update</em> a fine-tune produces has low intrinsic rank. So instead of updating W, freeze it and learn a low-rank bypass:</p>
+<div class="formula">h = W·x + (α/r) · B·(A·x)      W: d_out×d_in frozen
+A: r×d_in (init random), B: d_out×r (init zero → bypass starts as identity-of-nothing)
+trainable params: r × (d_in + d_out)  per adapted matrix</div>
+<p>Worked example: Llama-3-8B's attention projections at hidden size 4096, adapting q,k,v,o in all 32 layers with r=16: each projection adds 16×(4096+4096) ≈ 131k params; ×4 matrices ×32 layers ≈ <strong>16.8M trainable params — 0.2% of the model</strong>. Gradients and Adam states for 17M instead of 8B is the whole trick: optimizer memory drops ~500×, and the frozen base can be served/shared across many adapters.</p>
+
+<div class="card">
+<h3>Animation: the low-rank bypass</h3>
+<canvas id="loraViz" class="viz" width="900" height="260"></canvas>
+<div class="controls">
+  <button class="btn" id="loraPlay">▶ Play</button>
+  <label class="ctl">rank r <input type="range" id="loraR" min="1" max="64" value="16" step="1"> <span id="loraRLabel">16</span></label>
+</div>
+<p class="caption">The activation x flows through the big frozen W (grey) and, in parallel, through the thin trainable A then B (green); the two outputs add. Drag r: the bypass thickens, the trainable-parameter counter grows — but even r=64 is a sliver of W. After training, B·A can be <em>merged</em> into W (W ← W + (α/r)BA), so serving pays zero overhead.</p>
+</div>
+
+<p><strong>QLoRA</strong> pushes the frozen base below BF16: weights are stored in <strong>NF4</strong> (a 4-bit code whose 16 levels are placed at the quantiles of a normal distribution — matching how trained weights are actually distributed; see <a href="quantization.html">Quantization</a>), with <em>double quantization</em> of the per-block scales, while adapters and compute stay BF16 (weights are dequantized on the fly per layer). <em>Paged optimizer states</em> spill Adam moments to CPU RAM on memory spikes. Net: a 7–8B fine-tune in ~6–10 GB — this is exactly the plan's RTX 5080 exercise.</p>
+<p><strong>When is LoRA enough?</strong> For style, format, instruction-following, and domain adaptation, LoRA at modest rank typically matches full fine-tuning. It falls short when the task needs genuinely <em>new knowledge or capability</em> at scale (continued pretraining, new languages) — the update is no longer low-rank. Rules of thumb: raise r (and α ≈ 2r) before concluding LoRA can't do it; adapt all linear layers (not just attention) for harder tasks; remember you can't batch <em>different</em> merged models, but you can batch many <em>unmerged</em> adapters over one base (multi-LoRA serving, e.g. S-LoRA/vLLM).</p>
+
+<h2 id="post">5. Post-training: RLHF, DPO, GRPO</h2>
+<p><strong>RLHF with PPO</strong>, the original recipe (InstructGPT): train a reward model on human preference pairs, then optimize the policy against it with PPO, with a KL penalty to a frozen reference model so the policy doesn't wander into reward-hacked gibberish. It works — it built ChatGPT — but it is heavy: four models in memory (policy, reference, reward, value), sampling in the training loop, and notorious hyperparameter sensitivity. Honest summary: PPO-RLHF is what you use when you have the infrastructure and need the extra control; most open work replaced it for preferences.</p>
+<p><strong>DPO</strong> (Direct Preference Optimization) collapses the reward model and RL loop into one supervised-looking loss on preference pairs (y⁺ chosen, y⁻ rejected):</p>
+<div class="formula">L = −log σ( β·[ (log π(y⁺|x) − log π_ref(y⁺|x)) − (log π(y⁻|x) − log π_ref(y⁻|x)) ] )</div>
+<p>Intuition: increase the policy's log-probability <em>margin</em> of chosen over rejected, measured relative to the reference model, with β controlling how far from the reference you may drift. It is exactly the RLHF objective solved in closed form under the Bradley–Terry preference model — no reward model, no sampling, just pairs and gradient descent. Relatives, one line each: <strong>IPO</strong> fixes DPO's tendency to over-optimize confident pairs; <strong>KTO</strong> needs only thumbs-up/down labels, not pairs; <strong>ORPO</strong> folds preference into SFT with no reference model; <strong>SimPO</strong> drops the reference too, using length-normalized logprob as the implicit reward.</p>
+<p><strong>GRPO</strong> (Group Relative Policy Optimization, from DeepSeekMath/R1) is the workhorse of the reasoning era, built for <em>verifiable</em> rewards (unit tests, math answers). The move: sample a <em>group</em> of G answers per prompt, score each, and use the group's own mean (and std) as the baseline — no learned value model at all:</p>
+<div class="formula">advantage_i = (reward_i − mean(rewards)) / std(rewards)
+→ push up tokens of above-average answers, push down below-average, clip PPO-style, KL to reference</div>
+
+<div class="card">
+<h3>Animation: one GRPO step</h3>
+<canvas id="grpoViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <button class="btn" id="grpoSample">Sample new group</button>
+  <button class="btn secondary" id="grpoReset">Reset policy</button>
+  <span class="dim" id="grpoStats"></span>
+</div>
+<p class="caption">One prompt, 8 sampled answers, each scored by a verifier (✓ = reward 1, ✗ = 0, partial credit possible). The dashed line is the group mean — the free baseline. Green bars (above mean) are reinforced, red bars suppressed. Click "Sample new group" repeatedly: as the policy improves, the group mean rises, so the bar to be "above average" rises with it — the baseline adapts for free, which is the whole point of skipping the value model.</p>
+</div>
+
+<h2 id="axolotl">6. Axolotl: the practical map</h2>
+<p>Everything above is a YAML file away. <a href="https://github.com/axolotl-ai-cloud/axolotl">Axolotl</a> is the plan's chosen post-training framework precisely because its config surface is a checklist of this chapter and the systems chapters:</p>
+<div class="formula"># axolotl config anatomy (annotated)
+base_model: meta-llama/Llama-3.1-8B        # §1: start from a pretrained checkpoint
+datasets:
+  - path: tatsu-lab/alpaca                 # §1: SFT pairs (or DPO/KTO/GRPO types)
+    type: alpaca
+sample_packing: true                       # §6: pack variable-length seqs (below)
+sequence_len: 4096
+
+adapter: qlora                             # §4: lora / qlora / (omit = full FT)
+lora_r: 16
+lora_alpha: 32
+lora_target_linear: true                   # adapt all linear layers, not just attn
+load_in_4bit: true                         # §4: NF4 frozen base
+
+gradient_checkpointing: true               # §3: recompute activations
+flash_attention: true                      # kernels chapter: IO-aware attention
+plugins:
+  - axolotl.integrations.liger.LigerPlugin # §7: fused RMSNorm/CE kernels
+
+fsdp_config:                               # §7 + parallelism chapter: shard states
+  ...                                      # (ZeRO-3-style across your GPUs)
+# rl: dpo | kto | grpo                     # §5: swap the objective, keep the rig</div>
+<p><strong>Sample packing</strong> is the quiet 2–4× speedup: instruction datasets are mostly short sequences, and padding every one of them to 4096 burns most of each batch on pad tokens. Packing concatenates multiple examples into each 4096-token row and uses attention masking (or Flash-Attention's varlen mode) so examples can't attend across boundaries.</p>
+
+<div class="card">
+<h3>Animation: padding waste vs sample packing</h3>
+<canvas id="packViz" class="viz" width="900" height="240"></canvas>
+<div class="controls">
+  <button class="btn" id="packToggle">Switch to packed</button>
+  <span class="dim" id="packStats"></span>
+</div>
+<p class="caption">Eight training examples of realistic (short, varied) lengths. Padded view: each gets its own row to max length — grey is wasted compute. Packed view: the same examples tiled into rows, separator-masked (notched boundaries), with only the final row partially empty. The utilization number is the speedup you don't have to earn.</p>
+</div>
+
+<p><strong>The plan's hands-on (Step 14):</strong> <code>axolotl fetch examples</code>, take a Llama-3-8B QLoRA config, train on your 5080 (~6–10 GB with the settings above), <code>axolotl merge-lora</code>, then serve the merged checkpoint with vLLM and measure TTFT/TPOT — closing the loop with the <a href="inference.html">Inference chapter</a>.</p>
+
+<h2 id="systems">7. Training-side systems</h2>
+<table class="cmp">
+<tr><th></th><th>FSDP (PyTorch-native)</th><th>DeepSpeed ZeRO</th></tr>
+<tr><td>Idea</td><td colspan="2">Shard params / grads / optimizer states across data-parallel ranks; gather params just-in-time per layer (all-gather), drop after use, reduce-scatter grads — same memory math as the ZeRO column of the §3 calculator</td></tr>
+<tr><td>Sharding levels</td><td>FULL_SHARD ≈ ZeRO-3, SHARD_GRAD_OP ≈ ZeRO-2, HSDP (shard in-node, replicate across)</td><td>Stage 1/2/3 + ZeRO-Infinity (CPU/NVMe offload)</td></tr>
+<tr><td>Pick when</td><td>You want torch-native composability (FSDP2 + tensor/context parallel)</td><td>You need offload or ZeRO-specific features</td></tr>
+</table>
+<p><strong>Fused kernels on the training side.</strong> Liger Kernel rewrites RMSNorm, RoPE, SwiGLU, and cross-entropy as fused Triton kernels (the <a href="kernels.html">Kernels chapter's</a> fusion logic applied to training ops). The flagship is <strong>Cut Cross Entropy</strong>: the logits tensor (batch × seq × vocab, e.g. 8×4096×128k in BF16 ≈ 8 GB <em>for one activation</em>) is never materialized — the loss and gradient are computed blockwise from the hidden states and the embedding matrix directly. Vocabularies grew 4× in two years; this kernel is why that was affordable.</p>
+<p><strong>Long context</strong> training splits the <em>sequence</em> dimension across GPUs (Ulysses/ring/context parallelism) because activations at 128k tokens dwarf everything else — mechanics in <a href="parallelism.html">Parallelism</a>. <strong>Checkpointing</strong> is the other half of §2's loss-spike playbook: async checkpoints every N minutes, sharded so resume doesn't need the original world size; at thousand-GPU scale, MTBF is hours, and your effective MFU includes restart time.</p>
+
+<h2 id="evals">8. Knowing whether it worked</h2>
+<p>Three lenses, in rising order of cost and realism. <em>Held-out loss/perplexity</em> is cheap, smooth, and comparable across runs — perfect for ablations, but it measures the pretraining objective, not usefulness. <em>Benchmarks</em> (MMLU, GSM8K, HumanEval, …) measure capabilities but saturate, leak, and reward format-matching; treat small deltas as noise. <em>LLM-as-judge</em> (MT-Bench, Arena-style pairwise) best matches "is it actually better to talk to", at the price of judge bias — position, verbosity, self-preference — so randomize order and audit samples by hand.</p>
+<p><strong>Contamination</strong> is the standing threat: benchmark test sets exist in web-scale pretraining data, so a score may measure memorization. Dedup against test sets, use freshly-authored or time-partitioned evals (problems published after the data cutoff), and distrust any result you can't reproduce. The uncomfortable rule of thumb: the more a benchmark matters, the more its signal has decayed.</p>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li><a href="https://arxiv.org/abs/2106.09685">LoRA</a>, <a href="https://arxiv.org/abs/2305.14314">QLoRA</a>, <a href="https://arxiv.org/abs/2305.18290">DPO</a> — the three papers behind §4–5, all in Step 14 of the plan.</li>
+<li><a href="https://github.com/axolotl-ai-cloud/axolotl">Axolotl</a> — read a full example config against this chapter; Lecture 32 (Unsloth) for the kernel-level view of fine-tuning cost.</li>
+<li><a href="https://jax-ml.github.io/scaling-book/">How to Scale Your Model</a> — training arithmetic and parallelism, the quantitative backbone.</li>
+<li>Steps 13–15 of the <a href="../index.html">study plan</a>, and the <a href="flashcards.html">Training flashcard deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="parallelism.html">← Parallelism</a><a href="customization.html">Customization &amp; Evals →</a></div>
+</main>
+<script>
+// ---------- theme ----------
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function onTheme(f){new MutationObserver(f).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+
+// ---------- 1. pipeline ----------
+(function(){
+const cv=document.getElementById('pipeViz'),ctx=cv.getContext('2d');
+const STAGES=[
+ {name:'Pretraining',data:'~15T tokens of web/code/books',obj:'next-token cross-entropy',scale:'10²⁴⁺ FLOPs, weeks × thousands of GPUs',out:'base model: knows everything, follows nothing'},
+ {name:'SFT',data:'10k–1M instruction pairs',obj:'cross-entropy on response tokens only',scale:'hours–days on a node',out:'follows instructions, chat format'},
+ {name:'Preference (DPO)',data:'10k–1M chosen/rejected pairs',obj:'raise margin of chosen over rejected',scale:'similar to SFT',out:'helpful, harmless, on-style'},
+ {name:'RL (GRPO)',data:'prompts + verifiable rewards',obj:'maximize reward, KL-tethered',scale:'sampling-heavy, growing',out:'reasoning: math, code, agents'}];
+let stage=0,anim=0,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const bw=170,bh=56,gap=(W-80-4*bw)/3,y0=40;
+  for(let i=0;i<4;i++){
+    const x=40+i*(bw+gap);
+    ctx.lineWidth=2;ctx.strokeStyle=i<=stage?acc:bd;
+    ctx.fillStyle=i<stage?acc:(i===stage?acc2:'transparent');
+    rr(x,y0,bw,bh,10);if(i<=stage)ctx.fill();ctx.stroke();
+    ctx.fillStyle=i<=stage?'#fff':dim;ctx.font='bold 13px sans-serif';ctx.textAlign='center';
+    ctx.fillText(STAGES[i].name,x+bw/2,y0+33);
+    if(i<3){ // arrow with moving dot
+      const ax=x+bw,ax2=x+bw+gap;
+      ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(ax+4,y0+bh/2);ctx.lineTo(ax2-4,y0+bh/2);ctx.stroke();
+      ctx.fillStyle=dim;ctx.fillText('▸',ax2-8,y0+bh/2+4);
+      if(i===stage-0&&timer){const px=ax+4+((anim%20)/20)*(gap-8);ctx.fillStyle=acc2;ctx.beginPath();ctx.arc(px,y0+bh/2,4,0,7);ctx.fill();}
+    }
+  }
+  const s=STAGES[stage];
+  ctx.textAlign='left';ctx.font='13px sans-serif';
+  const yT=150;
+  ctx.fillStyle=txt;ctx.font='bold 14px sans-serif';ctx.fillText(s.name,40,yT);
+  ctx.font='13px sans-serif';
+  ctx.fillStyle=dim;ctx.fillText('data:',40,yT+26);ctx.fillStyle=txt;ctx.fillText(s.data,100,yT+26);
+  ctx.fillStyle=dim;ctx.fillText('objective:',40,yT+50);ctx.fillStyle=txt;ctx.fillText(s.obj,120,yT+50);
+  ctx.fillStyle=dim;ctx.fillText('scale:',40,yT+74);ctx.fillStyle=txt;ctx.fillText(s.scale,100,yT+74);
+  ctx.fillStyle=dim;ctx.fillText('result:',40,yT+98);ctx.fillStyle=css('--accent2');ctx.fillText(s.out,100,yT+98);
+  function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+}
+function advance(){anim++;if(anim%20===0){if(stage<3)stage++;else stop();}draw();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('pipePlay').textContent='▶ Play';}}
+document.getElementById('pipePlay').onclick=function(){if(timer){stop();return;}if(stage>=3)stage=0;this.textContent='⏸ Pause';timer=setInterval(advance,80);};
+document.getElementById('pipeStep').onclick=()=>{stop();stage=Math.min(stage+1,3);draw();};
+document.getElementById('pipeReset').onclick=()=>{stop();stage=0;anim=0;draw();};
+draw();onTheme(draw);
+})();
+
+// ---------- 3. memory calculator ----------
+(function(){
+const $=id=>document.getElementById(id);
+const cv=$('memViz'),ctx=cv.getContext('2d');
+const MODELS={1:{N:1e9,h:2048,L:24},7:{N:7e9,h:4096,L:32},70:{N:70e9,h:8192,L:80}};
+function fmt(b){const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++;}return b.toFixed(b>=100?0:b>=10?1:2)+' '+u[i];}
+function calc(){
+  const m=MODELS[$('memModel').value],mode=$('memMode').value;
+  const [gpus,zstage]=$('memZero').value.split('-').map(Number);
+  const T=Math.pow(2,parseInt($('memTok').value));$('memTokLabel').textContent=T>=1024?(T/1024)+'K':T;
+  const ckpt=$('memCkpt').checked;
+  const N=m.N;
+  // trainable params
+  const rankParams=16*2*m.h*4*m.L; // r*(din+dout) for 4 proj/layer, rough
+  const trainN=mode==='full'?N:rankParams;
+  // weights bytes
+  let wBase=mode==='qlora'?N*0.6:N*2; // NF4+scales ~0.6B/p
+  let wAdapter=mode==='full'?0:rankParams*2;
+  let grads=trainN*2;
+  let opt=trainN*12; // fp32 master + m + v
+  // sharding: ZeRO1 shards opt; 2: +grads; 3: +params(base too in full; frozen base sharded by FSDP too)
+  if(zstage>=1)opt/=gpus;
+  if(zstage>=2)grads/=gpus;
+  if(zstage>=3){wBase/=gpus;wAdapter/=gpus;}
+  // activations: ~34 B/token/layer/hidden (BF16 transformer, Megatron approx) or ~2 with ckpt
+  const act=T*m.h*m.L*(ckpt?2:34)/ (zstage>=1?1:1); // activations not sharded by ZeRO (per-GPU batch)
+  return {wBase,wAdapter,grads,opt,act,trainN,total:wBase+wAdapter+grads+opt+act};
+}
+function draw(){
+  const r=calc();const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const segs=[['frozen/base weights',r.wBase,'#5b8cff'],['adapter weights',r.wAdapter,'#4cc3e5'],['gradients',r.grads,'#f2a65a'],['optimizer (fp32 master + Adam m,v)',r.opt,'#e5604c'],['activations',r.act,'#38c6a0']].filter(s=>s[1]>0);
+  const total=r.total;
+  const scaleMax=Math.max(total*1.15,20*2**30);
+  const x0=40,bw=W-80,y0=60,bh=64;
+  // reference lines
+  [[16,'RTX 5080'],[24,'24 GB'],[80,'H100 80GB']].forEach(([g,label])=>{
+    const x=x0+bw*(g*2**30)/scaleMax;if(x<x0+bw){
+      ctx.strokeStyle=bd;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(x,y0-18);ctx.lineTo(x,y0+bh+16);ctx.stroke();ctx.setLineDash([]);
+      ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';ctx.fillText(label,x,y0-24);}
+  });
+  let x=x0;
+  segs.forEach(([name,bytes,color])=>{
+    const w=bw*bytes/scaleMax;
+    ctx.fillStyle=color;ctx.fillRect(x,y0,Math.max(w,1.5),bh);
+    x+=Math.max(w,1.5)+1;
+  });
+  ctx.strokeStyle=bd;ctx.strokeRect(x0,y0,bw,bh);
+  // legend
+  let lx=x0,ly=y0+bh+40;ctx.font='12px sans-serif';ctx.textAlign='left';
+  segs.forEach(([name,bytes,color])=>{
+    ctx.fillStyle=color;ctx.fillRect(lx,ly-10,12,12);
+    ctx.fillStyle=txt;const t=name+' '+fmt(bytes);ctx.fillText(t,lx+16,ly);
+    lx+=ctx.measureText(t).width+40;if(lx>W-220){lx=x0;ly+=24;}
+  });
+  document.getElementById('memTotal').textContent=fmt(r.total);
+  document.getElementById('memTrain').textContent=r.trainN>=1e9?(r.trainN/1e9).toFixed(1)+'B':(r.trainN/1e6).toFixed(0)+'M';
+  const fit=r.total<=16*2**30?'RTX 5080 (16 GB) ✓':r.total<=24*2**30?'24 GB GPU':r.total<=80*2**30?'H100 80 GB':r.total<=8*80*2**30?'multi-GPU node':'multi-node cluster';
+  document.getElementById('memFit').textContent=fit;
+}
+['memModel','memMode','memZero','memTok','memCkpt'].forEach(id=>$(id).oninput=draw);
+draw();onTheme(draw);
+})();
+
+// ---------- 4. LoRA bypass ----------
+(function(){
+const cv=document.getElementById('loraViz'),ctx=cv.getContext('2d');
+const rS=document.getElementById('loraR'),rL=document.getElementById('loraRLabel');
+let t=0,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const r=parseInt(rS.value);rL.textContent=r;
+  const d=4096;
+  const cx=W/2,yW=60,wW=240,hW=90;
+  // frozen W
+  ctx.fillStyle='rgba(128,128,128,0.25)';ctx.strokeStyle=bd;ctx.lineWidth=2;
+  ctx.fillRect(cx-wW/2,yW,wW,hW);ctx.strokeRect(cx-wW/2,yW,wW,hW);
+  ctx.fillStyle=dim;ctx.font='bold 14px sans-serif';ctx.textAlign='center';
+  ctx.fillText('W (frozen)  4096×4096 = 16.8M params',cx,yW+40);ctx.font='11px sans-serif';ctx.fillText('❄ no grads, no optimizer states',cx,yW+62);
+  // bypass A,B below
+  const hA=Math.max(6,r/64*36);
+  const yB=yW+hW+36;
+  ctx.fillStyle=acc2;
+  ctx.fillRect(cx-wW/2,yB,wW*0.42,hA);
+  ctx.fillRect(cx+wW/2-wW*0.42,yB,wW*0.42,hA);
+  ctx.fillStyle=txt;ctx.font='12px sans-serif';
+  ctx.fillText('A  r×4096',cx-wW/2+wW*0.21,yB+hA+16);
+  ctx.fillText('B  4096×r',cx+wW/2-wW*0.21,yB+hA+16);
+  // flow arrows
+  const xIn=60,xOut=W-60,yMid=yW+hW/2;
+  ctx.strokeStyle=bd;ctx.lineWidth=2;
+  line(xIn,yMid,cx-wW/2,yMid);line(cx+wW/2,yMid,xOut,yMid);
+  line(xIn,yMid,xIn,yB+hA/2);line(xIn,yB+hA/2,cx-wW/2,yB+hA/2);
+  line(cx+wW/2,yB+hA/2,xOut,yB+hA/2);line(xOut,yB+hA/2,xOut,yMid);
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('x →',14,yMid+4);ctx.fillText('→ h = Wx + (α/r)BAx',xOut+0,28);
+  // moving dots
+  if(timer){
+    const p=(t%60)/60;
+    const dot=(x1,y1,x2,y2,c)=>{ctx.fillStyle=c;ctx.beginPath();ctx.arc(x1+(x2-x1)*p,y1+(y2-y1)*p,5,0,7);ctx.fill();};
+    dot(xIn,yMid,cx-wW/2,yMid,acc);dot(cx+wW/2,yMid,xOut,yMid,acc);
+    dot(xIn,yB+hA/2,cx-wW/2,yB+hA/2,acc2);dot(cx+wW/2,yB+hA/2,xOut,yB+hA/2,acc2);
+  }
+  // param counter
+  const trainable=r*(4096+4096);
+  ctx.fillStyle=acc2;ctx.font='bold 13px sans-serif';ctx.textAlign='center';
+  ctx.fillText('trainable here: '+(trainable/1e3).toFixed(0)+'k params ('+(100*trainable/16.8e6).toFixed(2)+'% of W)',cx,H-14);
+  function line(a,b,c2,d2){ctx.beginPath();ctx.moveTo(a,b);ctx.lineTo(c2,d2);ctx.stroke();}
+}
+document.getElementById('loraPlay').onclick=function(){
+  if(timer){clearInterval(timer);timer=null;this.textContent='▶ Play';return;}
+  this.textContent='⏸ Pause';timer=setInterval(()=>{t++;draw();},50);};
+rS.oninput=draw;draw();onTheme(draw);
+})();
+
+// ---------- 5. GRPO ----------
+(function(){
+const cv=document.getElementById('grpoViz'),ctx=cv.getContext('2d');
+let skill=0.25,group=null,steps=0;
+function sample(){
+  group=[];for(let i=0;i<8;i++){
+    const correct=Math.random()<skill;
+    const partial=correct?1:(Math.random()<0.3?0.3:0);
+    group.push(partial);
+  }
+  // policy improves toward mean of reinforcement
+  skill=Math.min(0.95,skill+0.06);steps++;draw();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc2=css('--accent2'),dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='13px sans-serif';ctx.textAlign='left';
+  ctx.fillStyle=txt;ctx.fillText('prompt: "Prove that √2 is irrational."  →  sample G = 8 answers from the policy',30,26);
+  if(!group){ctx.fillStyle=dim;ctx.fillText('Click "Sample new group" to run one GRPO step.',30,60);return;}
+  const mean=group.reduce((a,b)=>a+b,0)/8;
+  const sd=Math.sqrt(group.reduce((a,b)=>a+(b-mean)**2,0)/8)||1;
+  const x0=70,bw=80,base=210,scale=120;
+  group.forEach((g,i)=>{
+    const x=x0+i*(bw+22);
+    const adv=(g-mean)/sd;
+    const h=Math.abs(adv)*40;
+    ctx.fillStyle=adv>=0?acc2:'#e5604c';
+    if(adv>=0)ctx.fillRect(x,base-scale*g-h,bw,h);else ctx.fillRect(x,base-scale*g,bw,h);
+    // reward marker
+    ctx.fillStyle=txt;ctx.textAlign='center';ctx.font='12px monospace';
+    ctx.fillText((g===1?'✓ 1.0':g>0?'~ '+g.toFixed(1):'✗ 0.0'),x+bw/2,base+20);
+    ctx.fillStyle=dim;ctx.fillText('a'+(i+1),x+bw/2,base+38);
+    // reward bar outline
+    ctx.strokeStyle=bd;ctx.strokeRect(x,base-scale*g,bw,Math.max(scale*g,1));
+  });
+  // mean line
+  ctx.strokeStyle=dim;ctx.setLineDash([6,5]);ctx.beginPath();ctx.moveTo(40,base-scale*mean);ctx.lineTo(W-200,base-scale*mean);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('group mean = '+mean.toFixed(2)+' (the free baseline)',W-190,base-scale*mean+4);
+  ctx.fillStyle=txt;ctx.fillText('advantage_i = (r_i − mean)/std → green reinforced, red suppressed. No value model anywhere.',30,H-14);
+  document.getElementById('grpoStats').textContent='GRPO steps: '+steps+' — policy accuracy ≈ '+(skill*100).toFixed(0)+'%';
+}
+document.getElementById('grpoSample').onclick=sample;
+document.getElementById('grpoReset').onclick=()=>{skill=0.25;group=null;steps=0;draw();document.getElementById('grpoStats').textContent='';};
+draw();onTheme(draw);
+})();
+
+// ---------- 6. sample packing ----------
+(function(){
+const cv=document.getElementById('packViz'),ctx=cv.getContext('2d');
+const LENS=[11,4,7,3,9,5,2,8];const ROW=16; // row capacity units
+let packed=false;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const colors=['#5b8cff','#38c6a0','#f2a65a','#e5604c','#b07cff','#4cc3e5','#9ad24c','#e5a0c3'];
+  const u=(W-220)/ROW,rh=26,x0=30,y0=44;
+  ctx.font='bold 13px sans-serif';ctx.fillStyle=txt;ctx.textAlign='left';
+  ctx.fillText(packed?'Packed: examples tiled into rows, boundary-masked':'Padded: one example per row, padded to seq_len='+ROW,x0,24);
+  let rows=[],used=0;
+  if(!packed){rows=LENS.map(l=>[[l,null]]);}
+  else{let cur=[],fill=0;LENS.forEach((l,i)=>{if(fill+l>ROW){rows.push(cur);cur=[];fill=0;}cur.push([l,i]);fill+=l;});if(cur.length)rows.push(cur);}
+  rows.forEach((row,ri)=>{
+    const y=y0+ri*(rh+8);let x=x0;
+    row.forEach(([l,idx],j)=>{
+      const i=idx===null?ri:idx;
+      ctx.fillStyle=colors[i%colors.length];
+      ctx.fillRect(x,y,l*u-2,rh);
+      ctx.fillStyle='#fff';ctx.font='11px monospace';ctx.fillText('ex'+(i+1),x+4,y+17);
+      used+=l;x+=l*u;
+      if(packed&&j<row.length-1){ctx.fillStyle=css('--bg-inset');ctx.fillRect(x-3,y,2,rh);} // mask notch
+    });
+    const fill=row.reduce((a,[l])=>a+l,0);
+    ctx.fillStyle='rgba(128,128,128,0.18)';ctx.fillRect(x,y,(ROW-fill)*u-2,rh);
+  });
+  const util=100*LENS.reduce((a,b)=>a+b,0)/(rows.length*ROW);
+  document.getElementById('packStats').textContent='rows: '+rows.length+' — useful tokens: '+util.toFixed(0)+'%'+(packed?' (same data, '+(LENS.length/rows.length).toFixed(1)+'× fewer rows)':'');
+}
+document.getElementById('packToggle').onclick=function(){packed=!packed;this.textContent=packed?'Switch to padded':'Switch to packed';draw();};
+draw();onTheme(draw);
+})();
+</script>
+</body>
+</html>

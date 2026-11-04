@@ -1,0 +1,225 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wandb Weave in verl</title><link rel="stylesheet" href="../../../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../../../index.html">Learn</a><div class="links"><a href="../../../../../../notes.html" class="here">Notes library</a><a href="../../../../../../index.html">All chapters</a><a href="../../../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../../../notes.html">Notes library</a> › <a href="../../../../../../notes.html#ml-sys-tutorial">Awesome ML-SYS Tutorial (English notes)</a> › rlhf/verl/multi-turn/tool_examples/weave_trace_readme_en.md</div>
+<article class="note"><h1 id="wandb-weave-in-verl">Wandb Weave in verl</h1>
+<p>In Agentic RL, to help us better analyze the multi-turn conversations and tool calls within a trajectory for optimizing the training process, verl provides a Trace function, which records the input, output, and timestamps of specified functions and supports viewing them in a visualization interface. Currently, it supports <code>wandb weave</code>.</p>
+<p>Thanks so much to Chengxi Li @ CMU and Chenyang Zhao @ Amazon for their help on this docs.</p>
+<h2 id="quick-start">Quick Start</h2>
+<p>Add the following parameters in <code>config.yaml</code> or on the command line to enable Trace:</p>
+<pre><code class="language-yaml">trainer:
+  rollout_trace:
+    backend: weave       # Currently, only weave is supported
+    token2text: true     # Whether to display decoded text in the Trace
+</code></pre>
+<p>Or append to the <code>bash</code> command:</p>
+<pre><code class="language-bash">+trainer.rollout_trace.backend=weave \
++trainer.rollout_trace.token2text=True
+</code></pre>
+<p>Note: You must use the <code>+</code> sign here.</p>
+<p>The following configurations are also required as prerequisites:</p>
+<table>
+<thead>
+<tr>
+<th>Scenario</th>
+<th>Required Parameters</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Using Weave and logging to wandb</td>
+<td><code>trainer.logger=["console","wandb"]</code></td>
+<td>It's recommended to enable wandb logging simultaneously to view all information in one place</td>
+</tr>
+<tr>
+<td>Enable async rollout</td>
+<td><code>actor_rollout_ref.rollout.mode=async</code> and <code>actor_rollout_ref.rollout.multi_turn.enable=true</code></td>
+<td>Trace is currently only enabled in <code>agent_loop</code>. SGLang itself doesn't require setting <code>mode=async</code> for asynchronous operation, but this setting is necessary for Trace to take effect</td>
+</tr>
+</tbody>
+</table>
+<p>Note that directly launch the new bash script may not work. In the following steps, we provide a step by step guide to enable Trace on latest verl and sglang.</p>
+<h2 id="environment">Environment</h2>
+<ol>
+<li>Set the environment variable <code>WANDB_API_KEY</code></li>
+</ol>
+<!-- end list -->
+
+<pre><code class="language-bash">export WANDB_API_KEY=your_wandb_api_key
+</code></pre>
+<hr>
+<h2 id="dataset-requirements">Dataset Requirements</h2>
+<p>The dataset needs a new column <code>agent_name</code>, which can be added in the <code>map_fn</code>:</p>
+<p><a href="https://github.com/volcengine/verl/blob/ada82bb719e4d15ed4974f118bc86ec4d78c871d/recipe/retool/retool.py#L96">example</a></p>
+<pre><code class="language-python"># python
+data = {
+    ...,
+    &quot;agent_name&quot;: &quot;tool_agent&quot;,  # new column
+}
+</code></pre>
+<hr>
+<h2 id="how-to-use">How to Use</h2>
+<p>Please follow these steps exactly, or you will have a very painful experience.</p>
+<h3 id="create-a-new-docker-container">Create a New Docker Container</h3>
+<p>Before use, you need to configure <code>WANDB_API_KEY</code>. Refer to <a href="https://community.wandb.ai/t/where-can-i-find-the-api-token-for-my-project/7914">this process</a>.</p>
+<pre><code class="language-bash"># If your system has not configured HF_TOKEN and WANDB_API_KEY, please configure them first
+docker run -it --name h100_verl_{your_name} --gpus all \
+    --shm-size 32g \
+    -v {your_cache_path}:/root/.cache \
+    --env &quot;HF_TOKEN=$HF_TOKEN&quot; \
+    --env &quot;WANDB_API_KEY=$WANDB_API_KEY&quot; \
+    --ipc=host \
+    lmsysorg/sglang:latest \
+    /bin/bash
+</code></pre>
+<p>After entering the container, you can check the mapped environment variables:</p>
+<pre><code class="language-bash">echo $HF_TOKEN
+echo $WANDB_API_KEY
+</code></pre>
+<p>From now on, every time you exit the container, you can restart it with this command:</p>
+<pre><code class="language-bash">docker start -i h100_verl_{your_name}
+</code></pre>
+<h3 id="install-sglang-from-source">Install SGLang from Source</h3>
+<p>Configure the Python environment</p>
+<pre><code class="language-bash">mkdir -p /tmp
+chmod 1777 /tmp
+sudo apt update
+sudo apt install -y python3.10 python3.10-venv
+sudo python3 -m ensurepip --upgrade
+sudo python3 -m venv ~/.python/verl-sglang
+source ~/.python/verl-sglang/bin/activate
+sudo python3 -m pip install --upgrade pip
+sudo python3 -m pip install --upgrade uv
+</code></pre>
+<p>First, install verl, then install SGLang.</p>
+<pre><code class="language-bash">cd ~
+git clone https://github.com/volcengine/verl.git
+cd verl
+python3 -m uv pip install -e &quot;.[sglang,geo]&quot;
+python3 -m uv pip install -r ./requirements.txt
+</code></pre>
+<p>You will encounter this error:</p>
+<pre><code class="language-bash">Resolved 130 packages in 1.96s
+  × Failed to build `flash-attn==2.8.1`
+  ├─▶ The build backend returned an error
+  ╰─▶ Call to `setuptools.build_meta:__legacy__.build_wheel` failed (exit status: 1)
+</code></pre>
+<p>Fix it with the following steps:</p>
+<pre><code class="language-bash">python3 -m uv pip install wheel
+python3 -m uv pip install -r ./requirements.txt --no-build-isolation
+</code></pre>
+<p>Then install SGLang upstream:</p>
+<pre><code class="language-bash">cd ~
+git clone https://github.com/sgl-project/sglang.git
+cd sglang
+python3 -m uv pip install --upgrade pip
+python3 -m uv pip install -e &quot;python[all]&quot; --find-links https://flashinfer.ai/whl/cu124/torch2.6/flashinfer-python
+</code></pre>
+<p>Install additional dependencies for vllm and weave:</p>
+<pre><code class="language-bash">python3 -m uv pip install vllm==0.9.1
+python3 -m uv pip install weave
+</code></pre>
+<h3 id="modify-and-run">Modify and Run</h3>
+<p>We can make simple modifications to the existing scripts to enable <code>multi_turn</code> and <code>async rollout</code> in the run script, and add an <code>agent_name</code> column in the <code>def make_map_fn(split)</code> function of the data processing script.</p>
+<p>Open the <code>~/verl/examples/sglang_multiturn/run_qwen2.5-3b_gsm8k_multiturn.sh</code> file inside your container, remove the <code>$@</code> from the end of the last line, and change the following parameters:</p>
+<pre><code class="language-bash">    # Note: Remove the $@ from the end of the original total_epochs line
+    # do not include these comment lines in the script, it will cause error
+    trainer.total_epochs=15 \
+    +trainer.rollout_trace.backend=weave \
+    +trainer.rollout_trace.token2text=True \
+    actor_rollout_ref.rollout.mode=async \
+    actor_rollout_ref.rollout.multi_turn.enable=true
+</code></pre>
+<p>Append <code>"agent_name": "tool_agent"</code> in <code>~/verl/examples/data_preprocess/gsm8k_multiturn_w_tool.py</code></p>
+<pre><code class="language-python">def make_map_fn(split):
+        def process_fn(example, idx):
+            question_raw = example.pop(&quot;question&quot;)
+
+            question = question_raw + &quot; &quot; + instruction_following
+
+            answer_raw = example.pop(&quot;answer&quot;)
+            solution = extract_solution(answer_raw)
+            data = {
+                &quot;data_source&quot;: data_source,
+                # new column for weave trace
+                &quot;agent_name&quot;: &quot;tool_agent&quot;,
+                &quot;prompt&quot;: [
+                    {
+                        #...
+                    }
+                ]
+            }
+            return data
+
+        return process_fn
+</code></pre>
+<p>You can now test:</p>
+<pre><code class="language-bash">cd ~/verl
+python3 -m uv pip install .
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+# Pull and preprocess the gsm8k dataset
+python examples/data_preprocess/gsm8k_multiturn_w_tool.py
+</code></pre>
+<p>Start 8-card training.</p>
+<pre><code class="language-bash">bash examples/sglang_multiturn/run_qwen2.5-3b_gsm8k_multiturn.sh
+</code></pre>
+<hr>
+<h2 id="debugging">Debugging</h2>
+<p>If you encounter this error after starting the bash script:</p>
+<pre><code class="language-bash">raise ValueError(f&quot;Feature type '{_type}' not found. Available feature types: {list(_FEATURE_TYPES.keys())}&quot;)
+ValueError: Feature type 'List' not found. Available feature types: ['Value', 'ClassLabel', 'Translation', 'TranslationVariableLanguages', 'LargeList', 'Sequence', 'Array2D', 'Array3D', 'Array4D', 'Array5D', 'Audio', 'Image', 'Video', 'Pdf']
+</code></pre>
+<p>This is not the actual error. This error confused me for a very long time. I carefully checked the log and found the problem. You can look a few lines up in the error log. At the very beginning of the error stack, the Python environment is <code>/root/.python/verl-sglang/lib/python3.10</code>, but at the bottom of the stack, it becomes <code>/usr/local/lib/python3.10</code>. It is clear that the Python environments are mismatched:</p>
+<ol>
+<li>The main process uses the virtual environment: <code>/root/.python/verl-sglang/lib/python3.10/site-packages/</code></li>
+<li>The Ray worker process uses the system Python: <code>/usr/local/lib/python3.10/dist-packages/</code></li>
+</ol>
+<p>The final solution to this problem is to modify the <code>verl/trainer/constants_ppo.py</code> file to be:</p>
+<pre><code class="language-python">import os
+import sys
+
+# Get the current Python interpreter path and virtual environment path
+python_executable = sys.executable
+virtual_env = os.environ.get(&quot;VIRTUAL_ENV&quot;, &quot;&quot;)
+python_path = os.environ.get(&quot;PYTHONPATH&quot;, &quot;&quot;)
+
+# If in a virtual environment, ensure the site-packages of the virtual environment are included
+if virtual_env:
+    site_packages = os.path.join(virtual_env, &quot;lib&quot;, &quot;python3.10&quot;, &quot;site-packages&quot;)
+    if site_packages not in python_path:
+        python_path = f&quot;{site_packages}:{python_path}&quot; if python_path else site_packages
+
+PPO_RAY_RUNTIME_ENV = {
+    &quot;env_vars&quot;: {
+        &quot;TOKENIZERS_PARALLELISM&quot;: &quot;true&quot;,
+        &quot;NCCL_DEBUG&quot;: &quot;WARN&quot;,
+        &quot;VLLM_LOGGING_LEVEL&quot;: &quot;WARN&quot;,
+        &quot;VLLM_ALLOW_RUNTIME_LORA_UPDATING&quot;: &quot;true&quot;,
+        # Add Python environment configuration
+        &quot;PYTHONPATH&quot;: python_path,
+        &quot;VIRTUAL_ENV&quot;: virtual_env,
+    },
+    # Specify the Python interpreter
+    &quot;python&quot;: python_executable,
+}
+</code></pre>
+<hr>
+<h2 id="viewing-the-trace">Viewing the Trace</h2>
+<p>Log in to the account associated with your <code>$WANDB_API_KEY</code>. Find the <code>gsm8k_async_rl</code> project, select <strong>Trace</strong> from the sidebar, and you will see the multi-turn conversations and tool call information.</p>
+<p><img alt="Weave Trace" src="../../../../../../vendor/notes/ml-sys-tutorial/rlhf/verl/multi-turn/imgs/Weave_Trace.jpg"></p></article>
+<div class="attrib">Source: <a href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/verl/multi-turn/tool_examples/weave_trace_readme_en.md">rlhf/verl/multi-turn/tool_examples/weave_trace_readme_en.md</a> from <strong>Awesome ML-SYS Tutorial (English notes)</strong> by Chenyang Zhao and contributors, reproduced under Apache-2.0 (see <code>learn/vendor/notes/ml-sys-tutorial/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

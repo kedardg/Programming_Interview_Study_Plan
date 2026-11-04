@@ -1,0 +1,200 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design an event recommendation system</title><link rel="stylesheet" href="../../../../learn.css"><style>
+.note img{max-width:100%;height:auto;border-radius:8px;background:var(--bg-inset)}
+.note pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.note pre code{background:none;padding:0}
+.note table{border-collapse:collapse;font-size:.9rem;display:block;overflow-x:auto}
+.note th,.note td{border:1px solid var(--border);padding:6px 10px}
+.note th{background:var(--bg-inset)}
+.note blockquote{border-left:3px solid var(--accent);margin:10px 0;padding:4px 14px;color:var(--text-dim)}
+.note h1{font-size:1.6rem}.note h2{border-top:none;margin-top:1.6em}
+.crumb{font-size:.85rem;color:var(--text-dim);margin:6px 0 14px}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}
+</style></head><body>
+<nav class="topnav"><a class="home" href="../../../../index.html">Learn</a><div class="links"><a href="../../../../notes.html" class="here">Notes library</a><a href="../../../../index.html">All chapters</a><a href="../../../../flashcards.html">Flashcards</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main><div class="crumb"><a href="../../../../notes.html">Notes library</a> › <a href="../../../../notes.html#ml-interviews">Machine Learning Interviews (incl. ML &amp; GenAI System Design)</a> › src/MLSD/mlsd-event-recom.md</div>
+<article class="note"><h1 id="design-an-event-recommendation-system">Design an event recommendation system</h1>
+<h2 id="1-problem-formulation">1. Problem Formulation</h2>
+<ul>
+<li>Clarifying questions </li>
+<li>Use case? <ul>
+<li>event recommendation system similar to eventbrite's. </li>
+</ul>
+</li>
+<li>What is the main Business objective? <ul>
+<li>Increase ticket sales  </li>
+</ul>
+</li>
+<li>Does it need to be personalized for the user? Personalized for the user</li>
+<li>User locations? Worldwide (multiple languages) </li>
+<li>User’s age group: </li>
+<li>How many users? 100 million DAU</li>
+<li>How many events? 1M events / month </li>
+<li>Latency requirements  - 200msec?</li>
+<li>Data access <ul>
+<li>Do we log and have access to any data? Can we build a dataset using user interactions ?</li>
+<li>Do we have textual description of items? </li>
+<li>Can we use location data (e.g. 3rd party API)? (events are location based)</li>
+</ul>
+</li>
+<li>Can users become friends on the platform? Do we wanna use friendships?</li>
+<li>Can users invite friends? </li>
+<li>Can users RSVP or just register?</li>
+<li>
+<p>Free or Paid? Both </p>
+</li>
+<li>
+<p>ML formulation </p>
+</li>
+<li>ML Objective: Recommend most relevant (define) events to the users to maximize the number of registered events</li>
+<li>ML category: Recommendation system (ranking approach)<ul>
+<li>rule based system </li>
+<li>embedding based (CF and content based)</li>
+<li>Ranking problem (LTR)</li>
+<li>pointwise, pairwise, listwise </li>
+<li>we choose pointwise LTR ranking formulation </li>
+</ul>
+</li>
+<li>I/O: In: user_id, Out: ranked list of events + relevance score<ul>
+<li>Pointwise LTR classifier I/O: I: <user_id, event_id>, O: P(event register) (Binary classification)</li>
+</ul>
+</li>
+</ul>
+<h2 id="2-metrics-offline-and-online">2. Metrics (Offline and Online)</h2>
+<ul>
+<li>
+<p>Offline: </p>
+<ul>
+<li>precision @k, recall @ k (not consider ranking quality)</li>
+<li>MRR, mAP, nDCG (good, focus on first element, binary relevance, non-binary relevance) -&gt; here event register binary relevance so use mAP  </li>
+</ul>
+</li>
+<li>
+<p>Online: </p>
+<ul>
+<li>CTR, conversion rate, bookmark/like rate, revenue lift  </li>
+</ul>
+</li>
+</ul>
+<h2 id="3-architectural-components-mvp-logic">3. Architectural Components (MVP Logic)</h2>
+<ul>
+<li>We two stage (funnel) architecture for </li>
+<li>candidate generation <ul>
+<li>rule based event filtering (e.g. location, etc)</li>
+</ul>
+</li>
+<li>ranking formulation (pointwise LTR) binary classifier  </li>
+</ul>
+<h2 id="4-data-preparation">4. Data preparation</h2>
+<ul>
+<li>
+<p>Data Sources: 
+  1. Users (user profile, historical interactions)
+  2. Events 
+  3. User friendships 
+  4. User-event interactions
+  5. Context</p>
+</li>
+<li>
+<p>Labeling: </p>
+</li>
+</ul>
+<h2 id="5-feature-engineering">5. Feature engineering</h2>
+<ul>
+<li>Note: Event based recommendation is more challenging than movie/video: </li>
+<li>events are short lived -&gt; not many historical interactions -&gt; cold start (constant new item problem)</li>
+<li>
+<p>So we put more effort on feature engineering (many meaningful features)</p>
+</li>
+<li>
+<p>Features: </p>
+</li>
+<li>
+<p>User features </p>
+<ul>
+<li>age (one hot), gender (bucketize), event history  </li>
+</ul>
+</li>
+<li>
+<p>Event features </p>
+<ul>
+<li>price, No of registered, </li>
+<li>time (event time, length, remained time)</li>
+<li>location  (city, country, accessibility)</li>
+<li>description</li>
+<li>host (&amp; popularity)</li>
+</ul>
+</li>
+<li>
+<p>User Event features </p>
+<ul>
+<li>event price similarity </li>
+<li>event description similarity </li>
+<li>no. registered similarity </li>
+<li>same city, state, country</li>
+<li>distance </li>
+<li>time similarity (event length, day, time of day)</li>
+</ul>
+</li>
+<li>
+<p>Social features </p>
+<ul>
+<li>No./ ratio of friends going </li>
+<li>invited by friends (No)</li>
+<li>hosted by friend (similarity)</li>
+</ul>
+</li>
+<li>
+<p>context </p>
+<ul>
+<li>location, time  </li>
+</ul>
+</li>
+<li>
+<p>Feature preprocessing </p>
+</li>
+<li>one hot (gender)</li>
+<li>
+<p>bucketize + one hot (age, distance, time)</p>
+</li>
+<li>
+<p>feature processing </p>
+</li>
+<li>Batch (for static) vs Online (streaming, for dynamic) processing </li>
+<li>efficient feature computation (e.g. for location, distance)</li>
+<li>improve: embedding learning - for users and events </li>
+</ul>
+<h2 id="6-model-development-and-offline-evaluation">6. Model Development and Offline Evaluation</h2>
+<ul>
+<li>Model selection </li>
+<li>Binary classification problem: <ul>
+<li>LR (nonlinear interactions)</li>
+<li>GBDT (good for structured, not for continual learning)</li>
+<li>NN (continual learning, expressive, nonlinear rels)</li>
+</ul>
+</li>
+<li>we can start with GBDT as a baseline and experiment improvements by NN (both good options)</li>
+<li>Dataset </li>
+<li>for each user and event pair, compute features, and label 1 if registered, 0 if not </li>
+<li>class imbalance <ul>
+<li>resampling </li>
+<li>use focal loss or class-balanced loss </li>
+</ul>
+</li>
+</ul>
+<h2 id="7-prediction-service">7. Prediction Service</h2>
+<ul>
+<li>Candidate generation </li>
+<li>event filtering (millions to hundreds)<ul>
+<li>rule based (given a user, e.g. location, type, etc filters)</li>
+</ul>
+</li>
+<li>Ranking </li>
+<li>compute scores for <usr, event> pairs, and sort </li>
+</ul>
+<h2 id="8-online-testing-and-deployment">8. Online Testing and Deployment</h2>
+<p>Standard approaches as before.  </p>
+<h2 id="9-scaling">9. Scaling</h2></article>
+<div class="attrib">Source: <a href="https://github.com/alirezadir/Machine-Learning-Interviews/blob/main/src/MLSD/mlsd-event-recom.md">src/MLSD/mlsd-event-recom.md</a> from <strong>Machine Learning Interviews (incl. ML &amp; GenAI System Design)</strong> by Alireza Dirafzoon, reproduced under MIT (see <code>learn/vendor/notes/ml-interviews/LICENSE</code>). Rendered by scripts/build_notes.py; math and some formatting may differ from the original.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>
