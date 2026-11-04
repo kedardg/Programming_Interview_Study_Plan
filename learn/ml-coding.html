@@ -1,0 +1,773 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ML Coding from Scratch</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+pre.formula { white-space: pre; line-height: 1.45; }
+.bug-table td:first-child { font-weight: 600; white-space: nowrap; }
+.shape { font-family: var(--mono); font-size: 0.85em; color: var(--accent2); }
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html" class="here">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>ML Coding from Scratch: CS336 Assignment 1 as Muscle Memory</h1>
+<p class="dim">The most common technical interview for research-engineer and MTS roles is not LeetCode and not a whiteboard discussion: it is "open a blank file and implement this piece of a transformer, then debug it with me." This chapter turns Stanford CS336's Assignment 1 — the exact set of functions Alisa Liu called <em>crucial</em> to drill until automatic — into an interview-speed build, with the shape contracts, the classic bugs, and the tests that catch them.</p>
+
+<h2 id="why">1. Why this interview dominates, and how it is graded</h2>
+<p>Two first-hand accounts in the <a href="https://github.com/kedardg/job-prep">job-prep</a> collection agree on the same thing from different angles. Alisa Liu, after 57 interviews across 11 companies, reports that ML coding was <em>by far</em> the most common interview type, that CS336's assignment 1 was "crucial," and that she practiced with AI assistance completely off to mimic interview conditions — because you underestimate how much you lean on it otherwise. Nathan Lambert's account of his own job hunt describes the same pattern from the other side of the table: the interviewer wants to watch you implement something you have implemented before, so that the signal is fluency and debugging, not whether you happen to know the formula.</p>
+<p>What is actually being graded, in rough order of weight:</p>
+<ol>
+<li><strong>Correctness with shapes.</strong> You should be able to say the shape of every tensor before you create it: <span class="shape">(B, T, d_model)</span> in, <span class="shape">(B, h, T, d_k)</span> after the head split, <span class="shape">(B, h, T, T)</span> for scores. Interviewers listen for this narration.</li>
+<li><strong>Debugging fluency.</strong> Something will break (often they break it on purpose). Can you bisect with a tiny input, print shapes, and name the bug in under two minutes?</li>
+<li><strong>Explaining as you go.</strong> Why pre-norm, why the <code>1/√d_k</code>, why upcast RMSNorm to float32, why AdamW decouples weight decay. One sentence each, while typing.</li>
+<li><strong>Judgment under time.</strong> Knowing which corners are safe to cut in 45 minutes (no KV cache, no dropout) and which are not (the causal mask, numerical stability).</li>
+</ol>
+<div class="card">
+<h3>The practice protocol</h3>
+<ul>
+<li>Timer at 45 minutes. Blank file. No autocomplete, no chat assistant, no copying from a previous attempt.</li>
+<li>Implement one target (say, multi-head attention with RoPE) against the assignment's tests: <code>uv run pytest tests/test_model.py -k rope</code>.</li>
+<li>When a test fails, resist reading the reference. Print shapes, build a 2-token example by hand, find it.</li>
+<li>Repeat the same target on three separate days before moving on. "Muscle memory" means the third attempt takes a third of the time of the first.</li>
+<li>Finish every session by explaining one component aloud in 60 seconds, as if to an interviewer.</li>
+</ul>
+</div>
+
+<h2 id="build">2. The build, in the assignment's order</h2>
+<p>CS336 A1 wires your code to its tests through <code>tests/adapters.py</code>: each <code>run_*</code> function receives the reference weights and inputs and must return exactly what the reference does, so every component below has a test that tells you whether you are right. The order here is the order of the adapters, which is also a sensible order to write them in an interview: leaves first, then the block, then the model, then training.</p>
+
+<h3 id="linear">2.1 Linear — <code>test_linear</code></h3>
+<p>No bias (modern LLMs drop them), weight stored as <span class="shape">(d_out, d_in)</span> so the forward is <code>x @ W.T</code>. Initialize with a truncated normal of standard deviation <code>sqrt(2/(d_in+d_out))</code>, truncated at ±3σ; the test loads reference weights, but an interviewer will ask how you initialize.</p>
+<pre class="formula">import math, torch, torch.nn as nn
+from einops import einsum  # optional; the plain @ is fine in an interview
+
+class Linear(nn.Module):
+    def __init__(self, d_in, d_out, device=None, dtype=None):
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(d_out, d_in, device=device, dtype=dtype))  # (d_out, d_in)
+        std = math.sqrt(2.0 / (d_in + d_out))
+        nn.init.trunc_normal_(self.weight, mean=0.0, std=std, a=-3*std, b=3*std)
+
+    def forward(self, x):                 # x: (..., d_in)
+        return x @ self.weight.T          # (..., d_out)</pre>
+<p><strong>Classic bug:</strong> storing the weight as <span class="shape">(d_in, d_out)</span> and forgetting the transpose when the test hands you a <span class="shape">(d_out, d_in)</span> tensor — the matmul still runs when <code>d_in == d_out</code> and silently produces garbage. Always write the shape in the comment.</p>
+
+<h3 id="embedding">2.2 Embedding — <code>test_embedding</code></h3>
+<pre class="formula">class Embedding(nn.Module):
+    def __init__(self, vocab_size, d_model, device=None, dtype=None):
+        super().__init__()
+        self.weight = nn.Parameter(torch.empty(vocab_size, d_model, device=device, dtype=dtype))
+        nn.init.trunc_normal_(self.weight, std=1.0, a=-3.0, b=3.0)
+
+    def forward(self, token_ids):         # token_ids: (...) int64
+        return self.weight[token_ids]     # (..., d_model) — advanced indexing is the whole layer</pre>
+
+<h3 id="rmsnorm">2.3 RMSNorm — <code>test_rmsnorm</code></h3>
+<p>Normalize by the root-mean-square over the last dimension, then scale by a learned gain. Upcast to float32 before squaring: in bf16 the sum of squares of a 4096-wide vector loses precision badly, and the reference does the upcast too. No mean subtraction, no bias — that is the entire difference from LayerNorm.</p>
+<pre class="formula">class RMSNorm(nn.Module):
+    def __init__(self, d_model, eps=1e-5, device=None, dtype=None):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(d_model, device=device, dtype=dtype))
+
+    def forward(self, x):                 # x: (..., d_model)
+        in_dtype = x.dtype
+        x = x.to(torch.float32)
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)   # (..., 1)
+        return (x / rms * self.weight).to(in_dtype)</pre>
+
+<h3 id="swiglu">2.4 SiLU and the SwiGLU FFN — <code>test_silu_matches_pytorch</code>, <code>test_swiglu</code></h3>
+<p>SiLU is <code>x·σ(x)</code>. SwiGLU gates one up-projection with the SiLU of another, then projects down: <code>W2 (SiLU(W1 x) ⊙ W3 x)</code>. With three matrices instead of two, <code>d_ff</code> is set to about <code>8/3·d_model</code>, rounded to a multiple of 64 for tensor-core efficiency, so parameter count matches a classic 4× FFN.</p>
+<pre class="formula">def silu(x):
+    return x * torch.sigmoid(x)
+
+class SwiGLU(nn.Module):
+    def __init__(self, d_model, d_ff=None, device=None, dtype=None):
+        super().__init__()
+        if d_ff is None:
+            d_ff = 64 * round(8 * d_model / 3 / 64)          # ≈ 8/3·d_model, multiple of 64
+        self.w1 = Linear(d_model, d_ff, device, dtype)        # (d_ff, d_model)
+        self.w3 = Linear(d_model, d_ff, device, dtype)        # (d_ff, d_model)
+        self.w2 = Linear(d_ff, d_model, device, dtype)        # (d_model, d_ff)
+
+    def forward(self, x):                                     # (..., d_model)
+        return self.w2(silu(self.w1(x)) * self.w3(x))         # (..., d_model)</pre>
+<p><strong>Classic bug:</strong> swapping which projection gets the SiLU. The test's reference weights make <code>w1</code> the gated branch; if you SiLU <code>w3</code> instead, every number is wrong but the shapes are right.</p>
+
+<h3 id="rope">2.5 RoPE — <code>test_rope</code></h3>
+<p>Rotary position embedding rotates each consecutive pair of dimensions <code>(2i, 2i+1)</code> of a query or key by an angle <code>pos · θ^(−2i/d_k)</code>. Precompute the <code>cos</code> and <code>sin</code> tables once for <code>max_seq_len</code> positions and index them by <code>token_positions</code>; apply to Q and K only, per head, after the head split, before the dot product. The dot product of two rotated vectors then depends only on their relative offset — see the <a href="attention.html">Attention chapter</a> for why.</p>
+<pre class="formula">class RotaryPositionalEmbedding(nn.Module):
+    def __init__(self, theta, d_k, max_seq_len, device=None):
+        super().__init__()
+        inv_freq = theta ** (-torch.arange(0, d_k, 2, device=device).float() / d_k)   # (d_k/2,)
+        pos = torch.arange(max_seq_len, device=device).float()                        # (L,)
+        angles = torch.outer(pos, inv_freq)                                           # (L, d_k/2)
+        self.register_buffer("cos", angles.cos(), persistent=False)
+        self.register_buffer("sin", angles.sin(), persistent=False)
+
+    def forward(self, x, token_positions):      # x: (..., T, d_k); positions: (..., T)
+        cos = self.cos[token_positions]         # (..., T, d_k/2)
+        sin = self.sin[token_positions]
+        x1, x2 = x[..., 0::2], x[..., 1::2]     # even / odd dims, each (..., T, d_k/2)
+        out = torch.empty_like(x)
+        out[..., 0::2] = x1 * cos - x2 * sin
+        out[..., 1::2] = x1 * sin + x2 * cos
+        return out</pre>
+<p><strong>Classic bugs:</strong> pairing the first half with the second half (the "rotate_half" convention of some codebases) when the reference pairs adjacent dims — both are valid RoPEs, but only one matches the snapshot; and applying RoPE to V, which has no positional meaning and ruins the model. When <code>token_positions</code> is <code>None</code>, use <code>arange(T)</code>.</p>
+
+<h3 id="softmax">2.6 Softmax — <code>test_softmax_matches_pytorch</code></h3>
+<pre class="formula">def softmax(x, dim):
+    x = x - x.amax(dim=dim, keepdim=True)        # subtract the max: exp cannot overflow now
+    e = torch.exp(x)
+    return e / e.sum(dim=dim, keepdim=True)</pre>
+<p>The max-subtraction is the one trick that must be automatic: <code>exp(1000)</code> is inf in every float type, and softmax is shift-invariant so the answer is unchanged. The <a href="kernels.html">kernels chapter</a> turns this into the online softmax behind FlashAttention.</p>
+
+<h3 id="sdpa">2.7 Scaled dot-product attention — <code>test_scaled_dot_product_attention</code>, <code>test_4d_scaled_dot_product_attention</code></h3>
+<p>The mask is <em>boolean</em>, <code>True</code> where attention is allowed. Fill the disallowed positions with <code>-inf</code> <em>before</em> softmax so they get exactly zero weight. Scale by <code>1/√d_k</code> so the logits do not grow with dimension and saturate the softmax.</p>
+<pre class="formula">def scaled_dot_product_attention(Q, K, V, mask=None):
+    # Q: (..., Tq, d_k)  K: (..., Tk, d_k)  V: (..., Tk, d_v)  mask: (..., Tq, Tk) bool, True = keep
+    d_k = Q.shape[-1]
+    scores = Q @ K.transpose(-2, -1) / math.sqrt(d_k)       # (..., Tq, Tk)
+    if mask is not None:
+        scores = scores.masked_fill(~mask, float("-inf"))
+    weights = softmax(scores, dim=-1)                       # rows sum to 1
+    return weights @ V                                      # (..., Tq, d_v)</pre>
+<p>The 4-D test passes <span class="shape">(B, h, T, d)</span> tensors: writing everything in terms of the last two dims makes batch and head dims fall through for free.</p>
+
+<h3 id="mha">2.8 Causal multi-head self-attention — <code>test_multihead_self_attention</code>, <code>…_with_rope</code></h3>
+<p>Project to Q, K, V with one <span class="shape">(d_model, d_model)</span> matrix each (the reference stores all heads concatenated along rows, head 0 first), split into heads, apply RoPE to Q and K per head, build the causal mask with <code>tril</code>, attend, merge heads, project out.</p>
+<pre class="formula">class CausalMultiHeadSelfAttention(nn.Module):
+    def __init__(self, d_model, num_heads, max_seq_len=None, theta=None, device=None, dtype=None):
+        super().__init__()
+        assert d_model % num_heads == 0
+        self.h, self.d_k = num_heads, d_model // num_heads
+        self.q_proj = Linear(d_model, d_model, device, dtype)   # weight (h*d_k, d_model), head-major rows
+        self.k_proj = Linear(d_model, d_model, device, dtype)
+        self.v_proj = Linear(d_model, d_model, device, dtype)
+        self.output_proj = Linear(d_model, d_model, device, dtype)
+        self.rope = RotaryPositionalEmbedding(theta, self.d_k, max_seq_len, device) if theta else None
+
+    def forward(self, x, token_positions=None):             # x: (B, T, d_model)
+        B, T, _ = x.shape
+        def split(t):                                       # (B, T, h*d_k) -> (B, h, T, d_k)
+            return t.view(B, T, self.h, self.d_k).transpose(1, 2)
+        q, k, v = split(self.q_proj(x)), split(self.k_proj(x)), split(self.v_proj(x))
+        if self.rope is not None:
+            if token_positions is None:
+                token_positions = torch.arange(T, device=x.device)
+            q = self.rope(q, token_positions)               # positions broadcast over (B, h)
+            k = self.rope(k, token_positions)
+        mask = torch.tril(torch.ones(T, T, dtype=torch.bool, device=x.device))   # (T, T) True below diagonal
+        out = scaled_dot_product_attention(q, k, v, mask)   # (B, h, T, d_k)
+        out = out.transpose(1, 2).contiguous().view(B, T, self.h * self.d_k)     # merge heads
+        return self.output_proj(out)                        # (B, T, d_model)</pre>
+<p><strong>Classic bugs:</strong> <code>view</code> after <code>transpose</code> without <code>contiguous()</code> (RuntimeError, or worse, a reshape that scrambles heads); splitting heads as <code>view(B, h, T, d_k)</code> directly — which interleaves tokens and heads — instead of <code>view(B, T, h, d_k).transpose(1, 2)</code>; and applying RoPE before the head split, which rotates pairs that straddle head boundaries.</p>
+
+<div class="card">
+<h3>Interactive: attention shape tracer</h3>
+<div class="controls">
+  <label class="ctl">B <input type="range" id="shB" min="1" max="8" value="2"> <span id="shBv">2</span></label>
+  <label class="ctl">T <input type="range" id="shT" min="2" max="12" value="6"> <span id="shTv">6</span></label>
+  <label class="ctl">d_model <select id="shD"><option>64</option><option selected>128</option><option>256</option><option>512</option></select></label>
+  <label class="ctl">heads <select id="shH"><option>2</option><option selected>4</option><option>8</option></select></label>
+  <button class="btn secondary" id="shStep">Step</button>
+  <button class="btn secondary" id="shReset">Reset</button>
+</div>
+<canvas id="shapeViz" class="viz" width="900" height="360"></canvas>
+<p class="caption">Each step is one line of the forward pass; the shape you must be able to say aloud appears in green, and the causal mask is drawn as the <span class="shape">T×T</span> grid it really is (dark = −∞). Change heads and watch <code>d_k = d_model / h</code> shrink while the score matrix stays <span class="shape">T×T</span> per head — the attention cost depends on sequence length, not on width.</p>
+</div>
+
+<h3 id="block">2.9 The pre-norm transformer block — <code>test_transformer_block</code></h3>
+<pre class="formula">class TransformerBlock(nn.Module):
+    def __init__(self, d_model, num_heads, d_ff, max_seq_len, theta, device=None, dtype=None):
+        super().__init__()
+        self.ln1 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.attn = CausalMultiHeadSelfAttention(d_model, num_heads, max_seq_len, theta, device, dtype)
+        self.ln2 = RMSNorm(d_model, device=device, dtype=dtype)
+        self.ffn = SwiGLU(d_model, d_ff, device, dtype)
+
+    def forward(self, x, token_positions=None):             # (B, T, d_model)
+        x = x + self.attn(self.ln1(x), token_positions)     # pre-norm: normalize the input to the sublayer,
+        x = x + self.ffn(self.ln2(x))                       # add the sublayer output to the untouched stream
+        return x</pre>
+<p>State-dict keys matter for the test: <code>attn.q_proj.weight</code>, <code>attn.output_proj.weight</code>, <code>ln1.weight</code>, <code>ffn.w1.weight</code>… Name your submodules to match and <code>load_state_dict</code> does the rest.</p>
+
+<h3 id="lm">2.10 The transformer LM — <code>test_transformer_lm</code>, <code>test_transformer_lm_truncated_input</code></h3>
+<pre class="formula">class TransformerLM(nn.Module):
+    def __init__(self, vocab_size, context_length, d_model, num_layers, num_heads, d_ff, rope_theta,
+                 device=None, dtype=None):
+        super().__init__()
+        self.context_length = context_length
+        self.token_embeddings = Embedding(vocab_size, d_model, device, dtype)
+        self.layers = nn.ModuleList([
+            TransformerBlock(d_model, num_heads, d_ff, context_length, rope_theta, device, dtype)
+            for _ in range(num_layers)])
+        self.ln_final = RMSNorm(d_model, device=device, dtype=dtype)
+        self.lm_head = Linear(d_model, vocab_size, device, dtype)      # untied: separate (vocab, d_model)
+
+    def forward(self, in_indices):                                       # (B, T) int
+        B, T = in_indices.shape
+        assert T &lt;= self.context_length
+        x = self.token_embeddings(in_indices)                            # (B, T, d_model)
+        pos = torch.arange(T, device=in_indices.device)
+        for layer in self.layers:
+            x = layer(x, pos)
+        return self.lm_head(self.ln_final(x))                            # (B, T, vocab) logits, no softmax</pre>
+<p>The truncated-input test checks that a shorter sequence gives the same logits for the shared prefix — which is exactly what causal masking plus position-indexed RoPE guarantees, and exactly what breaks if you ever let position <code>t</code> see position <code>t+1</code>. Return logits, not probabilities: the loss takes logits.</p>
+<p><em>Tied vs untied embeddings:</em> GPT-2 tied <code>lm_head</code> to the input embedding (saves <code>vocab×d_model</code> parameters); the CS336 reference and Llama keep them separate. Say which you are doing.</p>
+
+<h3 id="ce">2.11 Cross-entropy — <code>test_cross_entropy</code></h3>
+<pre class="formula">def cross_entropy(logits, targets):
+    # logits: (B, V)  targets: (B,) int64 — returns the mean negative log-likelihood
+    logits = logits - logits.amax(dim=-1, keepdim=True)          # stabilize: shift-invariant
+    log_probs = logits - torch.log(torch.exp(logits).sum(dim=-1, keepdim=True))   # log-softmax
+    nll = -log_probs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)      # (B,)
+    return nll.mean()</pre>
+<p>Never compute <code>log(softmax(x))</code> as two steps — the probabilities underflow to zero and the log is −inf. Log-sum-exp in one expression is the interview answer. For a <span class="shape">(B, T, V)</span> logit tensor, flatten to <span class="shape">(B·T, V)</span> first.</p>
+
+<h3 id="adamw">2.12 AdamW — <code>test_adamw</code></h3>
+<p>Adam keeps per-parameter first (<code>m</code>) and second (<code>v</code>) moment estimates; the bias correction divides by <code>1−β^t</code> so early steps are not shrunk by the zero initialization. AdamW's one change: weight decay is applied directly to the weights, <em>not</em> added to the gradient, so it is not rescaled by the adaptive denominator.</p>
+<pre class="formula">class AdamW(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.01):
+        super().__init__(params, dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay))
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None if closure is None else closure()
+        for group in self.param_groups:
+            lr, (b1, b2), eps, wd = group["lr"], group["betas"], group["eps"], group["weight_decay"]
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if not state:                                   # lazy init
+                    state["t"] = 0
+                    state["m"] = torch.zeros_like(p)
+                    state["v"] = torch.zeros_like(p)
+                state["t"] += 1
+                t, m, v, g = state["t"], state["m"], state["v"], p.grad
+                m.mul_(b1).add_(g, alpha=1 - b1)                # m = β1 m + (1-β1) g
+                v.mul_(b2).addcmul_(g, g, value=1 - b2)         # v = β2 v + (1-β2) g²
+                lr_t = lr * math.sqrt(1 - b2 ** t) / (1 - b1 ** t)   # bias correction folded into lr
+                p.addcdiv_(m, v.sqrt().add_(eps), value=-lr_t)  # p -= lr_t · m / (√v + ε)
+                p.mul_(1 - lr * wd)                             # decoupled weight decay (uses lr, not lr_t)
+        return loss</pre>
+<p><strong>Classic bugs:</strong> using <code>lr_t</code> for the decay term (the reference uses plain <code>lr</code>), adding <code>eps</code> before the square root, and applying weight decay to RMSNorm gains or biases in a real training run (fine for the test, bad for the model — use parameter groups).</p>
+
+<div class="card">
+<h3>Interactive: AdamW vs SGD on a bumpy 1-D loss</h3>
+<div class="controls">
+  <label class="ctl">lr <input type="range" id="adLr" min="1" max="60" value="20"> <span id="adLrv"></span></label>
+  <label class="ctl">β1 <input type="range" id="adB1" min="0" max="99" value="90"> <span id="adB1v"></span></label>
+  <label class="ctl">β2 <input type="range" id="adB2" min="80" max="999" value="999"> <span id="adB2v"></span></label>
+  <label class="ctl">weight decay <input type="range" id="adWd" min="0" max="50" value="0"> <span id="adWdv"></span></label>
+  <button class="btn" id="adPlay">▶ Play</button>
+  <button class="btn secondary" id="adReset">Reset</button>
+</div>
+<canvas id="adamViz" class="viz" width="900" height="300"></canvas>
+<p class="caption">Both optimizers start at the same point on <code>L(w) = (w−3)² + 0.6·sin(4w)</code>. SGD (grey) steps by <code>lr·g</code>, so its step size collapses in flat regions and jumps in steep ones; AdamW (blue) divides by <code>√v̂</code>, so its early steps are roughly <code>lr</code> in size regardless of gradient scale — watch the <code>m̂</code>, <code>v̂</code> readouts. Push β1 up and it coasts through the ripples; add weight decay and it settles short of the minimum, pulled toward zero.</p>
+</div>
+
+<h3 id="lr">2.13 Cosine schedule with warmup — <code>test_get_lr_cosine_schedule</code></h3>
+<pre class="formula">def get_lr_cosine_schedule(it, max_lr, min_lr, warmup_iters, cosine_cycle_iters):
+    if it &lt; warmup_iters:                                   # linear warmup from 0
+        return max_lr * it / warmup_iters
+    if it &gt; cosine_cycle_iters:                             # after the cycle: floor
+        return min_lr
+    progress = (it - warmup_iters) / (cosine_cycle_iters - warmup_iters)
+    return min_lr + 0.5 * (1 + math.cos(math.pi * progress)) * (max_lr - min_lr)</pre>
+<p>The test uses <code>warmup_iters=7</code>, <code>cosine_cycle_iters=21</code>, <code>min_lr = 0.1·max_lr</code>; the off-by-one that bites is treating the boundary iteration as warmup instead of the start of the cosine.</p>
+
+<div class="card">
+<h3>Interactive: the schedule</h3>
+<div class="controls">
+  <label class="ctl">warmup <input type="range" id="lrW" min="0" max="40" value="7"> <span id="lrWv"></span></label>
+  <label class="ctl">cycle end <input type="range" id="lrC" min="10" max="100" value="21"> <span id="lrCv"></span></label>
+  <label class="ctl">min/max ratio <input type="range" id="lrR" min="0" max="50" value="10"> <span id="lrRv"></span></label>
+</div>
+<canvas id="lrViz" class="viz" width="900" height="240"></canvas>
+<p class="caption">Warmup protects the early steps while Adam's moment estimates are still noisy; the cosine decays smoothly to the floor and stays there. Real runs use thousands of warmup steps and a cycle equal to the training horizon.</p>
+</div>
+
+<h3 id="clip">2.14 Gradient clipping — <code>test_gradient_clipping</code></h3>
+<pre class="formula">def gradient_clipping(parameters, max_l2_norm, eps=1e-6):
+    grads = [p.grad for p in parameters if p.grad is not None]
+    total = torch.sqrt(sum((g.float() ** 2).sum() for g in grads))     # global L2 norm over ALL params
+    if total &gt; max_l2_norm:
+        scale = max_l2_norm / (total + eps)
+        for g in grads:
+            g.mul_(scale)                                                 # in place</pre>
+<p>Clip the <em>global</em> norm, not per-parameter norms; a single bad batch produces a few enormous gradients and this bounds the step they can cause.</p>
+
+<h3 id="batch">2.15 Data loading — <code>test_get_batch</code></h3>
+<pre class="formula">import numpy as np
+def get_batch(dataset, batch_size, context_length, device):
+    # dataset: 1-D int array (use np.memmap for files bigger than RAM)
+    starts = np.random.randint(0, len(dataset) - context_length, size=batch_size)      # valid offsets
+    x = np.stack([dataset[s : s + context_length] for s in starts])                      # (B, T)
+    y = np.stack([dataset[s + 1 : s + context_length + 1] for s in starts])              # shifted by one
+    return (torch.from_numpy(x.astype(np.int64)).to(device),
+            torch.from_numpy(y.astype(np.int64)).to(device))</pre>
+<p>Labels are the inputs shifted by one — the whole language-modeling objective is in that <code>+1</code>. The upper bound of the random offset must leave room for the shifted label (<code>len − context_length</code>, exclusive).</p>
+
+<h3 id="ckpt">2.16 Checkpoints — <code>test_checkpointing</code></h3>
+<pre class="formula">def save_checkpoint(model, optimizer, iteration, out):
+    torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                "iteration": iteration}, out)
+
+def load_checkpoint(src, model, optimizer):
+    ckpt = torch.load(src, map_location="cpu")
+    model.load_state_dict(ckpt["model"])
+    optimizer.load_state_dict(ckpt["optimizer"])
+    return ckpt["iteration"]</pre>
+
+<h3 id="bpe">2.17 BPE: training and the tokenizer — <code>test_train_bpe*</code>, <code>test_tokenizer.py</code></h3>
+<p>Byte-pair encoding starts from the 256 byte values and repeatedly merges the most frequent adjacent pair. Two details make the assignment's version match GPT-2's: (1) <strong>pre-tokenization</strong> — split the text with GPT-2's regex so merges never cross word or punctuation boundaries, and count each pre-token once with its frequency instead of scanning the corpus per merge; (2) <strong>special tokens</strong> — split the text on them first so <code>&lt;|endoftext|&gt;</code> is never merged with its neighbors and gets its own id. Ties in pair frequency are broken by the lexicographically greater pair.</p>
+<pre class="formula">import regex as re
+from collections import Counter, defaultdict
+PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""   # GPT-2 pre-tokenizer
+
+def train_bpe(input_path, vocab_size, special_tokens):
+    text = open(input_path, encoding="utf-8").read()
+    vocab = {i: bytes([i]) for i in range(256)}
+    for tok in special_tokens:
+        vocab[len(vocab)] = tok.encode("utf-8")
+    # 1. pre-tokenize, counting each distinct pre-token once; never cross special tokens
+    chunks = re.split("|".join(re.escape(t) for t in special_tokens), text) if special_tokens else [text]
+    counts = Counter()
+    for chunk in chunks:
+        for m in re.finditer(PAT, chunk):
+            counts[tuple(bytes([b]) for b in m.group().encode("utf-8"))] += 1   # word as tuple of byte-tokens
+    merges = []
+    # 2. merge loop
+    while len(vocab) &lt; vocab_size:
+        pair_counts = defaultdict(int)
+        for word, c in counts.items():
+            for a, b in zip(word, word[1:]):
+                pair_counts[(a, b)] += c
+        if not pair_counts:
+            break
+        best = max(pair_counts, key=lambda p: (pair_counts[p], p))      # ties: lexicographically greater
+        merges.append(best)
+        vocab[len(vocab)] = best[0] + best[1]
+        new_counts = Counter()
+        for word, c in counts.items():                                   # apply the merge to every word
+            out, i = [], 0
+            while i &lt; len(word):
+                if i &lt; len(word) - 1 and (word[i], word[i + 1]) == best:
+                    out.append(best[0] + best[1]); i += 2
+                else:
+                    out.append(word[i]); i += 1
+            new_counts[tuple(out)] += c
+        counts = new_counts
+    return vocab, merges</pre>
+<p>That loop recounts every pair each iteration, which is <em>O(merges × corpus)</em> and fails <code>test_train_bpe_speed</code> (1.5 s on the small corpus) at scale; the production fix is to keep pair counts incrementally — only words containing the merged pair change — and to pre-tokenize in parallel chunks split at a special-token boundary (the assignment's <code>find_chunk_boundaries</code> helper). In an interview, write the simple version first and say exactly which line you would optimize.</p>
+<pre class="formula">class Tokenizer:
+    def __init__(self, vocab, merges, special_tokens=None):
+        self.vocab, self.inv = vocab, {b: i for i, b in vocab.items()}
+        self.rank = {pair: i for i, pair in enumerate(merges)}        # earlier merge = lower rank = applied first
+        self.special = sorted(special_tokens or [], key=len, reverse=True)   # longest first: overlapping specials
+        for s in self.special:
+            if s.encode() not in self.inv:
+                self.vocab[len(self.vocab)] = s.encode(); self.inv[s.encode()] = len(self.vocab) - 1
+
+    def _bpe(self, word):                       # word: list of byte-tokens
+        while len(word) &gt; 1:
+            pairs = [(self.rank.get((a, b), float("inf")), i) for i, (a, b) in enumerate(zip(word, word[1:]))]
+            r, i = min(pairs)
+            if r == float("inf"):
+                break
+            word = word[:i] + [word[i] + word[i + 1]] + word[i + 2:]
+        return word
+
+    def encode(self, text):
+        ids = []
+        parts = re.split("(" + "|".join(re.escape(s) for s in self.special) + ")", text) if self.special else [text]
+        for part in parts:
+            if part in self.special:
+                ids.append(self.inv[part.encode()]); continue
+            for m in re.finditer(PAT, part):
+                for tok in self._bpe([bytes([b]) for b in m.group().encode("utf-8")]):
+                    ids.append(self.inv[tok])
+        return ids
+
+    def encode_iterable(self, lines):           # memory test: never materialize the whole file
+        for line in lines:
+            yield from self.encode(line)
+
+    def decode(self, ids):
+        return b"".join(self.vocab[i] for i in ids).decode("utf-8", errors="replace")</pre>
+<p>Decode must concatenate <em>bytes</em> and then decode once: a multi-byte UTF-8 character may be split across tokens, so decoding token by token produces replacement characters (<code>test_roundtrip_unicode_string</code> exists for exactly this).</p>
+
+<div class="card">
+<h3>Animation: BPE training on a tiny corpus</h3>
+<div class="controls">
+  <button class="btn" id="bpePlay">▶ Play</button>
+  <button class="btn secondary" id="bpeStep">Step</button>
+  <button class="btn secondary" id="bpeReset">Reset</button>
+</div>
+<canvas id="bpeViz" class="viz" width="900" height="340"></canvas>
+<p class="caption">Corpus: <code>low low low lower lowest newer wider new</code>, counted per pre-token. Each step counts adjacent pairs (right), merges the most frequent one (ties to the lexicographically greater pair), rewrites the words (left), and grows the vocabulary. After a few merges, <code>low</code> and <code>er</code> are single tokens — the frequent substrings the corpus actually contains.</p>
+</div>
+
+<h3 id="decode">2.18 Decoding: temperature and top-p</h3>
+<pre class="formula">@torch.no_grad()
+def generate(model, prompt_ids, max_new_tokens, temperature=1.0, top_p=1.0, eos_id=None):
+    ids = prompt_ids.clone()                                  # (1, T)
+    for _ in range(max_new_tokens):
+        logits = model(ids[:, -model.context_length:])[:, -1, :]      # last position: (1, V)
+        probs = softmax(logits / temperature, dim=-1)
+        if top_p &lt; 1.0:
+            sp, si = probs.sort(descending=True)
+            keep = sp.cumsum(-1) - sp &lt; top_p                 # smallest set with mass ≥ top_p (keep the first)
+            sp = torch.where(keep, sp, torch.zeros_like(sp))
+            probs = torch.zeros_like(probs).scatter(-1, si, sp / sp.sum(-1, keepdim=True))
+        nxt = torch.multinomial(probs, 1)                     # (1, 1)
+        ids = torch.cat([ids, nxt], dim=1)
+        if eos_id is not None and nxt.item() == eos_id:
+            break
+    return ids</pre>
+
+<h2 id="backprop">3. Backprop from scratch in numpy (the CS231n drill)</h2>
+<p>Some interviews skip PyTorch and ask for a backward pass in plain numpy. CS231n's backpropagation notes give the recipe: break the function into a graph of simple gates, run forward and <em>cache</em> every intermediate, then walk the graph backward multiplying each incoming gradient by the gate's <em>local</em> gradient (the chain rule, applied one node at a time). The local gradients to know cold:</p>
+<table class="cmp">
+<tr><th>Gate</th><th>Forward</th><th>Local gradient</th><th>Backward intuition</th></tr>
+<tr><td>add</td><td><code>q = x + y</code></td><td><code>∂q/∂x = ∂q/∂y = 1</code></td><td>distributes the incoming gradient unchanged to both inputs</td></tr>
+<tr><td>multiply</td><td><code>f = q·z</code></td><td><code>∂f/∂q = z, ∂f/∂z = q</code></td><td>swaps the inputs: each input gets the <em>other</em> input times the gradient</td></tr>
+<tr><td>max</td><td><code>m = max(x, y)</code></td><td>1 for the larger input, 0 for the other</td><td>routes the gradient to whichever input won in the forward pass</td></tr>
+<tr><td>sigmoid</td><td><code>s = σ(x)</code></td><td><code>s·(1−s)</code></td><td>reuse the forward output; no need to recompute exp</td></tr>
+<tr><td>matmul</td><td><code>Y = X W</code></td><td><code>dX = dY Wᵀ, dW = Xᵀ dY</code></td><td>shapes tell you where the transpose goes — check them, don't memorize</td></tr>
+</table>
+
+<div class="card">
+<h3>Animation: a computational graph, forward then backward</h3>
+<div class="controls">
+  <button class="btn secondary" id="cgStep">Step</button>
+  <button class="btn secondary" id="cgReset">Reset</button>
+  <span class="dim" id="cgMsg"></span>
+</div>
+<canvas id="cgViz" class="viz" width="900" height="320"></canvas>
+<p class="caption">The CS231n example <code>f(x, y, z) = (x + y) · z</code> at <code>x=−2, y=5, z=−4</code>. Forward fills values left to right; backward fills gradients right to left: <code>∂f/∂f = 1</code>, the multiply gate hands <code>z = −4</code> to <code>q</code> and <code>q = 3</code> to <code>z</code>, the add gate passes <code>−4</code> through to both <code>x</code> and <code>y</code>. Every backward step is "incoming gradient × local gradient" — nothing else.</p>
+</div>
+
+<pre class="formula">import numpy as np
+
+def mlp_forward_backward(X, y_onehot, W1, b1, W2, b2):
+    """Two-layer MLP, ReLU hidden, softmax + cross-entropy. Returns loss and gradients.
+    X: (N, D)  W1: (D, H)  b1: (H,)  W2: (H, C)  b2: (C,)"""
+    N = X.shape[0]
+    # ---- forward, caching everything we need ----
+    z1 = X @ W1 + b1                      # (N, H)
+    h = np.maximum(z1, 0)                 # (N, H)  ReLU
+    z2 = h @ W2 + b2                      # (N, C)  logits
+    z2 = z2 - z2.max(axis=1, keepdims=True)
+    p = np.exp(z2); p /= p.sum(axis=1, keepdims=True)          # softmax (N, C)
+    loss = -np.log((p * y_onehot).sum(axis=1) + 1e-12).mean()
+    # ---- backward: chain rule gate by gate ----
+    dz2 = (p - y_onehot) / N              # softmax+CE gradient — the one identity worth memorizing
+    dW2 = h.T @ dz2                       # (H, C)
+    db2 = dz2.sum(axis=0)                 # (C,)
+    dh = dz2 @ W2.T                       # (N, H)
+    dz1 = dh * (z1 &gt; 0)                   # ReLU routes gradient where it was active
+    dW1 = X.T @ dz1                       # (D, H)
+    db1 = dz1.sum(axis=0)                 # (H,)
+    return loss, dict(W1=dW1, b1=db1, W2=dW2, b2=db2)
+
+def grad_check(f, param, grads, eps=1e-5, n=5):
+    """Compare analytic grads against centered differences on a few random entries."""
+    for _ in range(n):
+        idx = tuple(np.random.randint(s) for s in param.shape)
+        old = param[idx]
+        param[idx] = old + eps; lp = f()
+        param[idx] = old - eps; lm = f()
+        param[idx] = old
+        num = (lp - lm) / (2 * eps)
+        print(idx, num, grads[idx], abs(num - grads[idx]) / (abs(num) + abs(grads[idx]) + 1e-12))</pre>
+<p>The interview-grade talking points: the softmax-with-cross-entropy gradient collapses to <code>p − y</code>; ReLU's backward is a mask, so dead units get zero gradient forever; every <code>dW</code> is "input transposed times upstream gradient" and the shapes force the transpose; and a centered finite-difference check with relative error below <code>1e-5</code> is how you prove it in two minutes.</p>
+
+<h2 id="classic">4. Classic ML from scratch</h2>
+<p>These come up in both ML-coding and "traditional ML" screens. Each is written to be typed in a few minutes with the complexity stated.</p>
+<pre class="formula">def kmeans(X, k, iters=100, seed=0):               # O(iters · N · k · D)
+    rng = np.random.default_rng(seed)
+    C = X[rng.choice(len(X), k, replace=False)]      # init: k random points (k-means++ is the upgrade)
+    for _ in range(iters):
+        d = ((X[:, None, :] - C[None, :, :]) ** 2).sum(-1)     # (N, k) squared distances
+        a = d.argmin(1)                                        # assignment step
+        newC = np.stack([X[a == j].mean(0) if np.any(a == j) else C[j] for j in range(k)])
+        if np.allclose(newC, C): break
+        C = newC                                               # update step
+    return C, a
+
+def logistic_regression(X, y, lr=0.1, epochs=500, l2=0.0):   # O(epochs · N · D)
+    w, b = np.zeros(X.shape[1]), 0.0
+    for _ in range(epochs):
+        p = 1 / (1 + np.exp(-(X @ w + b)))                     # sigmoid
+        g = p - y                                              # dL/dz for BCE, same shape as y
+        w -= lr * (X.T @ g / len(y) + l2 * w)
+        b -= lr * g.mean()
+    return w, b
+
+def knn_predict(Xtr, ytr, Xte, k=5):                 # O(N_te · N_tr · D) — no training, all inference
+    d = ((Xte[:, None, :] - Xtr[None, :, :]) ** 2).sum(-1)
+    nn_idx = np.argpartition(d, k, axis=1)[:, :k]
+    votes = ytr[nn_idx]
+    return np.array([np.bincount(v).argmax() for v in votes])
+
+def decision_stump(X, y):                            # O(D · N log N): best single threshold split
+    best = (np.inf, None, None)
+    for j in range(X.shape[1]):
+        order = np.argsort(X[:, j]); xs, ys = X[order, j], y[order]
+        for i in range(1, len(xs)):
+            if xs[i] == xs[i - 1]: continue
+            left, right = ys[:i], ys[i:]
+            gini = sum(len(s) / len(y) * (1 - ((np.bincount(s) / len(s)) ** 2).sum()) for s in (left, right))
+            if gini &lt; best[0]: best = (gini, j, (xs[i] + xs[i - 1]) / 2)
+    return best                                       # (impurity, feature, threshold)
+
+def pca(X, n_components):                             # O(N · D²) via SVD of the centered data
+    Xc = X - X.mean(0)
+    U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+    components = Vt[:n_components]                     # principal directions (n_components, D)
+    explained = S[:n_components] ** 2 / (S ** 2).sum()
+    return Xc @ components.T, components, explained</pre>
+
+<h2 id="decoding">5. Decoding strategies on request</h2>
+<table class="cmp">
+<tr><th>Strategy</th><th>One-liner</th><th>Implement</th><th>When asked</th></tr>
+<tr><td>Greedy</td><td>argmax every step</td><td><code>logits.argmax(-1)</code></td><td>deterministic, repetitive; baseline for tests</td></tr>
+<tr><td>Temperature</td><td>divide logits by T before softmax</td><td>see <code>generate</code> above</td><td>T→0 is greedy, T&gt;1 flattens</td></tr>
+<tr><td>Top-k</td><td>keep k largest, renormalize</td><td><code>v, i = logits.topk(k); mask the rest to −inf</code></td><td>fixed candidate set</td></tr>
+<tr><td>Top-p (nucleus)</td><td>smallest set with mass ≥ p</td><td>sort, cumsum, mask, renormalize</td><td>adaptive candidate set; the default in practice</td></tr>
+<tr><td>Beam search</td><td>keep B best partial sequences by total log-prob</td><td>expand each beam by V, keep top B of B·V; length-normalize</td><td>translation/summarization; rarely for chat</td></tr>
+<tr><td>Repetition penalty</td><td>divide (or subtract) logits of already-generated tokens</td><td><code>logits[seen] /= 1.2</code> (positive) / <code>*= 1.2</code> (negative)</td><td>curbs loops in small models</td></tr>
+</table>
+<pre class="formula">def beam_search(model, prompt_ids, beams=4, max_new_tokens=20, length_penalty=1.0):
+    live = [(0.0, prompt_ids)]                                    # (log-prob, ids)
+    for _ in range(max_new_tokens):
+        cand = []
+        for lp, ids in live:
+            logp = torch.log_softmax(model(ids)[:, -1, :], dim=-1)[0]      # (V,)
+            top_lp, top_i = logp.topk(beams)
+            for l, i in zip(top_lp.tolist(), top_i.tolist()):
+                cand.append((lp + l, torch.cat([ids, torch.tensor([[i]])], dim=1)))
+        live = sorted(cand, key=lambda c: c[0] / (c[1].shape[1] ** length_penalty), reverse=True)[:beams]
+    return live[0][1]</pre>
+
+<h2 id="debug">6. Debugging drills: the bugs interviewers love</h2>
+<table class="cmp bug-table">
+<tr><th>Bug</th><th>Symptom</th><th>Spot it in 60 seconds</th></tr>
+<tr><td>Mask dtype/broadcast</td><td>Loss fine but model attends to the future; truncated-input test fails</td><td>Print <code>mask.dtype</code> and <code>mask.shape</code>; <code>masked_fill</code> needs bool, and a <span class="shape">(T,T)</span> mask must broadcast against <span class="shape">(B,h,T,T)</span></td></tr>
+<tr><td>Missing <code>1/√d_k</code></td><td>Attention weights saturate to one-hot; training stalls</td><td>Check the entropy of attention rows on random input — it should be near <code>log T</code>, not ~0</td></tr>
+<tr><td>Softmax over the wrong dim</td><td>Rows don't sum to 1; outputs explode or vanish</td><td><code>weights.sum(-1)</code> must be all ones; <code>sum(-2)</code> will not be</td></tr>
+<tr><td>RoPE before the head split</td><td>Every test with RoPE fails by a little, not a lot</td><td>Assert RoPE's last dim is <code>d_k</code>, not <code>d_model</code></td></tr>
+<tr><td>RoPE pairing convention</td><td>Snapshot mismatch with plausible numbers</td><td>Compare position 0 (should be identity) then position 1 on a 4-dim vector by hand</td></tr>
+<tr><td>RMSNorm in bf16</td><td>Occasional NaNs in long runs</td><td>Look for <code>.to(torch.float32)</code>; check <code>x.pow(2).mean()</code> isn't overflowing</td></tr>
+<tr><td>Weight decay on norms/biases</td><td>Gains drift toward zero; slow degradation</td><td>Inspect param groups: 1-D params should have <code>weight_decay=0</code></td></tr>
+<tr><td>Off-by-one causal mask</td><td>Token can see itself? (fine) or the next token? (fatal); or cannot see itself (loss stuck ~log V)</td><td><code>torch.tril(ones)</code> includes the diagonal — that is correct; <code>diagonal=-1</code> is the bug</td></tr>
+<tr><td><code>view</code> on non-contiguous tensor</td><td>RuntimeError, or scrambled heads if you "fixed" it with <code>reshape</code> in the wrong place</td><td>After any <code>transpose</code>, call <code>.contiguous()</code> before <code>.view</code>; <code>reshape</code> hides the problem</td></tr>
+<tr><td>Log of softmax</td><td>Loss is inf/NaN on confident predictions</td><td>Use one log-sum-exp expression; never <code>log(softmax)</code></td></tr>
+<tr><td>Labels not shifted</td><td>Loss drops to ~0 instantly</td><td>Model is copying the input; check <code>y = x[1:]</code></td></tr>
+<tr><td>Tokenizer decode per token</td><td>Replacement characters on non-ASCII</td><td>Join bytes first, decode once with <code>errors="replace"</code></td></tr>
+</table>
+
+<h2 id="run">7. Running the real thing</h2>
+<pre class="formula"># setup (uv manages the env)
+git clone https://github.com/stanford-cs336/assignment1-basics &amp;&amp; cd assignment1-basics
+uv run pytest                      # everything fails with NotImplementedError until adapters.py is wired
+uv run pytest tests/test_model.py -k "rmsnorm or swiglu or rope"     # drill one component at a time
+uv run pytest tests/test_train_bpe.py tests/test_tokenizer.py          # BPE: speed test = 1.5 s budget
+
+# data: TinyStories (small, trains in minutes on one GPU) then OpenWebText sample
+mkdir -p data &amp;&amp; cd data
+wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-train.txt
+wget https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStoriesV2-GPT4-valid.txt</pre>
+<p>What to expect from a TinyStories run with a small model (4 layers, d_model 512, 16 heads, context 256, vocab 10K, AdamW at 1e-3 with 1K warmup, cosine to 1e-4): validation loss falls from ~ln(10,000) ≈ 9.2 at step 0 to ~1.4 within a few thousand steps, and samples become grammatical children's stories. If the loss plateaus near 9, your labels or mask are wrong (section 6); if it drops to near 0, the labels are not shifted.</p>
+<div class="card">
+<h3>Two-week drill schedule (slots into the study plan's kernel/LeetCode weeks)</h3>
+<table class="cmp">
+<tr><th>Day</th><th>Target (45 min, AI off)</th><th>Tests</th></tr>
+<tr><td>1</td><td>Linear, Embedding, RMSNorm, SiLU, SwiGLU</td><td><code>test_linear test_embedding test_rmsnorm test_silu test_swiglu</code></td></tr>
+<tr><td>2</td><td>softmax, SDPA (3-D and 4-D), cross-entropy</td><td><code>test_softmax test_*scaled_dot_product_attention test_cross_entropy</code></td></tr>
+<tr><td>3</td><td>RoPE, MHA with and without RoPE</td><td><code>test_rope test_multihead_self_attention*</code></td></tr>
+<tr><td>4</td><td>Block, LM, truncated input</td><td><code>test_transformer_block test_transformer_lm*</code></td></tr>
+<tr><td>5</td><td>AdamW, schedule, clipping, get_batch, checkpoint</td><td><code>test_adamw test_get_lr_cosine_schedule test_gradient_clipping test_get_batch test_checkpointing</code></td></tr>
+<tr><td>6</td><td>BPE trainer (naive), then make it pass the speed test</td><td><code>test_train_bpe*</code></td></tr>
+<tr><td>7</td><td>Tokenizer: encode/decode/special tokens/iterable</td><td><code>test_tokenizer.py</code></td></tr>
+<tr><td>8–10</td><td>Repeat days 1–4 from blank files; time yourself</td><td>all model tests</td></tr>
+<tr><td>11</td><td>numpy MLP backward + gradient check (section 3)</td><td>your own check</td></tr>
+<tr><td>12</td><td>Classic ML set (section 4) + decoding (section 5)</td><td>compare against sklearn / HF generate</td></tr>
+<tr><td>13</td><td>Full training run on TinyStories; sample text</td><td>loss curve as above</td></tr>
+<tr><td>14</td><td>Mock: a friend breaks one line in your attention; find it</td><td>section 6 table</td></tr>
+</table>
+</div>
+
+<h2 id="reading">8. Where to go deeper</h2>
+<ul>
+<li><a href="https://cs336.stanford.edu/spring2025/">Stanford CS336: Language Modeling from Scratch</a> — lectures, and the <a href="https://github.com/stanford-cs336/assignment1-basics">assignment 1 repo</a> with its handout PDF; a mirror with history lives in <a href="https://github.com/kedardg/job-prep">job-prep</a> under <code>raw/resources/repos/assignment1-basics</code>.</li>
+<li><a href="https://jalammar.github.io/illustrated-gpt2/">The Illustrated GPT-2</a> (Jay Alammar) — the visual walk through masked self-attention, head splitting, and the FFN that this build implements.</li>
+<li><a href="https://web.stanford.edu/class/cs224n/readings/cs224n-self-attention-transformers-2023_draft.pdf">CS224N: Self-Attention and Transformers</a> — the rigorous treatment of attention.</li>
+<li><a href="https://cs231n.github.io/optimization-2/">CS231n: Backpropagation</a> — the gate-by-gate chain rule drilled in section 3.</li>
+<li><a href="https://github.com/karpathy/nanoGPT">nanoGPT</a> and <a href="https://github.com/karpathy/minGPT">minGPT</a> (Karpathy) — the same model in ~300 readable lines; compare after you have written your own.</li>
+<li>Alisa Liu's <a href="https://alisawuffles.github.io/blog/job-search/">Notes on the Industry Job Search</a> and Nathan Lambert's <a href="https://natolambert.com/writing/ai-phd-job-hunt">AI PhD Job Hunt</a> — the first-hand accounts this chapter's protocol is built on.</li>
+<li>In this notebook: <a href="transformers.html">Transformers</a> for the concepts, <a href="attention.html">Attention</a> for RoPE and FlashAttention, <a href="training.html">Training</a> for the optimizer and schedule at scale, <a href="coding-patterns.html">Coding Patterns</a> for the LeetCode half, and the <a href="flashcards.html">ML Coding</a> flashcard deck.</li>
+</ul>
+
+<div class="footer-nav"><a href="transformers.html">← Transformers</a><a href="attention.html">Attention →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function watchTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+// ---------- attention shape tracer ----------
+(function(){
+const cv=document.getElementById('shapeViz'),ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);let step=0;
+function params(){const B=+$('shB').value,T=+$('shT').value,D=+$('shD').value,H=+$('shH').value;$('shBv').textContent=B;$('shTv').textContent=T;return {B,T,D,H,dk:D/H};}
+function stages(p){return [
+ ['x = embeddings',`(B=${p.B}, T=${p.T}, d_model=${p.D})`],
+ ['q = x @ Wq.T  (same for k, v)',`(${p.B}, ${p.T}, ${p.D})`],
+ ['view(B, T, h, d_k).transpose(1, 2)',`(${p.B}, h=${p.H}, ${p.T}, d_k=${p.dk})`],
+ ['RoPE on q, k (per head, pairs of dims)',`(${p.B}, ${p.H}, ${p.T}, ${p.dk})`],
+ ['scores = q @ k.T / sqrt(d_k)',`(${p.B}, ${p.H}, ${p.T}, ${p.T})`],
+ ['scores.masked_fill(~tril, -inf)',`(${p.B}, ${p.H}, ${p.T}, ${p.T})  mask (T, T) broadcasts`],
+ ['softmax(dim=-1)  rows sum to 1',`(${p.B}, ${p.H}, ${p.T}, ${p.T})`],
+ ['out = weights @ v',`(${p.B}, ${p.H}, ${p.T}, ${p.dk})`],
+ ['transpose(1,2).contiguous().view(B, T, h*d_k)',`(${p.B}, ${p.T}, ${p.D})`],
+ ['output_proj',`(${p.B}, ${p.T}, ${p.D})`]];}
+function draw(){
+  const p=params(),S=stages(p),W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const txt=css('--text'),dim=css('--text-dim'),acc=css('--accent'),acc2=css('--accent2'),bd=css('--border');
+  ctx.font='13px monospace';ctx.textAlign='left';
+  S.forEach((s,i)=>{const y=26+i*30;const on=i<=step;ctx.fillStyle=on?txt:dim;ctx.globalAlpha=on?1:0.45;
+    ctx.fillText((i+1)+'. '+s[0],20,y);ctx.fillStyle=on?acc2:dim;ctx.fillText(s[1],420,y);ctx.globalAlpha=1;
+    if(i===step){ctx.strokeStyle=acc;ctx.lineWidth=2;rr(ctx,10,y-17,W-280,26,6);ctx.stroke();}});
+  // mask grid
+  const n=p.T,cell=Math.min(18,180/n),gx=W-220,gy=40;
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('causal mask ('+n+'×'+n+')',gx,gy-10);
+  for(let i=0;i<n;i++)for(let j=0;j<n;j++){const allowed=j<=i;ctx.fillStyle=allowed?acc2:'rgba(120,120,120,0.25)';
+    if(step>=5)ctx.fillStyle=allowed?acc2:'#333';ctx.fillRect(gx+j*cell,gy+i*cell,cell-1,cell-1);}
+  ctx.fillStyle=dim;ctx.fillText('row = query, col = key; dark = −∞',gx,gy+n*cell+16);
+  ctx.fillText('per-head score matrix: '+n+'×'+n+' = '+(n*n)+' entries',gx,gy+n*cell+34);
+  ctx.fillText('all heads × batch: '+(p.B*p.H*n*n)+' scores',gx,gy+n*cell+52);
+}
+['shB','shT','shD','shH'].forEach(id=>$(id).oninput=draw);
+$('shStep').onclick=()=>{step=(step+1)%10;draw();};$('shReset').onclick=()=>{step=0;draw();};
+draw();watchTheme(draw);
+})();
+
+// ---------- AdamW vs SGD ----------
+(function(){
+const cv=document.getElementById('adamViz'),ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+const L=w=>(w-3)**2+0.6*Math.sin(4*w),G=w=>2*(w-3)+2.4*Math.cos(4*w);
+let wA,wS,m,v,t,timer=null,traceA=[],traceS=[];
+function P(){const lr=+$('adLr').value/100,b1=+$('adB1').value/100,b2=+$('adB2').value/1000,wd=+$('adWd').value/100;
+  $('adLrv').textContent=lr.toFixed(2);$('adB1v').textContent=b1.toFixed(2);$('adB2v').textContent=b2.toFixed(3);$('adWdv').textContent=wd.toFixed(2);return{lr,b1,b2,wd};}
+function reset(){wA=wS=-1.2;m=0;v=0;t=0;traceA=[wA];traceS=[wS];draw();}
+function tick(){const{lr,b1,b2,wd}=P();t++;
+  const gA=G(wA);m=b1*m+(1-b1)*gA;v=b2*v+(1-b2)*gA*gA;const mh=m/(1-b1**t),vh=v/(1-b2**t);
+  wA-=lr*mh/(Math.sqrt(vh)+1e-8);wA*=(1-lr*wd);
+  wS-=lr*G(wS);traceA.push(wA);traceS.push(wS);draw({mh,vh});if(t>=60)stop();}
+function draw(info){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);P();
+  const txt=css('--text'),dim=css('--text-dim'),acc=css('--accent'),bd=css('--border');
+  const x0=40,x1=W-40,y0=H-40,y1=20,wmin=-2,wmax=6;let Lmax=0;for(let w=wmin;w<=wmax;w+=0.05)Lmax=Math.max(Lmax,L(w));
+  const X=w=>x0+(w-wmin)/(wmax-wmin)*(x1-x0),Y=l=>y0-(l/Lmax)*(y0-y1);
+  ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y0);ctx.stroke();
+  ctx.strokeStyle=dim;ctx.lineWidth=1.5;ctx.beginPath();for(let w=wmin;w<=wmax;w+=0.02){const px=X(w),py=Y(L(w));w===wmin?ctx.moveTo(px,py):ctx.lineTo(px,py);}ctx.stroke();
+  function trace(tr,col){ctx.strokeStyle=col;ctx.lineWidth=1;ctx.beginPath();tr.forEach((w,i)=>{const px=X(Math.min(wmax,Math.max(wmin,w))),py=Y(L(w));i?ctx.lineTo(px,py):ctx.moveTo(px,py);});ctx.stroke();
+    const w=tr[tr.length-1];ctx.fillStyle=col;ctx.beginPath();ctx.arc(X(Math.min(wmax,Math.max(wmin,w))),Y(L(w)),6,0,7);ctx.fill();}
+  trace(traceS,'#888');trace(traceA,acc);
+  ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText('step '+t+'   SGD w='+wS.toFixed(3)+' L='+L(wS).toFixed(3)+'   AdamW w='+wA.toFixed(3)+' L='+L(wA).toFixed(3),x0,16);
+  if(info){ctx.fillStyle=dim;ctx.fillText('m̂='+info.mh.toFixed(3)+'  v̂='+info.vh.toFixed(3)+'  effective step='+(P().lr*info.mh/(Math.sqrt(info.vh)+1e-8)).toFixed(3),x0,32);}
+  ctx.fillStyle='#888';ctx.fillRect(x1-150,y1,12,12);ctx.fillStyle=dim;ctx.fillText('SGD',x1-134,y1+11);ctx.fillStyle=acc;ctx.fillRect(x1-80,y1,12,12);ctx.fillStyle=dim;ctx.fillText('AdamW',x1-64,y1+11);}
+function stop(){if(timer){clearInterval(timer);timer=null;$('adPlay').textContent='▶ Play';}}
+$('adPlay').onclick=function(){if(timer){stop();return;}if(t>=60)reset();this.textContent='⏸ Pause';timer=setInterval(tick,120);};
+$('adReset').onclick=()=>{stop();reset();};['adLr','adB1','adB2','adWd'].forEach(id=>$(id).oninput=()=>{stop();reset();});
+reset();watchTheme(()=>draw());
+})();
+
+// ---------- LR schedule ----------
+(function(){
+const cv=document.getElementById('lrViz'),ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+function lr(it,mx,mn,w,c){if(it<w)return mx*it/w;if(it>c)return mn;const p=(it-w)/(c-w);return mn+0.5*(1+Math.cos(Math.PI*p))*(mx-mn);}
+function draw(){const w=+$('lrW').value,c=Math.max(+$('lrC').value,w+1),r=+$('lrR').value/100;$('lrWv').textContent=w;$('lrCv').textContent=c;$('lrRv').textContent=r.toFixed(2);
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const txt=css('--text'),dim=css('--text-dim'),acc=css('--accent'),bd=css('--border');
+  const x0=50,x1=W-30,y0=H-30,y1=20,N=Math.round(c*1.3)+5;const X=i=>x0+i/N*(x1-x0),Y=v=>y0-v*(y0-y1);
+  ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y0);ctx.moveTo(x0,y0);ctx.lineTo(x0,y1);ctx.stroke();
+  ctx.strokeStyle=acc;ctx.lineWidth=2;ctx.beginPath();for(let i=0;i<=N;i++){const px=X(i),py=Y(lr(i,1,r,w,c));i?ctx.lineTo(px,py):ctx.moveTo(px,py);}ctx.stroke();
+  ctx.setLineDash([4,4]);ctx.strokeStyle=dim;ctx.beginPath();ctx.moveTo(X(w),y0);ctx.lineTo(X(w),y1);ctx.moveTo(X(c),y0);ctx.lineTo(X(c),y1);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('warmup ends ('+w+')',X(w)+4,y1+12);ctx.fillText('cycle ends ('+c+') → floor '+r.toFixed(2)+'·max',X(c)+4,y1+28);
+  ctx.fillStyle=txt;ctx.fillText('lr / max_lr',8,y1+8);ctx.fillText('iteration',x1-60,y0+20);}
+['lrW','lrC','lrR'].forEach(id=>$(id).oninput=draw);draw();watchTheme(draw);
+})();
+
+// ---------- BPE training ----------
+(function(){
+const cv=document.getElementById('bpeViz'),ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+const CORPUS={'low':3,'lower':1,'lowest':1,'newer':1,'wider':1,'new':1};
+let words,merges,vocab,timer=null;
+function reset(){words={};for(const w in CORPUS)words[w]={toks:w.split(''),c:CORPUS[w]};merges=[];vocab=new Set('lowerstnwid'.split(''));draw();}
+function pairCounts(){const pc={};for(const w in words){const t=words[w].toks;for(let i=0;i<t.length-1;i++){const k=t[i]+'\u0001'+t[i+1];pc[k]=(pc[k]||0)+words[w].c;}}return pc;}
+function step(){const pc=pairCounts();const keys=Object.keys(pc);if(!keys.length){stop();return;}
+  keys.sort((a,b)=>pc[b]-pc[a]||(b>a?1:-1));const best=keys[0].split('\u0001');merges.push(best);vocab.add(best[0]+best[1]);
+  for(const w in words){const t=words[w].toks,out=[];for(let i=0;i<t.length;i++){if(i<t.length-1&&t[i]===best[0]&&t[i+1]===best[1]){out.push(best[0]+best[1]);i++;}else out.push(t[i]);}words[w].toks=out;}
+  draw(best);if(merges.length>=8)stop();}
+function draw(last){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const txt=css('--text'),dim=css('--text-dim'),acc=css('--accent'),acc2=css('--accent2'),bd=css('--border');
+  ctx.font='bold 13px sans-serif';ctx.fillStyle=txt;ctx.textAlign='left';ctx.fillText('pre-tokens (count) as token sequences',20,24);
+  let y=48;for(const w in words){ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('×'+words[w].c,20,y+14);let x=56;
+    words[w].toks.forEach(t=>{const tw=Math.max(26,t.length*9+12);ctx.fillStyle=(last&&t===last[0]+last[1])?acc:css('--bg-card');ctx.strokeStyle=bd;rr(ctx,x,y,tw,22,5);ctx.fill();ctx.stroke();
+      ctx.fillStyle=(last&&t===last[0]+last[1])?'#fff':txt;ctx.font='12px monospace';ctx.textAlign='center';ctx.fillText(t,x+tw/2,y+15);ctx.textAlign='left';x+=tw+4;});y+=34;}
+  const pc=pairCounts(),keys=Object.keys(pc).sort((a,b)=>pc[b]-pc[a]||(b>a?1:-1)).slice(0,9);
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('adjacent-pair counts (next merge on top)',520,24);
+  keys.forEach((k,i)=>{const [a,b]=k.split('\u0001');ctx.fillStyle=i===0?acc2:dim;ctx.font='12px monospace';ctx.fillText(`(${a}, ${b})  ${pc[k]}`,520,48+i*20);});
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('merges so far: '+merges.length+'   vocab size: '+(256+merges.length)+' (256 bytes + merges)',20,H-40);
+  ctx.fillStyle=dim;ctx.font='12px monospace';ctx.fillText(merges.map(m=>m[0]+'+'+m[1]+'→'+m[0]+m[1]).join('   '),20,H-20);}
+function stop(){if(timer){clearInterval(timer);timer=null;$('bpePlay').textContent='▶ Play';}}
+$('bpePlay').onclick=function(){if(timer){stop();return;}if(merges.length>=8)reset();this.textContent='⏸ Pause';timer=setInterval(step,900);};
+$('bpeStep').onclick=()=>{stop();step();};$('bpeReset').onclick=()=>{stop();reset();};reset();watchTheme(()=>draw());
+})();
+
+// ---------- computational graph ----------
+(function(){
+const cv=document.getElementById('cgViz'),ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+const nodes={x:{x:120,y:90,label:'x',val:-2},y:{x:120,y:170,label:'y',val:5},z:{x:120,y:250,label:'z',val:-4},q:{x:380,y:130,label:'q = x + y',val:3},f:{x:640,y:190,label:'f = q · z',val:-12}};
+const edges=[['x','q'],['y','q'],['q','f'],['z','f']];
+const script=[
+ ['forward: read inputs x=−2, y=5, z=−4',{x:'v',y:'v',z:'v'}],
+ ['forward: q = x + y = 3',{q:'v'}],
+ ['forward: f = q · z = −12',{f:'v'}],
+ ['backward: ∂f/∂f = 1',{f:'g'}],
+ ['backward through ·: ∂f/∂q = z = −4,  ∂f/∂z = q = 3  (swap the inputs)',{q:'g',z:'g'}],
+ ['backward through +: ∂f/∂x = ∂f/∂q · 1 = −4,  ∂f/∂y = −4  (pass through)',{x:'g',y:'g'}],
+ ['done: every gradient is (incoming gradient) × (local gradient)',{}]];
+const grads={f:1,q:-4,z:3,x:-4,y:-4};let k=-1,shown={};
+function reset(){k=-1;shown={};draw();}
+function step(){if(k>=script.length-1)return;k++;for(const n in script[k][1]){shown[n]=shown[n]||{};shown[n][script[k][1][n]]=true;}draw();}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const txt=css('--text'),dim=css('--text-dim'),acc=css('--accent'),acc2=css('--accent2'),bd=css('--border');
+  ctx.strokeStyle=bd;ctx.lineWidth=2;edges.forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(nodes[a].x+50,nodes[a].y);ctx.lineTo(nodes[b].x-50,nodes[b].y);ctx.stroke();});
+  for(const n in nodes){const d=nodes[n],s=shown[n]||{};ctx.fillStyle=css('--bg-card');ctx.strokeStyle=s.g?'#e5604c':(s.v?acc2:bd);ctx.lineWidth=2;rr(ctx,d.x-50,d.y-22,100,44,8);ctx.fill();ctx.stroke();
+    ctx.fillStyle=txt;ctx.font='13px monospace';ctx.textAlign='center';ctx.fillText(d.label,d.x,d.y-4);
+    ctx.fillStyle=acc2;ctx.fillText(s.v?('val '+d.val):'',d.x,d.y+14);
+    ctx.fillStyle='#e5604c';ctx.fillText(s.g?('grad '+grads[n]):'',d.x,d.y+32);}
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('green = forward value, red = ∂f/∂node',20,H-16);
+  $('cgMsg').textContent=k<0?'Press Step to begin the forward pass.':script[k][0];}
+$('cgStep').onclick=step;$('cgReset').onclick=reset;reset();watchTheme(draw);
+})();
+</script>
+</body>
+</html>
