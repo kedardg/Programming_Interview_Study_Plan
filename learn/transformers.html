@@ -111,7 +111,82 @@
 <h2 id="context">8. What a context window costs</h2>
 <p>"128K context" is a systems claim, not just a model claim. Attention FLOPs grow quadratically with context during prefill; the KV cache grows linearly and must survive for the whole generation — at 128K tokens, a Llama-3-70B conversation holds <em>gigabytes</em> of cache per user (compute it with the <a href="inference.html#kv-cache">KV calculator</a>). Everything in the serving stack — GQA/MLA above, paged allocation, cache quantization, prefix sharing — exists to pay this bill. When you read a model card, translate the context window into bytes-per-user before believing the concurrency numbers.</p>
 
-<h2 id="reading">9. Where to go deeper</h2>
+
+<h2 id="accounting">9. LLM accounting: parameters, activations, FLOPs and memory</h2>
+<p>Rapid-fire interviews love this material because it has exact answers. Alisa Liu's <a href="https://alisawuffles.notion.site/alisa-s-book-of-llms">Book of LLMs</a> keeps a running "accounting" page for it; this section is that page made interactive. Notation: <code>V</code> vocabulary, <code>D</code> model width, <code>L</code> layers, <code>N</code> query heads, <code>K</code> KV heads, <code>H</code> head dimension (<code>D = N·H</code>), <code>F</code> FFN width, <code>B</code> batch, <code>S</code> sequence length.</p>
+
+<h3>Parameters</h3>
+<p>Per decoder block: attention is <code>Q: D×D</code>, <code>K: D×KH</code>, <code>V: D×KH</code>, <code>O: D×D</code>, i.e. <code>2D² + 2·D·K·H</code>, which is <code>4D²</code> for full MHA (<code>K = N</code>) and noticeably less under GQA. A SwiGLU FFN has three matrices (gate, up, down) of <code>D×F</code>, so <code>3DF</code>; with the Llama convention <code>F ≈ 8D/3</code> that is <code>8D²</code>. Two RMSNorms contribute <code>2D</code>. Embeddings are <code>V×D</code>, and so is the unembedding unless the two are <strong>tied</strong> (GPT-2 ties them; Llama does not). Total:</p>
+<div class="formula">params ≈ 2·V·D (untied; V·D if tied) + L·(4D² + 3DF + 2D) + D (final norm)  ≈ 2VD + 12·L·D²   for F = 8D/3, K = N</div>
+<p>Worked check — Llama-3-8B (V=128,256, D=4,096, L=32, N=32, K=8, H=128, F=14,336): attention 16.78M·2 + 4.19M·2 = 41.9M; FFN 3·4096·14336 = 176.2M; norms 8K → 218.1M per block; ×32 = 6.98B; plus 2·128256·4096 = 1.05B of embeddings and the final norm gives <strong>8.03B</strong>, matching the published count. Notice embeddings are 13% of the model and the FFN is 80% of each block — the first thing to know when someone asks "where are the parameters?"</p>
+
+<h3>Activations (what training has to remember for backward)</h3>
+<p>Per layer, in tokens: the attention path stores the norm input and output (2BSD), Q, K, V (3BSD with MHA), the score matrix (<code>B·N·S²</code> — unless FlashAttention recomputes it), and the output (BSD); the FFN path stores its norm input (BSD), the gate and up outputs (2BSF ≈ 5.3BSD) and the down output (BSD). The Book's total is</p>
+<div class="formula">activations per layer ≈ 14·B·S·D + B·N·S²   (without FlashAttention; the S² term becomes B·N·S with it)</div>
+<p>This is usually the dominant training-memory term, it scales with total tokens <code>B·S</code>, and <strong>gradient checkpointing</strong> trades it for recompute: keep only each layer's input and rebuild the rest during backward, roughly <code>L·B·S·D</code> instead of <code>14·L·B·S·D</code> at ~33% extra compute (see <a href="training.html#memory">the training-memory calculator</a>).</p>
+
+<h3>FLOPs</h3>
+<p>Each matmul of an <code>(m×k)</code> by <code>(k×n)</code> costs <code>2mnk</code>. Per layer in prefill: the four projections cost <code>8BSD²</code> (MHA), <code>QKᵀ</code> and <code>AV</code> cost <code>2BS²D</code> each, and the FFN <code>6BSDF ≈ 16BSD²</code>; the unembedding adds <code>2BSDV</code> once.</p>
+<div class="formula">forward ≈ 2·B·S·D·(12·L·D + 2·L·S + V)  → per token ≈ 2·(non-embedding params) + 2·D·V + 4·L·S·D (attention over S context)<br>backward ≈ 2 × forward (gradient w.r.t. inputs and w.r.t. weights, one matmul each)  → training ≈ 6·N·D_tokens, the "6ND rule"</div>
+<p>The attention term <code>4LSD</code> per token is why long contexts become compute-bound in prefill even though the weight term dominates at short S; decode, by contrast, is bandwidth-bound (<a href="inference.html#two-phases">Ch. 11</a>).</p>
+
+<h3>Memory</h3>
+<p><strong>Inference</strong> = weights + KV cache + peak activations of one layer. Weights are <code>params × bytes</code>; the KV cache is <code>2·L·K·H·S·B·bytes</code> (<a href="inference.html#kv-cache">the calculator</a>); peak activations are <code>O(B·N·S² + B·S·F)</code> in prefill without FlashAttention and <code>O(B·N·S + B·F)</code> in decode. <strong>Training</strong> in mixed precision, per parameter: 4 bytes FP32 master weights + 2 bytes BF16 working copy + 8 bytes Adam moments + 4 bytes FP32 gradient accumulation = <strong>18 bytes/param</strong> (16 if you drop the transient BF16 copy, the figure most people quote), plus activations. A 7B model is therefore ~126 GB before a single activation — the arithmetic behind LoRA and ZeRO (<a href="training.html#memory">Ch. 13</a>).</p>
+
+<div class="card">
+<h3>Interactive: the accounting calculator</h3>
+<div class="controls">
+  <label class="ctl">D <input type="number" id="acD" value="4096" step="128" style="width:90px"></label>
+  <label class="ctl">L <input type="number" id="acL" value="32" style="width:70px"></label>
+  <label class="ctl">heads N <input type="number" id="acN" value="32" style="width:70px"></label>
+  <label class="ctl">KV heads K <input type="number" id="acK" value="8" style="width:70px"></label>
+  <label class="ctl">F <input type="number" id="acF" value="14336" step="256" style="width:90px"></label>
+  <label class="ctl">V <input type="number" id="acV" value="128256" step="1024" style="width:100px"></label>
+</div>
+<div class="controls">
+  <label class="ctl">S <input type="number" id="acS" value="8192" step="1024" style="width:90px"></label>
+  <label class="ctl">B <input type="number" id="acB" value="8" style="width:70px"></label>
+  <label class="ctl"><input type="checkbox" id="acTied"> tied embeddings</label>
+  <label class="ctl"><input type="checkbox" id="acFlash" checked> FlashAttention</label>
+  <label class="ctl"><input type="checkbox" id="acCkpt"> gradient checkpointing</label>
+  <button class="btn secondary" id="acLlama">Llama-3-8B</button>
+  <button class="btn secondary" id="acGpt2">GPT-2 small</button>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="acParams">–</div><div class="l">parameters</div></div>
+  <div class="box"><div class="v" id="acNonEmb">–</div><div class="l">non-embedding</div></div>
+  <div class="box"><div class="v" id="acFwd">–</div><div class="l">forward FLOPs / token</div></div>
+  <div class="box"><div class="v" id="acTrain">–</div><div class="l">train FLOPs / token (≈6N)</div></div>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="acKV">–</div><div class="l">KV cache / token (BF16)</div></div>
+  <div class="box"><div class="v" id="acInf">–</div><div class="l">inference memory (weights + KV, B×S)</div></div>
+  <div class="box"><div class="v" id="acAct">–</div><div class="l">activations, all layers (B×S)</div></div>
+  <div class="box"><div class="v" id="acTrainMem">–</div><div class="l">training memory (18 B/param + activations)</div></div>
+</div>
+<p class="caption">Defaults are Llama-3-8B; the parameter box should read 8.03B. Try GPT-2 small (D=768, L=12, N=K=12, F=3072, V=50257, tied) to see tied embeddings at work, untick FlashAttention at S=8192 to watch the <code>B·N·S²</code> term explode, and toggle checkpointing to see activations drop toward <code>L·B·S·D</code>.</p>
+</div>
+
+<h3 id="impl">Implementation notes (the muscle-memory details)</h3>
+<p>Alisa's notes are explicit that interviews ask you to <em>write</em> this, often with AI assistance off. The parts people fumble:</p>
+<ul>
+<li><strong>Causal masking</strong>: <code>scores.masked_fill(~mask, -inf)</code> before the softmax, with the convention that <code>mask</code> is <code>True</code> where attention is allowed (<code>torch.tril</code>). <code>-inf</code> rather than a large negative keeps the softmax exact.</li>
+<li><strong>RoPE</strong>: precompute <code>cos(m·θᵢ)</code> and <code>sin(m·θᵢ)</code> for every (position, pair) at init (<code>θᵢ = base^(−2i/d)</code>); apply by reshaping the head dimension into <code>(H/2, 2)</code> pairs and rotating <code>(even, odd)</code> with two multiplies each, then interleaving back with <code>stack(...).flatten(-2)</code>. Rotate Q and K only, never V — position should affect <em>who</em> attends to whom, not <em>what</em> is passed.</li>
+<li><strong>The shape dance</strong>: project to <code>(B, S, 3D)</code>, reshape to <code>(B, S, 3, N, H)</code>, <code>unbind</code> Q/K/V, <code>transpose(1,2)</code> to <code>(B, N, S, H)</code>, attend, transpose back, reshape to <code>(B, S, D)</code>, output-project, add the residual.</li>
+<li><strong>Weight tying</strong> saves <code>V·D</code> parameters and acts as a regularizer at small scale; large models leave them untied because the input and output embeddings want different geometry.</li>
+<li><strong>Initialization</strong>: truncated normal with variance ~<code>2/(d_in + d_out)</code> for linear layers, and scaled-down (by depth) output projections so the residual stream's variance does not grow with layers; RMSNorm γ starts at 1.</li>
+<li><strong>Where FP32 lives</strong>: master weights, optimizer states, gradient accumulation, the softmax and cross-entropy (compute the log-sum-exp in FP32), and norm statistics. Everything matmul-shaped runs in BF16 (<a href="quantization.html#formats">Ch. 10</a>).</li>
+</ul>
+<div class="formula">def scaled_dot_product_attention(q, k, v, mask):          # q,k: (B, ..., S, d_k)  v: (B, ..., S, d_v)
+    d_k = q.shape[-1]
+    scores = (q @ k.transpose(-2, -1)) / math.sqrt(d_k)   # (B, ..., S, S)
+    scores = scores.masked_fill(~mask, -torch.inf)        # mask True = may attend
+    return softmax(scores, dim=-1) @ v                    # softmax subtracts the row max internally</div>
+
+<h3 id="gradflow">Gradient flow through sampling</h3>
+<p>Sampling a token is a discrete, non-differentiable step, so nothing downstream of a sample can send gradients back through it — which is exactly why RL post-training and RLHF need the <strong>score-function (REINFORCE) estimator</strong>: differentiate <code>log π(a|s)</code> weighted by a reward instead of differentiating through the sample (<a href="robot-learning.html#ladder">Ch. 17</a>). Two other escape hatches show up in interviews. The <strong>Gumbel-max trick</strong> samples a categorical by adding Gumbel(0,1) noise to each logit and taking the argmax; <strong>Gumbel-softmax</strong> replaces that argmax with a temperature-τ softmax, giving a stochastic, approximately discrete, fully differentiable relaxation — low τ means near one-hot samples, high τ means smooth gradients. The <strong>straight-through estimator</strong> applies the non-differentiable function in the forward pass and pretends it was the identity in the backward pass; the gradient's magnitude is wrong but its direction is right for monotone functions like rounding, which is why quantization-aware training uses it (<a href="quantization.html#qat">Ch. 10</a>).</p>
+
+<h2 id="reading">10. Where to go deeper</h2>
 <ul>
 <li><a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a> — the original; read it after this page and it will feel short.</li>
 <li><a href="https://jax-ml.github.io/scaling-book/inference/">How to Scale Your Model</a> — the arithmetic of transformers at scale (Step 6 of the plan).</li>
@@ -284,6 +359,31 @@ $('sampDraw').onclick=()=>{
 $('sampClear').onclick=()=>{outText=[];document.getElementById('sampOut').textContent='';};
 ['sampT','sampK','sampP'].forEach(id=>$(id).oninput=draw);
 draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 9. accounting calculator ----------
+(function(){
+const $=id=>document.getElementById(id);if(!$('acD'))return;
+const fmtN=n=>n>=1e12?(n/1e12).toFixed(2)+'T':n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':Math.round(n).toLocaleString();
+const fmtB=b=>{const u=['B','KB','MB','GB','TB','PB'];let i=0;while(b>=1024&&i<5){b/=1024;i++;}return b.toFixed(b>=100?0:b>=10?1:2)+' '+u[i];};
+const fmtF=f=>f>=1e12?(f/1e12).toFixed(2)+' TFLOP':f>=1e9?(f/1e9).toFixed(2)+' GFLOP':(f/1e6).toFixed(1)+' MFLOP';
+function upd(){
+  const D=+$('acD').value,L=+$('acL').value,N=+$('acN').value,K=+$('acK').value,F=+$('acF').value,V=+$('acV').value,S=+$('acS').value,B=+$('acB').value;
+  const H=D/N,tied=$('acTied').checked,flash=$('acFlash').checked,ckpt=$('acCkpt').checked;
+  const attn=2*D*D+2*D*K*H,ffn=3*D*F,norms=2*D;const perLayer=attn+ffn+norms;
+  const emb=(tied?1:2)*V*D;const params=L*perLayer+emb+D;const nonEmb=L*perLayer+D;
+  const fwd=2*nonEmb+2*D*V+4*L*S*D;const train=6*params;
+  const kvTok=2*L*K*H*2;
+  const actLayer=ckpt?(B*S*D):(14*B*S*D+(flash?B*N*S:B*N*S*S));const act=actLayer*L*2;
+  const inf=params*2+kvTok*S*B;const trainMem=params*18+act;
+  $('acParams').textContent=fmtN(params);$('acNonEmb').textContent=fmtN(nonEmb);
+  $('acFwd').textContent=fmtF(fwd);$('acTrain').textContent=fmtF(train);
+  $('acKV').textContent=fmtB(kvTok);$('acInf').textContent=fmtB(inf);$('acAct').textContent=fmtB(act);$('acTrainMem').textContent=fmtB(trainMem);
+}
+['acD','acL','acN','acK','acF','acV','acS','acB','acTied','acFlash','acCkpt'].forEach(id=>$(id).oninput=upd);
+$('acLlama').onclick=()=>{[['acD',4096],['acL',32],['acN',32],['acK',8],['acF',14336],['acV',128256]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=false;upd();};
+$('acGpt2').onclick=()=>{[['acD',768],['acL',12],['acN',12],['acK',12],['acF',3072],['acV',50257]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=true;upd();};
+upd();
 })();
 </script>
 </body>

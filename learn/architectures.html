@@ -73,7 +73,42 @@
 <p class="caption">Tokens stream through a top-2-of-8 router. Bars show cumulative load per expert. Untick balancing and watch the rich-get-richer collapse: the router's slight initial preference compounds until two experts take nearly all traffic — the failure every MoE training recipe is designed to prevent.</p>
 </div>
 
-<h2 id="ssm">3. State-space models: Mamba and the case against the KV cache</h2>
+
+<h2 id="rnn">3. Before transformers: RNNs and LSTMs (and why attention won)</h2>
+<p>Every "why transformers?" interview answer is really a comparison with recurrent networks, so it pays to know them properly. A <strong>vanilla RNN</strong> processes a sequence one step at a time, carrying a hidden state <code>h_t ∈ ℝ^H</code> that is updated from the current input and the previous state with weights shared across time:</p>
+<div class="formula">h_t = tanh(W_x·x_t + W_h·h_{t−1} + b),    y_t = W_out·h_t + b_out</div>
+<p>Training unrolls the recurrence and backpropagates through time (BPTT). The Jacobian between consecutive states is <code>∂h_t/∂h_{t−1} = diag(tanh′(z_t))·W_h</code>, and the gradient reaching step <code>t</code> from a loss at step <code>T</code> is a product of <code>T−t</code> such factors. <code>tanh′ ∈ (0, 1]</code> only shrinks, and repeated multiplication by <code>W_h</code> either shrinks or blows up depending on its largest singular value — so gradients across long gaps <strong>vanish or explode</strong>, and a vanilla RNN cannot learn dependencies more than a few dozen steps long. Gradient clipping handles the exploding side; nothing in the vanilla cell fixes vanishing.</p>
+<p>The <strong>LSTM</strong> fixes it by splitting memory from output. A cell state <code>c_t</code> flows along a "highway" touched only by element-wise gates — no matmul, no squashing nonlinearity between steps — while the hidden state <code>h_t</code> is a filtered view of it that is both the cell's output and its own query for the next step's gates:</p>
+<div class="formula">f_t = σ(W_f·[h_{t−1}, x_t] + b_f)        forget: what to erase
+i_t = σ(W_i·[h_{t−1}, x_t] + b_i)        input: what to write
+c̃_t = tanh(W_c·[h_{t−1}, x_t] + b_c)     candidate content
+c_t = f_t ⊙ c_{t−1} + i_t ⊙ c̃_t          cell update (the constant-error carousel)
+o_t = σ(W_o·[h_{t−1}, x_t] + b_o)        output: what to expose
+h_t = o_t ⊙ tanh(c_t)</div>
+<p>Because <code>∂c_t/∂c_{t−1} = f_t</code>, as long as the forget gate stays near 1 the gradient travels backward many steps essentially intact — this is the whole trick. The <strong>GRU</strong> is the two-gate simplification (reset and update gates, no separate cell state) that trains a bit faster with similar quality. Both still have the structural limits that attention removed.</p>
+
+<div class="card">
+<h3>Animation: gradients through time — RNN vs LSTM</h3>
+<canvas id="rnnViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <label class="ctl">spectral radius of W_h <input type="range" id="rnnRho" min="0.3" max="1.8" step="0.05" value="0.8"> <span id="rnnRhoL">0.80</span></label>
+  <label class="ctl"><input type="checkbox" id="rnnLstm"> LSTM cell (forget gate f)</label>
+  <label class="ctl">f <input type="range" id="rnnF" min="0.5" max="1" step="0.01" value="0.95"> <span id="rnnFL">0.95</span></label>
+</div>
+<p class="caption">An unrolled 16-step network with the loss at the last step. Bars show (log scale) how much gradient reaches each earlier step. In the vanilla RNN the factor per step is roughly <code>ρ · tanh′</code>: below 1 the signal dies within ~10 steps, above 1 it explodes. Switch to the LSTM: the cell-state path multiplies by the forget gate alone, so with <code>f ≈ 0.95</code> half the signal survives 14 steps and with <code>f → 1</code> all of it does — the constant-error carousel.</p>
+</div>
+
+<h3>Why attention won — and what came back</h3>
+<table class="cmp">
+<tr><th></th><th>RNN / LSTM</th><th>Transformer</th><th>SSM / linear-attention hybrid</th></tr>
+<tr><td>Training</td><td>Sequential over time (BPTT), poor GPU utilization</td><td>All positions in parallel; one big matmul per layer</td><td>Parallel via associative scan / chunked matmuls</td></tr>
+<tr><td>Path between distant tokens</td><td>O(distance) steps; information must survive every intermediate state</td><td>O(1): any token attends directly to any other</td><td>O(distance) through a state, but with learned selective forgetting</td></tr>
+<tr><td>Inference memory per token</td><td>Constant (one state)</td><td>Grows: KV cache O(n)</td><td>Constant state (+ small KV for the few attention layers)</td></tr>
+<tr><td>Exact recall of a specific earlier token</td><td>Weak</td><td>Strong (the KV cache is a lookup table)</td><td>Weak alone; hybrids add attention layers for it</td></tr>
+</table>
+<p>Transformers won on two counts the table makes plain: parallel training that saturates accelerators, and direct O(1) paths for long-range dependencies. The cost was the growing KV cache — which is exactly the pressure that brought recurrence back in modern dress as state-space models and gated linear attention (next section). Knowing the LSTM gate equations is not nostalgia: Mamba's selective gates and Gated DeltaNet's forgetting gates are the same idea with hardware-friendly math.</p>
+
+<h2 id="ssm">4. State-space models: Mamba and the case against the KV cache</h2>
 <p>Attention's superpower is also its bill: a cache that grows linearly with context and a decode step that must re-read all of it (<a href="inference.html#kv-cache">Ch. 9</a>). State-space models make the opposite trade: compress the entire past into a <strong>fixed-size recurrent state</strong>. Decode cost and memory are then <em>constant</em> in sequence length.</p>
 <p><strong>Mamba</strong>'s contribution (over earlier S4-style SSMs) is <em>selectivity</em>: the state-transition and input gates are functions of the current token, so the model can choose what to write into its state and what to forget — recovering some of attention's content-based addressing. <strong>Mamba-2 (SSD)</strong> then showed the selective scan can be computed with matmul-shaped primitives (semiseparable matrices), making it tensor-core friendly and revealing a formal duality with linear attention. Training parallelism comes from the <strong>associative scan</strong> — the same parallel-scan primitive you built in <a href="kernels.html">the kernels chapter</a>.</p>
 <p>The honest scorecard: SSMs win on long-context throughput and memory; pure SSMs lag attention on exact recall ("needle in a haystack", copying, in-context lookup) because a fixed state must lossily compress the past. Which is why the production answer became…</p>
@@ -89,7 +124,7 @@
 <p class="caption">Both models read the same stream. Top: attention appends every token's K,V — memory grows, and each step re-reads it all. Bottom: the SSM folds each token into a fixed-width state (watch it update in place — older contributions fade). Constant memory, constant step cost; the price is that faded information is gone unless a hybrid's attention layer can still see it.</p>
 </div>
 
-<h2 id="linear">4. Linear attention and sliding windows: cheaper mixers</h2>
+<h2 id="linear">5. Linear attention and sliding windows: cheaper mixers</h2>
 <p>Two other families attack the same O(n²)/O(n) costs without abandoning attention entirely:</p>
 <ul>
 <li><strong>Linear attention</strong> replaces softmax(QKᵀ)V with feature-mapped φ(Q)(φ(K)ᵀV), which associativity turns into a running (d×d) state — recurrent at decode, parallel at training. Modern gated variants (GLA, <strong>Gated DeltaNet</strong>, RWKV's line) add forgetting and delta-rule updates that fix the early versions' quality gap. Mamba-2's duality result means this family and SSMs are near-relatives.</li>
@@ -97,11 +132,11 @@
 </ul>
 <p>Pattern to remember for interviews: <strong>full attention is becoming a scarce resource spent on a few layers</strong>, with cheap mixers (windows, SSMs, linear attention) doing everything else. Serving engines mirror this: a hybrid's cache is a mix of per-layer ring buffers (windows), constant states (SSM), and real paged KV (full layers).</p>
 
-<h2 id="mtp">5. Multi-token prediction and architecture-for-inference</h2>
+<h2 id="mtp">6. Multi-token prediction and architecture-for-inference</h2>
 <p>DeepSeek-V3 trains an auxiliary <strong>MTP head</strong>: at each position the model also predicts the token after next, through a small extra transformer block. Training signal densifies (slightly better model), but the real payoff is serving: the MTP head is a built-in draft model for <a href="inference.html#speculative">speculative decoding</a> — self-speculation with high acceptance, no separate draft model to deploy. Medusa and EAGLE (Ch. 9) are the bolt-on versions of the same idea.</p>
 <p>This is the clearest example of a broader shift: <strong>architectures are now co-designed with their inference systems</strong>. MLA exists to shrink the cache; fine-grained MoE assumes expert parallelism; window/global ratios are tuned against paged-KV implementations; MTP assumes a speculative scheduler. Reading a model card now means reading its serving plan.</p>
 
-<h2 id="multimodal">6. Multimodal architectures</h2>
+<h2 id="multimodal">7. Multimodal architectures</h2>
 <p>Three dominant patterns, in increasing order of integration:</p>
 <ul>
 <li><strong>Encoder + projector (LLaVA pattern)</strong>: a pretrained vision encoder (ViT/SigLIP) turns the image into patch embeddings; a small projector (MLP or cross-attention resampler) maps them into the LLM's embedding space as "image tokens"; the LLM is then fine-tuned on interleaved data. Cheap, modular, and still the workhorse — Llama-Vision, Qwen-VL, Pixtral, InternVL all descend from it. Resolution handling (tiling, any-res) decides most of the quality.</li>
@@ -109,7 +144,7 @@
 <li><strong>Generation-side</strong>: diffusion or autoregressive image decoders bolted to the same trunk — outside this plan's scope, but the serving implication isn't: image tokens are thousands of prefill tokens, making multimodal serving prefill-heavy (<a href="inference.html">Ch. 9</a>'s chunked prefill matters even more; see vLLM's multimodal-inputs doc from Step 12).</li>
 </ul>
 
-<h2 id="frontier">7. The current frontier, honestly labeled</h2>
+<h2 id="frontier">8. The current frontier, honestly labeled</h2>
 <ul>
 <li><strong>Reasoning-era training</strong> (o1/R1 lineage): long chain-of-thought via RL (GRPO, <a href="training.html">Ch. 11</a>). Architecturally mostly <em>unchanged</em> — the innovation is post-training + test-time compute, and the serving impact is huge: thousands-of-token "thinking" generations shift load decode-ward.</li>
 <li><strong>Text diffusion LMs</strong>: generate by iterative denoising of whole sequences instead of left-to-right AR — parallel token generation, very different serving profile. Real research momentum (and an Axolotl training feature), not yet a production default.</li>
@@ -118,7 +153,7 @@
 </ul>
 
 
-<h2 id="paradigms">8. Generation paradigms and thinking modes: CLM, masked and diffusion LMs, System 1 vs System 2</h2>
+<h2 id="paradigms">9. Generation paradigms and thinking modes: CLM, masked and diffusion LMs, System 1 vs System 2</h2>
 <p>Everything above assumed one way of producing text: predict the next token, left to right, one forward pass per token. That is a <em>choice</em>, and it is worth seeing the alternatives clearly — both because they are now shipping (diffusion language models) and because the biggest capability jump of the last two years came not from a new block but from changing <em>how long</em> the model thinks before it answers.</p>
 
 <h3>8.1 Training objectives as paradigms: CLM, MLM, and the middle ground</h3>
@@ -174,7 +209,7 @@
 <h3>8.4 The non-autoregressive frontier (research)</h3>
 <p>Beyond masked diffusion, three lines are trying to make whole-sequence generation competitive with CLM and are best read as research rather than tooling: <strong>flow-matching</strong> text models that learn a straight-line transport from noise to token embeddings (the same objective π0 uses for robot actions in <a href="robot-learning.html">Ch. 17</a>); <strong>consistency</strong>-style models that collapse many denoising steps into one or two; and <strong>energy-based</strong> formulations that score whole sequences and sample by iterative refinement. All promise parallel, revisable generation; none has yet matched CLM at frontier scale on long-form coherence, which is why the practical answer today is "CLM for the backbone, diffusion for infilling and low-latency niches, System 2 via RL-trained thinking."</p>
 
-<h2 id="data">9. What 109 architectures say: the data</h2>
+<h2 id="data">10. What 109 architectures say: the data</h2>
 <p>Narratives drift; counts don't. The chart below is computed live from the <a href="gallery.html">Architecture Gallery</a> dataset vendored in this repo (Sebastian Raschka's metadata for every notable open-weight model, 2019–2026): for each release year, the share of models using each component. Read it as adoption curves.</p>
 <div class="card">
 <h3>Component adoption by release year</h3>
@@ -182,7 +217,7 @@
 <p class="caption">Share of models released each year that use the component (detected from the dataset's attention, layer-mix, and highlight fields; 2019 is GPT-2 alone, 2024 has six models, so weight the 2025–2026 columns most). GQA is near-universal; MoE crossed half the field; hybrids with SSM/linear-attention layers and sliding-window ratios went from rare to mainstream in one year; MLA, MTP, QK-norm, and NoPE follow. Open the gallery to filter the models behind any bar.</p>
 </div>
 
-<h2 id="recent">10. 2025–2026 developments, model by model</h2>
+<h2 id="recent">11. 2025–2026 developments, model by model</h2>
 <p>Beyond the big families above, the last two years added a layer of refinements that now appear in most new releases. Each one below is grounded in specific gallery entries; click through to the <a href="gallery.html">gallery</a> for the fact sheets and config files.</p>
 <table class="cmp">
 <tr><th>Development</th><th>What it is</th><th>Seen in (gallery)</th></tr>
@@ -204,7 +239,7 @@
 </table>
 <p>Step back and the pattern of <a href="#lineage">Section 1</a> still holds: <strong>cheaper mixers (DeltaNet, sliding windows, sparse indexers) take most layers; exact attention becomes rationed; residual streams and norms get re-engineered for stability; and inference hooks (MTP, KV sharing, index caches) ship inside the architecture</strong>. If you can explain those four sentences with two model examples each, you understand the 2026 frontier.</p>
 
-<h2 id="reading">11. Where to go deeper</h2>
+<h2 id="reading">12. Where to go deeper</h2>
 <ul>
 <li><a href="https://arxiv.org/abs/2405.04434">DeepSeek-V2</a> (MLA) and <a href="https://arxiv.org/html/2412.19437">DeepSeek-V3</a> (fine-grained MoE, aux-loss-free balancing, MTP) — the densest single sources of modern architecture ideas.</li>
 <li><a href="https://arxiv.org/abs/2312.00752">Mamba</a> and <a href="https://arxiv.org/abs/2405.21060">Mamba-2/SSD</a>; <a href="https://arxiv.org/abs/2502.11089">Native Sparse Attention</a>.</li>
@@ -495,6 +530,39 @@ function draw(){
   ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('share of models released that year using the component',x0,H-30);
 }
 draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3. RNN vs LSTM gradient flow ----------
+(function(){
+const cv=document.getElementById('rnnViz');if(!cv)return;const ctx=cv.getContext('2d');
+const rho=document.getElementById('rnnRho'),rl=document.getElementById('rnnRhoL'),lstm=document.getElementById('rnnLstm'),fg=document.getElementById('rnnF'),fl=document.getElementById('rnnFL');
+const T=16;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn');
+  const r=parseFloat(rho.value),f=parseFloat(fg.value),useL=lstm.checked;rl.textContent=r.toFixed(2);fl.textContent=f.toFixed(2);
+  const per=useL?f:r*0.65; // tanh' averages well below 1 on typical activations
+  const x0=60,y0=H-70,ph=H-130,cw=(W-x0-40)/T;
+  // log scale from 1e-6 to 1e+3
+  const lo=-6,hi=3;const yOf=v=>{const l=Math.max(lo,Math.min(hi,Math.log10(Math.max(v,1e-12))));return y0-(l-lo)/(hi-lo)*ph;};
+  ctx.strokeStyle=bd;ctx.lineWidth=1;ctx.font='11px sans-serif';ctx.fillStyle=dim;ctx.textAlign='right';
+  for(let l=lo;l<=hi;l+=3){const y=yOf(Math.pow(10,l));ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(W-40,y);ctx.stroke();ctx.fillText('1e'+l,x0-6,y+4);}
+  ctx.strokeStyle=warn;ctx.setLineDash([4,4]);const y1=yOf(1);ctx.beginPath();ctx.moveTo(x0,y1);ctx.lineTo(W-40,y1);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('gradient = 1 (no decay)',W-180,y1-6);
+  for(let t=0;t<T;t++){
+    const g=Math.pow(per,T-1-t);const x=x0+t*cw+4,y=yOf(g);
+    ctx.fillStyle=useL?acc2:(g>1?warn:acc);ctx.fillRect(x,Math.min(y,y1),cw-8,Math.abs(y1-y)+1);
+    ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('h'+(t+1),x+(cw-8)/2,y0+16);
+    if(t<T-1){ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x+cw-8,y0+6);ctx.lineTo(x+cw+2,y0+6);ctx.stroke();}
+  }
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  const g10=Math.pow(per,10);
+  ctx.fillText(useL?('LSTM cell path: ∂c_t/∂c_{t−1} = f = '+f.toFixed(2)+'  → after 10 steps '+ (g10>=0.01?(100*g10).toFixed(0)+'% of the gradient survives':'<1% survives'))
+             :('Vanilla RNN: per-step factor ≈ ρ·tanh′ ≈ '+per.toFixed(2)+'  → after 10 steps ×'+(g10>=100?g10.toExponential(1):g10.toFixed(g10<0.01?4:2))+(per>1?'  (exploding)':'  (vanishing)')),x0,28);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('loss at h16 → gradient reaching each earlier step (log scale)',x0,46);
+}
+[rho,fg].forEach(e=>e.oninput=draw);lstm.onchange=draw;draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 </script>
 </body>
