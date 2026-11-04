@@ -105,6 +105,30 @@
 
 <p>One subtlety: a newly admitted request still needs its prefill, which is long and compute-bound, and running it stalls every decoding request in the batch for that iteration. <strong>Sarathi-Serve</strong>'s answer is <em>chunked prefill</em>: split the prompt into chunks and co-schedule a chunk alongside the batch's decode steps each iteration, smoothing the stall into a small, bounded overhead. This is why you see "chunked prefill" as a flag in vLLM and friends.</p>
 
+
+<div class="card">
+<h3>Interactive: the latency–throughput Pareto frontier</h3>
+<div class="controls">
+  <label class="ctl">Model <select id="pfModel"><option value="l8">Llama-3-8B (dense)</option><option value="l70" selected>Llama-3-70B (dense)</option><option value="moe">400B MoE, 40B active</option></select></label>
+  <label class="ctl">Weights <select id="pfDtype"><option value="2">BF16</option><option value="1" selected>FP8</option><option value="0.5">INT4</option></select></label>
+  <label class="ctl">GPU <select id="pfGpu"><option value="h100" selected>H100 SXM (80 GB, 3.35 TB/s)</option><option value="b200">B200 (192 GB, 8 TB/s)</option><option value="r5080">RTX 5080 (16 GB, 0.96 TB/s)</option></select></label>
+</div>
+<div class="controls">
+  <label class="ctl">Tensor parallel <input type="range" id="pfTp" min="0" max="3" value="2"> <span id="pfTpLabel">4</span></label>
+  <label class="ctl">Context tokens <input type="range" id="pfCtx" min="10" max="16" value="13"> <span id="pfCtxLabel">8K</span></label>
+  <label class="ctl">$/GPU-hour <input type="number" id="pfPrice" value="3" min="0.1" step="0.1" style="width:70px"></label>
+</div>
+<canvas id="paretoViz" class="viz" width="900" height="360"></canvas>
+<div class="kpi">
+  <div class="box"><div class="v" id="pfLat1">–</div><div class="l">latency at B=1 (ms/token)</div></div>
+  <div class="box"><div class="v" id="pfKnee">–</div><div class="l">knee batch (bandwidth → compute)</div></div>
+  <div class="box"><div class="v" id="pfMax">–</div><div class="l">max throughput (tok/s)</div></div>
+  <div class="box"><div class="v" id="pfCost">–</div><div class="l">$ per 1M tokens at the knee</div></div>
+  <div class="box"><div class="v" id="pfBmax">–</div><div class="l">largest batch that fits</div></div>
+</div>
+<p class="caption">Each dot is one batch size (1, 2, 4, … 512); the curve is the frontier a single replica can reach, after the scaling book's cost-versus-latency figure for PaLM. Step time is modeled as max(weight bytes ÷ HBM bandwidth, 2 × active params × B ÷ FLOPs) plus the KV read for the whole batch, plus a small per-layer all-reduce when tensor-parallel. Left of the knee you are bandwidth-bound: every extra sequence rides the same weight sweep almost for free, so throughput climbs while latency barely moves. Past the knee the matmuls dominate, throughput saturates, and larger batches only add latency. Hollow dots are batches whose KV cache no longer fits in memory — the book's "green dot", where memory, not math, stops you. Raise tensor parallelism and watch the whole curve shift left (each chip reads a slice of the weights, latency has a lower floor) at a modest cost in throughput per chip; drop to INT4 and the knee moves earlier because the sweep is cheaper. A first-order model: it ignores scheduling gaps, kernel efficiency, and MoE routing imbalance, but it is the model the book uses to size deployments.</p>
+</div>
+
 <h2 id="paged">4. PagedAttention: virtual memory for the KV cache</h2>
 <p>Continuous batching created a memory problem. If each sequence pre-allocates a contiguous KV region sized for its <em>maximum possible</em> length, most of it is never used — the vLLM paper measured only 20–38% of KV memory doing useful work in prior systems, the rest lost to internal fragmentation and reservations. Fewer sequences fit, so the batch shrinks, so throughput falls.</p>
 <p><strong>PagedAttention</strong> borrows the oldest trick in operating systems: paging. The cache is carved into fixed-size <em>blocks</em> (e.g. 16 tokens each); a per-sequence <em>block table</em> maps logical positions to physical blocks allocated on demand. Waste is bounded to the last partially-filled block per sequence (near-zero fragmentation), and the same physical block can back many sequences — a shared system prompt is stored once and referenced by every request that uses it, with copy-on-write when a sequence diverges.</p>
@@ -121,6 +145,19 @@
 </div>
 
 <p>Prefix sharing generalizes beyond system prompts: <strong>SGLang's RadixAttention</strong> keeps finished sequences' KV in a radix tree keyed by token prefix, so few-shot prompts, chat histories, and tree-of-thought branches all reuse cached computation automatically. Distributed versions (<strong>Mooncake</strong>) treat the KV cache as a cluster-wide resource with its own data plane.</p>
+
+
+<div class="card">
+<h3>Animation: the prefix cache as a radix trie</h3>
+<canvas id="trieViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="trieNext">Next request</button>
+  <button class="btn secondary" id="trieReset">Reset</button>
+  <label class="ctl">Block budget <input type="range" id="trieBudget" min="14" max="40" value="22"> <span id="trieBudgetLabel">22</span></label>
+  <span class="dim" id="trieStats"></span>
+</div>
+<p class="caption">Requests arrive one at a time; each edge is a span of tokens and each node owns the KV blocks for that span. A new request walks the trie from the root, reuses every block on the longest matching prefix (green), and only recomputes its divergent suffix (orange) — the scaling book's LRU-trie figure and SGLang's RadixAttention. The two few-shot requests share the system prompt <em>and</em> their examples; the multi-turn chat is simply a path that keeps growing, so turn five re-pays nothing for turns one to four. When the pool exceeds the block budget, the least-recently-used leaf is evicted (red flash) — the same physical blocks PagedAttention manages, just indexed by content instead of by sequence. Agent loops, which re-send the same system prompt and history every iteration, are the workload this was built for (see <a href="agents.html">Agents</a>).</p>
+</div>
 
 <h2 id="metrics">5. Scheduling, SLOs, and goodput</h2>
 <p>Throughput alone is a bad target: a scheduler can always raise tokens/second by batching harder, at the cost of each user's latency. Production systems therefore optimize <strong>goodput</strong> — requests served <em>within their latency SLOs</em> (a TTFT bound and a TPOT bound) per unit of hardware (Etalon formalizes this). The levers:</p>
@@ -364,6 +401,148 @@ function draw(){
 function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('pagePlay').textContent='▶ Play';}}
 document.getElementById('pagePlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(tick,450);};
 document.getElementById('pageReset').onclick=()=>{stop();init();draw();};
+init();draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+
+// ---------- 3b. latency-throughput Pareto frontier ----------
+(function(){
+const cv=document.getElementById('paretoViz');if(!cv)return;const ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+const MODELS={l8:{total:8.03e9,active:8.03e9,L:32,kv:8,d:128,dm:4096},l70:{total:70.6e9,active:70.6e9,L:80,kv:8,d:128,dm:8192},moe:{total:400e9,active:40e9,L:64,kv:8,d:128,dm:7168}};
+const GPUS={h100:{bw:3.35e12,flops:990e12,mem:80e9,ic:450e9},b200:{bw:8e12,flops:2.25e15,mem:192e9,ic:900e9},r5080:{bw:960e9,flops:200e12,mem:16e9,ic:32e9}};
+const BATCHES=[1,2,4,8,16,32,64,128,256,512];
+function model(){
+  const m=MODELS[$('pfModel').value],g=GPUS[$('pfGpu').value],bpp=parseFloat($('pfDtype').value);
+  const tp=Math.pow(2,parseInt($('pfTp').value)),ctxLen=Math.pow(2,parseInt($('pfCtx').value)),price=parseFloat($('pfPrice').value)||0;
+  const kvPerTok=2*m.L*m.kv*m.d*2; // KV kept in BF16
+  const weightBytes=m.total*bpp, activeBytes=m.active*bpp;
+  const memFree=g.mem*tp-weightBytes;
+  const bmax=Math.floor(memFree/(kvPerTok*ctxLen));
+  const pts=BATCHES.map(B=>{
+    // MoE: each sequence routes to its own experts; bytes read grow with B until every expert is touched
+    const read=Math.min(weightBytes,activeBytes*B);
+    const tW=read/(tp*g.bw), tC=2*m.active*B/(tp*g.flops), tKV=B*kvPerTok*ctxLen/(tp*g.bw);
+    const tAR=tp>1?m.L*(10e-6+2*(tp-1)/tp*B*m.dm*2/g.ic):0;
+    const step=Math.max(tW,tC)+tKV+tAR;
+    const thr=B/step, cost=price*tp/3600/thr*1e6;
+    return {B,step,thr,cost,fits:B<=bmax,compute:tC>tW};
+  });
+  return {m,g,tp,ctxLen,price,bmax,pts,kvPerTok,weightBytes};
+}
+function fmt(x,d=1){return x>=1e6?(x/1e6).toFixed(d)+'M':x>=1e3?(x/1e3).toFixed(d)+'K':x.toFixed(x>=100?0:d);}
+function draw(){
+  const r=model();const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dng=css('--danger');
+  $('pfTpLabel').textContent=r.tp;$('pfCtxLabel').textContent=r.ctxLen>=1024?(r.ctxLen/1024)+'K':r.ctxLen;
+  const x0=70,x1=W-30,y0=H-50,y1=30;
+  const lats=r.pts.map(p=>p.step*1e3),thrs=r.pts.map(p=>p.thr);
+  const lx=[Math.log10(Math.min(...lats)*0.7),Math.log10(Math.max(...lats)*1.4)],ly=[Math.log10(Math.min(...thrs)*0.7),Math.log10(Math.max(...thrs)*1.6)];
+  const X=v=>x0+(Math.log10(v)-lx[0])/(lx[1]-lx[0])*(x1-x0),Y=v=>y0-(Math.log10(v)-ly[0])/(ly[1]-ly[0])*(y0-y1);
+  ctx.strokeStyle=bd;ctx.lineWidth=1;ctx.font='11px sans-serif';ctx.fillStyle=dim;
+  for(let e=Math.floor(lx[0]);e<=Math.ceil(lx[1]);e++){const v=Math.pow(10,e);if(v<Math.pow(10,lx[0])||v>Math.pow(10,lx[1]))continue;ctx.beginPath();ctx.moveTo(X(v),y1);ctx.lineTo(X(v),y0);ctx.stroke();ctx.textAlign='center';ctx.fillText(v+' ms',X(v),y0+16);}
+  for(let e=Math.floor(ly[0]);e<=Math.ceil(ly[1]);e++){const v=Math.pow(10,e);if(v<Math.pow(10,ly[0])||v>Math.pow(10,ly[1]))continue;ctx.beginPath();ctx.moveTo(x0,Y(v));ctx.lineTo(x1,Y(v));ctx.stroke();ctx.textAlign='right';ctx.fillText(fmt(v,0)+' tok/s',x0-6,Y(v)+4);}
+  ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('per-token decode latency (log)',(x0+x1)/2,H-6);
+  ctx.save();ctx.translate(14,(y0+y1)/2);ctx.rotate(-Math.PI/2);ctx.fillText('throughput per replica (log)',0,0);ctx.restore();
+  // curve
+  ctx.strokeStyle=acc;ctx.lineWidth=2;ctx.beginPath();
+  r.pts.forEach((p,i)=>{const x=X(p.step*1e3),y=Y(p.thr);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+  let knee=null;
+  r.pts.forEach(p=>{const x=X(p.step*1e3),y=Y(p.thr);
+    ctx.beginPath();ctx.arc(x,y,6,0,7);
+    if(p.fits){ctx.fillStyle=p.compute?warn:acc2;ctx.fill();}else{ctx.strokeStyle=dng;ctx.lineWidth=2;ctx.stroke();}
+    ctx.fillStyle=txt;ctx.font='10px monospace';ctx.textAlign='left';ctx.fillText('B='+p.B,x+8,y-6);
+    if(!knee&&p.compute)knee=p;});
+  if(knee){ctx.strokeStyle=warn;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(X(knee.step*1e3),y1);ctx.lineTo(X(knee.step*1e3),y0);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=warn;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('compute-bound from here →',X(knee.step*1e3)+6,y1+12);}
+  // legend
+  ctx.font='11px sans-serif';ctx.textAlign='left';
+  [[acc2,'bandwidth-bound (fits)'],[warn,'compute-bound (fits)'],[dng,'KV cache does not fit']].forEach(([c,l],i)=>{const lxp=x0+10,lyp=y1+14+i*16;ctx.beginPath();ctx.arc(lxp,lyp,5,0,7);if(i<2){ctx.fillStyle=c;ctx.fill();}else{ctx.strokeStyle=c;ctx.lineWidth=2;ctx.stroke();}ctx.fillStyle=dim;ctx.fillText(l,lxp+10,lyp+4);});
+  // KPIs
+  const fitting=r.pts.filter(p=>p.fits);
+  $('pfLat1').textContent=(r.pts[0].step*1e3).toFixed(1);
+  $('pfKnee').textContent=knee?('B≈'+knee.B):'> 512';
+  $('pfMax').textContent=fitting.length?fmt(Math.max(...fitting.map(p=>p.thr))):'0 (weights alone do not fit)';
+  $('pfCost').textContent=knee?('$'+knee.cost.toFixed(2)):(fitting.length?'$'+fitting[fitting.length-1].cost.toFixed(2):'–');
+  $('pfBmax').textContent=r.bmax>=512?'≥512':Math.max(0,r.bmax);
+}
+['pfModel','pfDtype','pfGpu','pfTp','pfCtx','pfPrice'].forEach(id=>{$(id).oninput=draw;$(id).onchange=draw;});
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 4b. prefix cache as a radix trie ----------
+(function(){
+const cv=document.getElementById('trieViz');if(!cv)return;const ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+// each request = list of spans [label, blocks]
+const REQS=[
+ {name:'few-shot A',spans:[['system prompt',6],['examples set 1',4],['Q: translate',2]]},
+ {name:'few-shot B',spans:[['system prompt',6],['examples set 1',4],['Q: summarize',2]]},
+ {name:'few-shot C',spans:[['system prompt',6],['examples set 2',4],['Q: classify',2]]},
+ {name:'chat turn 1',spans:[['system prompt',6],['user turn 1',2]]},
+ {name:'chat turn 2',spans:[['system prompt',6],['user turn 1',2],['assistant 1',3],['user turn 2',2]]},
+ {name:'few-shot A again',spans:[['system prompt',6],['examples set 1',4],['Q: translate',2]]},
+ {name:'chat turn 3',spans:[['system prompt',6],['user turn 1',2],['assistant 1',3],['user turn 2',2],['assistant 2',3],['user turn 3',2]]},
+ {name:'new tenant',spans:[['system prompt v2',6],['Q: extract',2]]},
+ {name:'new tenant, turn 2',spans:[['system prompt v2',6],['Q: extract',2],['assistant',3],['follow-up',2]]},
+];
+let root,clock,ri,reused,recomputed,last,evicted,timer=null;
+function init(){root={label:'root',blocks:0,children:[],used:0};clock=0;ri=0;reused=0;recomputed=0;last=null;evicted=[];}
+function totalBlocks(n){return n.blocks+n.children.reduce((a,c)=>a+totalBlocks(c),0);}
+function insert(req){
+  clock++;let node=root;const hit=[],miss=[];node.used=clock;
+  for(const [label,blocks] of req.spans){
+    let child=node.children.find(c=>c.label===label);
+    if(child){hit.push(child);}else{child={label,blocks,children:[],used:0};node.children.push(child);miss.push(child);}
+    child.used=clock;node=child;
+  }
+  reused+=hit.reduce((a,c)=>a+c.blocks,0);recomputed+=miss.reduce((a,c)=>a+c.blocks,0);
+  last={req,hit,miss};
+  // LRU eviction of leaves until within budget
+  const budget=parseInt($('trieBudget').value);evicted=[];
+  let guard=0;
+  while(totalBlocks(root)>budget&&guard++<50){
+    const leaves=[];(function walk(n,parent){if(n.children.length===0&&n!==root)leaves.push({n,parent});n.children.forEach(c=>walk(c,n));})(root,null);
+    const cand=leaves.filter(l=>!hit.includes(l.n)&&!miss.includes(l.n));
+    if(!cand.length)break;
+    cand.sort((a,b)=>a.n.used-b.n.used);const v=cand[0];
+    v.parent.children=v.parent.children.filter(c=>c!==v.n);evicted.push(v.n.label);
+  }
+}
+function layout(){
+  // assign rows to leaves, x by depth
+  let row=0;const pos=new Map();
+  (function walk(n,depth){
+    if(n.children.length===0){pos.set(n,{x:depth,y:row++});return;}
+    n.children.forEach(c=>walk(c,depth+1));
+    const ys=n.children.map(c=>pos.get(c).y);pos.set(n,{x:depth,y:(Math.min(...ys)+Math.max(...ys))/2});
+  })(root,0);
+  return {pos,rows:Math.max(row,1)};
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),dng=css('--danger'),card=css('--bg-card');
+  const {pos,rows}=layout();const colW=150,rowH=Math.min(44,(H-70)/rows),x0=20,y0=36;
+  const P=n=>{const p=pos.get(n);return {x:x0+p.x*colW,y:y0+p.y*rowH};};
+  // edges
+  (function walk(n){n.children.forEach(c=>{const a=P(n),b=P(c);ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(a.x+120,a.y+12);ctx.lineTo(b.x,b.y+12);ctx.stroke();walk(c);});})(root);
+  // nodes
+  (function walk(n){const p=P(n);const isHit=last&&last.hit.includes(n),isMiss=last&&last.miss.includes(n);
+    ctx.fillStyle=n===root?card:(isHit?acc2:isMiss?warn:card);ctx.strokeStyle=n===root?bd:(isHit?acc2:isMiss?warn:acc);ctx.lineWidth=1.5;
+    const w=n===root?60:120;ctx.beginPath();ctx.roundRect?ctx.roundRect(p.x,p.y,w,24,6):ctx.rect(p.x,p.y,w,24);ctx.fill();ctx.stroke();
+    ctx.fillStyle=(isHit||isMiss)?'#fff':txt;ctx.font='11px sans-serif';ctx.textAlign='left';
+    ctx.fillText(n===root?'root':n.label+' · '+n.blocks+' blk',p.x+6,p.y+16);
+    n.children.forEach(walk);})(root);
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText(last?('Request '+ri+'/'+REQS.length+': "'+last.req.name+'" — reused '+last.hit.reduce((a,c)=>a+c.blocks,0)+' blocks, computed '+last.miss.reduce((a,c)=>a+c.blocks,0)):'Press "Next request". Shared spans become shared trie nodes; only new suffixes cost prefill.',x0,20);
+  if(evicted.length){ctx.fillStyle=dng;ctx.font='12px sans-serif';ctx.fillText('evicted (LRU): '+evicted.join(', '),x0,H-12);}
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='right';ctx.fillText('green = reused KV · orange = freshly computed · blocks in pool: '+totalBlocks(root),W-12,H-12);
+  const tot=reused+recomputed;$('trieStats').textContent='cumulative: '+reused+' blocks reused vs '+recomputed+' computed'+(tot?(' — '+Math.round(100*reused/tot)+'% of prefill KV served from cache'):'');
+  $('trieBudgetLabel').textContent=$('trieBudget').value;
+}
+$('trieNext').onclick=()=>{if(ri>=REQS.length){init();}insert(REQS[ri]);ri++;draw();};
+$('trieReset').onclick=()=>{init();draw();};
+$('trieBudget').oninput=draw;
 init();draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 
