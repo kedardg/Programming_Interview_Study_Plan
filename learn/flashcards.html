@@ -196,6 +196,10 @@ const DECKS = {
 ["The DP recipe?","Define the state, write the recurrence, set base cases, choose the fill order (or memoize top-down), read off the answer."]
 ],
 "Customization & Evals": [
+["GLiNER's mechanism in one line?","A bidirectional DeBERTa encoder reads the label names as a prompt prefix, builds a representation for every candidate span up to a max width, embeds each label, and scores span×label pairs with a sigmoid — zero-shot NER in one forward pass, no generation."],
+["Encoder (GLiNER) vs decoder (Qwen/LLaMA SFT) fine-tuning — data and objective?","Encoder: text + spans + label strings, binary cross-entropy on span×label matches, minutes on one GPU. Decoder: instruction → JSON, next-token cross-entropy, hours; needs constrained decoding at inference."],
+["When does the encoder win vs the decoder for extraction?","Encoder: fixed/slow schema, high volume, latency/cost limits, auditable literal spans, CPU/on-prem. Decoder: reasoning over long context, normalization/linking, open-ended schemas, prose output."],
+["The hybrid extraction pattern?","GLiNER extracts grounded candidates at scale and the LLM reasons/normalizes over them; or the LLM labels silver data and GLiNER is fine-tuned on it — distillation of the expensive model's judgment into a cheap runner."],
 ["The customization ladder, bottom to top?","Prompting/few-shot → RAG → adapter SFT → full SFT → preference optimization → RL with verifiable rewards → distillation into a smaller model → continued pre-training → domain foundation model. Climb only as high as the eval demands."],
 ["First thing to define in a customization engagement?","The eval bar: measurable quality target plus latency and cost ceilings (e.g. pass@1 ≥ X on an internal suite, p95 TTFT ≤ Y, $/1K requests ≤ Z) — before touching a model."],
 ["Knowledge gap vs format gap — which path?","Format/style/skill gaps → SFT or preference tuning on a few thousand examples. Knowledge gaps → RAG first; continued pre-training only if the domain is large, stable, and RAG fails."],
