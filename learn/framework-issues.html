@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Framework Issues &amp; Gotchas</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+.sym{font-family:var(--mono);font-size:.82rem}
+table.cmp td{vertical-align:top}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px}
+.ic{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:.86rem}
+.ic .t{font-weight:650}.ic .m{color:var(--text-dim);font-size:.78rem;margin-top:4px}
+.fb{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.fb button{background:var(--bg-inset);color:var(--text);border:1px solid var(--border);border-radius:999px;padding:3px 10px;cursor:pointer;font-size:.8rem}
+.fb button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+details summary{cursor:pointer;color:var(--accent)}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html" class="here">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Known issues and gotchas: what the issue trackers and forums say</h1>
+<p class="dim">The recurring problems people actually hit with vLLM, SGLang, verl, Miles/slime, FSDP2, Megatron-Core, NeMo RL/Gym, OpenEnv, the Neuron SDK, Axolotl, TRL, llm-compressor, Locust and GenAI-Perf, GLiNER and LeRobot — pulled from their GitHub issue trackers (via the GitHub search API, sorted by 👍 reactions), the projects' own troubleshooting docs, and forums, on <strong>2026-11-04</strong>. Every linked issue below was returned by those queries; problem classes without a single canonical thread are marked as such. These stacks move monthly — treat version numbers as snapshots.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (11:17)</h3><audio controls preload="none" src="audio/framework-issues.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/framework-issues.txt">Read the transcript</a>.</p></div>
+<h2 id="triage">1. Reading an issue tracker like a technical lead</h2>
+<p>An issue tracker is the most honest documentation a framework has. The skill is reading it quickly and deciding what to do. Four signals carry most of the information: <strong>reactions</strong> (how many people hit it — the lists below are sorted by 👍), <strong>comment count</strong> (how long it stayed unresolved, or how many workarounds were traded), <strong>maintainer labels and linked PRs</strong> ("bug" + a merged PR means fixed in the next release; "feature" + no PR means wait or fork), and <strong>the version in the report</strong> (an OOM report from 0.7 says nothing about 0.11). The highest-reacted threads are often roadmaps and "day-0 support" trackers — those tell you what the maintainers are prioritizing, which is itself a planning input.</p>
+<p>The working habit: before adopting a framework for an engagement, read its ten most-reacted <em>open</em> issues and its troubleshooting page; pin every version in the stack (framework, CUDA, PyTorch, flash-attn, NCCL, the container tag); and when you hit a bug, reduce it to a minimal repro with exact versions and shapes before deciding between <em>work around</em> (pin, flag, patch) and <em>wait</em> (a linked PR exists). Filing that repro is also how you get capability gaps closed — the same discipline the <a href="hardware.html">hardware chapter</a> describes for the Neuron team.</p>
+<div class="formula">Triage in 90 seconds:
+1. Is it red on main for others? (search error text; sort by reactions)
+2. Which version introduced it? (pin one version back = fastest unblock)
+3. Is there a linked PR? (merged → upgrade; open → patch locally or wait)
+4. Can I reproduce in &lt;50 lines? (if not, it's probably my config)
+5. Does the fix change a number I size on? (memory, throughput → re-benchmark)</div>
+
+<h2 id="vllm">2. vLLM</h2>
+<table class="cmp">
+<tr><th>Symptom (what people paste)</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">The model's max seq len (N) is larger than the maximum number of tokens that can be stored in KV cache (M)</td><td>After weights and activations, the KV budget under <code>--gpu-memory-utilization</code> cannot hold one full-length sequence</td><td>Lower <code>--max-model-len</code>, raise utilization, quantize weights or KV, or add TP; the KV-budget arithmetic is in <a href="inference.html#kv-cache">Inference §2</a></td><td><a href="https://github.com/vllm-project/vllm/issues/15617">#15617</a> (reported on the 0.7.3→0.8.2 upgrade; the error text is the fix)</td></tr>
+<tr><td class="sym">No available memory for the cache blocks / torch.OutOfMemoryError during sampler warmup</td><td>Utilization caps the KV pool, not every allocation; CUDA-graph capture and warmup can exceed it, or another process holds the GPU</td><td>Lower <code>--max-num-seqs</code>, lower utilization, <code>--enforce-eager</code> to skip graph capture, free the GPU</td><td><a href="https://github.com/vllm-project/vllm/issues/1479">#1479</a>, forum threads on <a href="https://discuss.vllm.ai/t/running-out-of-memory-despite-very-low-gpu-memory-utilization/2756">"OOM despite low utilization"</a></td></tr>
+<tr><td class="sym">AsyncEngineDeadError: Background loop has errored already</td><td>The engine process died (OOM, illegal memory access, a kernel crash) and the API server kept running</td><td>Read the <em>first</em> traceback in the log, not the dead-loop one; it is almost always one of the rows above</td><td><a href="https://github.com/vllm-project/vllm/issues/5060">#5060</a>, tracking issue <a href="https://github.com/vllm-project/vllm/issues/5901">#5901</a></td></tr>
+<tr><td class="sym">Consumer Blackwell (RTX 5080/5090): no kernel image / FA3 not detected / "Sinks only supported in FA3"</td><td>sm_120 needs CUDA 12.8+ wheels and attention backends that support it; some kernels are datacenter-only</td><td>Follow the community setup thread; pick a supported attention backend; expect some features to lag</td><td><a href="https://github.com/vllm-project/vllm/issues/14452">#14452</a> (5080/5090 steps, 139 comments), <a href="https://github.com/vllm-project/vllm/issues/22279">#22279</a>, <a href="https://github.com/vllm-project/vllm/issues/13306">#13306</a></td></tr>
+<tr><td class="sym">Tool calls or reasoning missing / "Expected 2 output messages but got 7" / Harmony header errors (gpt-oss)</td><td>Chat template, reasoning parser and tool parser must match the model's output format; new formats break parsers</td><td>Use the model-specific <code>--reasoning-parser</code> / <code>--tool-call-parser</code>, pin the template, test with the usage guide</td><td><a href="https://github.com/vllm-project/vllm/issues/22403">#22403</a>, <a href="https://github.com/vllm-project/vllm/issues/23567">#23567</a></td></tr>
+<tr><td class="sym">Qwen3: thinking cannot be disabled, or tool calls lost when emitted inside the think block</td><td>Thinking is on by default; <code>enable_thinking=False</code> conflicted with the reasoning parser before 0.9; tool parsing only reads <code>content</code>, not reasoning</td><td>vLLM ≥ 0.9 with <code>--reasoning-parser qwen3</code>; pass <code>chat_template_kwargs.enable_thinking</code>; cap the thinking budget for latency endpoints (<a href="architectures.html">Architectures</a>, <a href="deployment.html">Deployment</a>)</td><td><a href="https://github.com/vllm-project/vllm/issues/17327">#17327</a> (Qwen3 usage guide, 96 comments), <a href="https://github.com/vllm-project/vllm/issues/39056">#39056</a> (Qwen3.5 tool calls lost), <a href="https://qwen.readthedocs.io/en/latest/deployment/vllm.html">Qwen docs</a></td></tr>
+<tr><td class="sym">Hybrid models + prefix caching + MTP: tool-call leakage, wrong needle results; MTP crash with illegal memory access on long sequences</td><td>New cache/speculation paths for Gated-DeltaNet hybrids are young; state that is not a plain KV block interacts badly with prefix reuse</td><td>Disable prefix caching or MTP for that model until the linked fix lands; re-run the needle test after upgrading</td><td><a href="https://github.com/vllm-project/vllm/issues/47194">#47194</a>, <a href="https://github.com/vllm-project/vllm/issues/40756">#40756</a></td></tr>
+<tr><td class="sym">Llama 3.1 / DeepSeek-V3 "known issues &amp; FAQ" threads</td><td>Each frontier model launch gets a pinned tracking issue collecting the first week's breakages</td><td>Read the tracking thread before deploying a new model family</td><td><a href="https://github.com/vllm-project/vllm/issues/6689">#6689</a>, <a href="https://github.com/vllm-project/vllm/issues/11539">#11539</a></td></tr>
+<tr><td class="sym">NCCL hang with tensor parallel; data-parallel offline mode</td><td>Multi-process engine + NCCL topology/env; features arriving per mode</td><td><code>NCCL_DEBUG=INFO</code>, check <code>NCCL_SOCKET_IFNAME</code>/P2P, see §15</td><td>commonly reported; feature thread <a href="https://github.com/vllm-project/vllm/issues/16588">#16588</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> Nearly every vLLM memory thread is the same arithmetic: weights + activations + KV pool must fit, and the pool is what <code>--gpu-memory-utilization</code> reserves — the calculator in <a href="inference.html#kv-cache">Inference §2</a> predicts the error before you see it. The second cluster is <em>format plumbing</em>: chat template, reasoning parser and tool parser are three separate contracts that must agree with how the model was trained, which is why the <a href="customization.html">eval harness</a> should include a parse-failure rate. The third is hardware generations: consumer Blackwell and each new model family get a long community thread before the wheels catch up. The most-reacted open issue at the time of writing is a feature request for TurboQuant KV-cache quantization (<a href="https://github.com/vllm-project/vllm/issues/38171">#38171</a>) — KV memory is still the pressure point.</p>
+
+<h2 id="sglang">3. SGLang</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">OOM during prefill</td><td>Chunked-prefill size too large for the memory left after the static pool</td><td>Lower <code>--chunked-prefill-size</code> to 4096 or 2048 (slower long prompts)</td><td><a href="https://docs.sglang.ai/references/troubleshooting.html">official troubleshooting</a></td></tr>
+<tr><td class="sym">OOM during decode</td><td>Too many concurrent sequences for the KV pool</td><td>Lower <code>--max-running-requests</code>; or lower <code>--mem-fraction-static</code> to 0.8/0.7 (less concurrency, less peak throughput)</td><td>same doc; VLM/LLM OOM tracking <a href="https://github.com/sgl-project/sglang/issues/9365">#9365</a></td></tr>
+<tr><td class="sym">OOM reported as "CUDA error: an illegal memory access"</td><td>Memory exhaustion surfaces as a kernel fault</td><td>Treat illegal-memory-access as OOM first; check "avail mem" at startup</td><td>same doc; EAGLE case <a href="https://github.com/sgl-project/sglang/issues/6309">#6309</a></td></tr>
+<tr><td class="sym">Server hangs or health check fails after startup</td><td>Very low available memory at init, or a multi-GPU deployment issue</td><td>Watch the "avail mem" line; test single-GPU first</td><td><a href="https://github.com/sgl-project/sglang/issues/22511">#22511</a></td></tr>
+<tr><td class="sym">OOM with input logprobs on long prompts</td><td>Logprob computation materializes large tensors</td><td>Set <code>logprob_start_len</code> to the needed span, or lower the static fraction</td><td>official troubleshooting</td></tr>
+<tr><td class="sym">Thinking + tool parser loops on token 0 (Qwen3.8-Flash-Next); HiCache consistency with PP</td><td>Parser/cache interactions on new hybrid models</td><td>Pin the model-specific parser; follow the fix plan thread</td><td><a href="https://github.com/sgl-project/sglang/issues/36537">#36537</a>, <a href="https://github.com/sgl-project/sglang/issues/22607">#22607</a></td></tr>
+<tr><td class="sym">Large-scale DeepSeek PD + EP deployment questions</td><td>The 564-comment thread is the de-facto manual for disaggregated MoE serving</td><td>Read it before attempting PD/EP at scale</td><td><a href="https://github.com/sgl-project/sglang/issues/6017">#6017</a>, ablations <a href="https://github.com/sgl-project/sglang/issues/3956">#3956</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> SGLang's static memory fraction is the same budget as vLLM's utilization, with the radix cache living inside it; the troubleshooting page is unusually good and maps symptom → flag directly. Beware third-party pages that invent flags (several results described a non-existent <code>--enable-radix-attention</code>; the real default is radix cache on, <code>--disable-radix-cache</code> to turn it off) — verify every flag against <code>--help</code>. The long PD/EP thread is the best public record of what disaggregated MoE serving (<a href="inference.html#metrics">Inference §5</a>, <a href="parallelism.html">Parallelism</a>) costs in practice.</p>
+
+<h2 id="verl">4. verl</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">Rollout OOM in the colocated HybridEngine</td><td>Trainer, reference and vLLM/SGLang engine share the GPUs; the engine's utilization fraction leaves too little for the trainer</td><td>Lower rollout <code>gpu_memory_utilization</code> (0.9 → 0.7), offload params/optimizer, use FSDP2 for faster/leaner resharding</td><td>commonly reported; no single canonical thread (third-party troubleshooting guides repeat the 0.9→0.7 advice)</td></tr>
+<tr><td class="sym">Breakage after a vLLM upgrade (patch layer errors)</td><td>verl patches vLLM internals; each vLLM release can break the patch</td><td>Stay in the version range the release notes pin; v0.7.1 notes a fix for the vLLM patch across versions</td><td>release notes; commonly reported</td></tr>
+<tr><td class="sym">ValueError: Feature type 'List' … (datasets version)</td><td>Incompatibility with newer <code>datasets</code> releases</td><td>Pin <code>datasets</code> to the version in the lockfile</td><td><a href="https://github.com/verl-project/verl/issues/2723">#2723</a> (open, 16 👍)</td></tr>
+<tr><td class="sym">Agentic RL on GPT-OSS / Megatron-Bridge backend not training</td><td>New model formats and backends land unevenly across the actor/rollout/ref paths</td><td>Follow the model's tracking thread; test the rollout path alone first</td><td><a href="https://github.com/verl-project/verl/issues/3794">#3794</a>, <a href="https://github.com/verl-project/verl/issues/5224">#5224</a></td></tr>
+<tr><td class="sym">Environment setup drift</td><td>pip resolution across vLLM/SGLang/Megatron/flash-attn</td><td>Use the official Docker images; the uv proposal thread is the ongoing fix</td><td><a href="https://github.com/verl-project/verl/issues/5853">#5853</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> verl's failures are the <a href="rl-systems.html">trainer–rollout machine</a> made concrete: the engine and the trainer compete for the same HBM in colocated mode, weight sync depends on private vLLM APIs, and the whole stack is a version matrix. The repo moved to the <code>verl-project</code> org; the most-reacted threads are roadmaps and the agent-abstraction RFC (<a href="https://github.com/verl-project/verl/issues/5790">#5790</a>), which is where multi-turn RL (<a href="rl-systems.html">§4–5</a>) is heading.</p>
+
+<h2 id="miles">5. Miles / slime</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">Run hangs on actor <code>update_weights</code></td><td>Weight sync from Megatron to SGLang stalls (version mismatch, NCCL, or engine apply failure)</td><td>Pin the SGLang/Megatron commits from the official image; try colocated mode; the delta-sync failure-swallowing bug explains silent stalls</td><td><a href="https://github.com/THUDM/slime/issues/950">#950</a>, <a href="https://github.com/THUDM/slime/issues/2104">#2104</a></td></tr>
+<tr><td class="sym">SGLang compatibility breaks</td><td>SGLang-native design tracks SGLang head closely</td><td>Watch the compatibility tracking issue</td><td><a href="https://github.com/THUDM/slime/issues/6">#6</a> (open tracker)</td></tr>
+<tr><td class="sym">CPU RAM leak as training progresses; Ray OOM on checkpoint save</td><td>Host-side buffers and checkpoint staging</td><td>Save without optimizer state / disable the weights backuper as a workaround; monitor host RAM</td><td><a href="https://github.com/THUDM/slime/issues/205">#205</a>, <a href="https://github.com/THUDM/slime/issues/1845">#1845</a></td></tr>
+<tr><td class="sym">Throughput far below verl on the same model</td><td>Configuration (colocation, TP/EP, rollout batch) rather than a bug, per the thread</td><td>Compare against the reference scripts before concluding</td><td><a href="https://github.com/THUDM/slime/issues/1072">#1072</a></td></tr>
+<tr><td class="sym">Miles roadmaps: MXFP8/NVFP4 RL, DeepSeek-V4, AMD, RDMA P2P weight updates</td><td>Where the enterprise fork is investing</td><td>Planning input for Blackwell/AMD engagements</td><td><a href="https://github.com/radixark/miles/issues/615">miles #615</a>, <a href="https://github.com/radixark/miles/issues/1046">#1046</a>, <a href="https://github.com/radixark/miles/issues/755">#755</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> In a disaggregated RL system the weight-sync path is the fragile link (<a href="rl-systems.html">RL Systems §2</a>): a hang there looks like "training stopped" with no error. Make weight sync observable (log the version applied on the engine side) before scaling out.</p>
+
+<h2 id="fsdp">6. PyTorch FSDP2</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">"got mixed torch.Tensor and DTensor"</td><td>Some parameters/buffers were not wrapped, or state was created before <code>fully_shard</code></td><td>Call <code>fully_shard</code> on every block and the root; create the optimizer after sharding</td><td><a href="https://github.com/pytorch/pytorch/issues/153354">#153354</a></td></tr>
+<tr><td class="sym">Metadata mismatch during activation-checkpoint recompute under autocast</td><td>Autocast context is lost during recomputation, so dtypes differ from the original forward</td><td>Use FSDP2's <code>MixedPrecisionPolicy</code> instead of autocast, or apply autocast inside the checkpointed function</td><td><a href="https://github.com/pytorch/pytorch/issues/148831">#148831</a></td></tr>
+<tr><td class="sym">Checkpoint save hangs / plain torch.save of DTensor state</td><td>Saving sharded state needs Distributed Checkpoint; <code>torch.save</code> on DTensors is a trap</td><td>Use <code>torch.distributed.checkpoint</code> (DCP) with <code>get_model_state_dict</code>; it also reshards on load</td><td><a href="https://github.com/pytorch/pytorch/issues/143536">#143536</a>; memory leak in <code>get_model_state_dict</code> <a href="https://github.com/pytorch/pytorch/issues/149100">#149100</a></td></tr>
+<tr><td class="sym">ValueError: expected to be in states [FORWARD_BACKWARD] …</td><td>Calling forward/backward in an unexpected order (e.g., a second forward before backward, eval inside train)</td><td>Keep one forward→backward per step per module; use <code>reshard_after_forward</code> deliberately</td><td><a href="https://github.com/pytorch/pytorch/issues/148756">#148756</a></td></tr>
+<tr><td class="sym">Slower convergence than DDP on the same job</td><td>Usually a hyperparameter/precision difference surfaced by sharding, not sharding itself</td><td>Compare loss curves at identical global batch and dtype policy</td><td><a href="https://github.com/pytorch/pytorch/issues/154984">#154984</a></td></tr>
+<tr><td class="sym">Silent parameter corruption after async CPU offload of uneven shards</td><td>Edge case in offload with uneven sharding</td><td>Avoid async CPU offload on uneven shards until fixed; verify a checkpoint round-trip</td><td><a href="https://github.com/pytorch/pytorch/issues/201049">#201049</a></td></tr>
+<tr><td class="sym">Mixed dtypes within one module not allowed</td><td>FSDP2 mixed precision is per-module</td><td>Split the module or keep one dtype policy per <code>fully_shard</code> group</td><td><a href="https://github.com/pytorch/pytorch/issues/156784">#156784</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> FSDP2's errors are the sharding layout leaking through: a DTensor is a tensor with a placement, and every API that touches state (checkpointing, optimizer construction, autocast, offload) has to be placement-aware. The original per-parameter-sharding RFC (<a href="https://github.com/pytorch/pytorch/issues/114299">#114299</a>) explains the design; <a href="parallelism.html">Parallelism</a> shows what is gathered and freed per layer.</p>
+
+<h2 id="megatron">7. Megatron-LM / Megatron-Core</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">AttributeError: module 'transformer_engine' has no attribute 'pytorch' / ImportError undefined symbol</td><td>Transformer Engine ABI/version mismatch with PyTorch or an incomplete TE install</td><td>Use the matching NGC container, or build TE against the exact PyTorch; both must share the C++ ABI setting</td><td><a href="https://github.com/NVIDIA/Megatron-LM/issues/696">#696</a>, <a href="https://docs.nvidia.com/deeplearning/transformer-engine/installation.html">TE install docs</a></td></tr>
+<tr><td class="sym">Attention mask ignored with packed sequences in the TE backend</td><td>Packing needs cumulative-sequence-length (THD) handling; a mask alone is ignored</td><td>Use the THD/packed-sequence path explicitly; test with a packed vs unpacked loss comparison</td><td><a href="https://github.com/NVIDIA/Megatron-LM/issues/2357">#2357</a></td></tr>
+<tr><td class="sym">Checkpoint conversion fails or produces garbage (HF ↔ Megatron)</td><td>TP/PP sizes must match the source; layer count must divide the target PP; TE changed checkpoint metadata after 1.10</td><td>Use Megatron Bridge for bidirectional conversion; pin TE; set the original parallel sizes</td><td><a href="https://github.com/NVIDIA/Megatron-LM/issues/37">#37</a>, <a href="https://github.com/NVIDIA/Megatron-LM/issues/2624">#2624</a>, <a href="https://docs.nvidia.com/nemo-framework/user-guide/latest/knownissues.html">NeMo known issues</a></td></tr>
+<tr><td class="sym">Silent numerical-correctness bugs when composing parallelisms</td><td>Interactions between TP/PP/CP/EP paths</td><td>Run a parallelism-composition parity test (same seed, compare losses) before long runs</td><td><a href="https://github.com/NVIDIA/Megatron-LM/issues/7452">#7452</a> (open)</td></tr>
+<tr><td class="sym">Long-context training with context parallel hangs/crashes</td><td>CP collectives and attention backend interactions</td><td>Validate CP on a short run; check NCCL env (§15)</td><td><a href="https://github.com/NVIDIA/Megatron-LM/issues/1025">#1025</a></td></tr>
+<tr><td class="sym">Fused kernel compilation gets stuck</td><td>JIT build at startup on a slow or shared filesystem</td><td>Prebuild in the image; clear the build cache</td><td><a href="https://github.com/NVIDIA/Megatron-LM/issues/82">#82</a></td></tr>
+<tr><td class="sym">MASTER_PORT=6000 collisions in example scripts</td><td>Default port clashes on shared nodes</td><td>Set a unique port per job</td><td><a href="https://github.com/NVIDIA/Megatron-LM/issues/5232">#5232</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> Megatron is a parallelism compiler with a strict environment contract; its most-reacted thread is the MoE roadmap (<a href="https://github.com/NVIDIA/Megatron-LM/issues/1729">#1729</a>) and the open correctness issue is a reminder to run parity tests whenever you change the parallel layout (<a href="parallelism.html">Parallelism §8</a>).</p>
+
+<h2 id="nemo">8. NeMo RL and NeMo Gym</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">Agent dies mid-rollout; empty epochs</td><td>Host (CPU) OOM when <code>num_prompts_per_step × num_generations_per_prompt</code> is too large</td><td>Shrink the product; newer builds hard-fail instead of silently truncating</td><td><a href="https://github.com/NVIDIA-NeMo/RL/pull/2394">RL PR #2394</a></td></tr>
+<tr><td class="sym">vLLM async generation timeout</td><td>Per-sample wait timeout (default 600 s) too short for long sequences</td><td>Raise <code>NRL_VLLM_ASYNC_TIMEOUT_SECONDS</code> (e.g. 1800)</td><td><a href="https://docs.nvidia.com/nemo/rl/latest/model-quirks.html">model quirks docs</a></td></tr>
+<tr><td class="sym">Convergence problems with vLLM CUDA graphs (DeepScaleR recipe)</td><td>Graph capture interacts with the recipe</td><td><code>enforce_eager: True</code> for that recipe</td><td>same doc</td></tr>
+<tr><td class="sym">FSDP2 path needs PyTorch ≥ 2.7</td><td>Older PyTorch lacks needed FSDP2 behavior</td><td>Upgrade PyTorch</td><td><a href="https://github.com/NVIDIA-NeMo/RL/issues/680">#680</a></td></tr>
+<tr><td class="sym">Generation-side pipeline parallelism for refit</td><td>Feature gap in the NCCL reshard path</td><td>Track the feature request</td><td><a href="https://github.com/NVIDIA-NeMo/RL/issues/4104">#4104</a></td></tr>
+<tr><td class="sym">NeMo Gym: Kubernetes deployment guidance, vLLM version bumps</td><td>Environment/reward servers are services with their own dependency matrix</td><td>Pin the Gym image to the vLLM it was tested with</td><td><a href="https://github.com/NVIDIA-NeMo/Gym/issues/1026">Gym #1026</a>, <a href="https://github.com/NVIDIA-NeMo/Gym/issues/1141">#1141</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> When environments and rewards become services (<a href="rl-systems.html">RL Systems §4</a>), host memory, timeouts and inter-service version pins become first-class failure modes — the GPU is no longer the only resource that can run out.</p>
+
+<h2 id="openenv">9. OpenEnv</h2>
+<p>OpenEnv's tracker was not searchable through the API at the time of writing (the repository name in the ecosystem listings did not resolve), so this section is class-level. The reported pattern class: environments run in Docker containers and are reached over WebSocket with a Gym-style <code>reset()/step()/state()</code> API, so the recurring problems are the ones every containerized env has — image build and startup time on first <code>reset()</code>, sandbox resource limits during <code>step()</code>, lost connections on long steps, and schema drift between the env's action/observation types and the trainer's expectations. <em>(commonly reported; no single canonical thread.)</em> Treat an OpenEnv integration as a service integration: health-check the env server, time out steps, and version the environment image with the training run.</p>
+
+<h2 id="neuron">10. AWS Neuron SDK (neuronx-cc, NxD, vLLM-Neuron, NKI)</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">An op silently runs on CPU (slow, extra device↔host copies)</td><td>Operator not implemented in the Neuron backend; the default is CPU fallback</td><td><code>torch_neuronx.get_fallback_ops()</code>; set <code>TORCH_NEURONX_FALLBACK_ONLY_FOR_UNIMPLEMENTED_OPS=1</code> to surface errors; <code>neuronx-cc list-operators</code></td><td><a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/_sources/torch/troubleshooting.rst">torch-neuronx troubleshooting</a></td></tr>
+<tr><td class="sym">NCC_* compilation failures (e.g. MATCH_REPLACE, tensor_map verification above ~12 layers, MoE kernel at seq &gt; 2048)</td><td>Compiler pass limits on specific graphs/shapes</td><td>Reduce the compiled unit (bucket sizes, layers per NEFF), report with the NCC code and shapes</td><td><a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/1303">#1303</a>, <a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/1392">#1392</a>, <a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/1372">#1372</a></td></tr>
+<tr><td class="sym">Compiled NEFF cache not reused across pods (vllm-neuron)</td><td>Remote cache configuration</td><td>Configure the remote NEFF cache; otherwise every pod recompiles</td><td><a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/1368">#1368</a></td></tr>
+<tr><td class="sym">Output differs from PyTorch/GPU</td><td>Numerics (accumulation order, fused ops, dtype), or a genuine miscompile (e.g. TopK wrong indices for some sizes)</td><td>Run the parity harness from <a href="hardware.html">Hardware §9</a>; isolate the first diverging layer; file a repro</td><td><a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/1400">#1400</a>, older <a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/765">#765</a>, <a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/756">#756</a></td></tr>
+<tr><td class="sym">FP8 storage dtype rejected on Trn2</td><td>Dtype support gaps per generation</td><td>Check the supported-dtype list for the SDK version; ask in the thread</td><td><a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/1393">#1393</a></td></tr>
+<tr><td class="sym">torch.compile(backend="neuron") lacks some op families (linalg)</td><td>Backend coverage</td><td>Fallback or rewrite; track coverage per release</td><td><a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/1438">#1438</a></td></tr>
+<tr><td class="sym">Dynamic shapes</td><td>Compiler needs static shapes; dynamic batching with embeddings historically failed</td><td>Bucket sequence lengths; compile per bucket</td><td><a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/564">#564</a>, <a href="https://github.com/aws-neuron/aws-neuron-sdk/issues/609">#609</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> Every Neuron thread is a lesson in the compiled-graph model: static shapes, explicit op coverage, and a compile cache that is part of your deployment. The issues with NCC codes are exactly the "minimal repro with shapes and compiler version" reports the <a href="hardware.html">migration playbook</a> asks for.</p>
+
+<h2 id="axolotl">11. Axolotl</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">Zero loss / NaN grad norm with Flash Attention; NaN with FSDP and <code>cpu_ram_efficient_loading=false</code></td><td>Precision/loading paths that produce NaNs; mask handling under packing</td><td>Confirm bf16, the attention backend, and the loading flag; compare one unpacked step</td><td><a href="https://github.com/axolotl-ai-cloud/axolotl/issues/1706">#1706</a>, <a href="https://github.com/axolotl-ai-cloud/axolotl/issues/3077">#3077</a>, <a href="https://github.com/axolotl-ai-cloud/axolotl/issues/1191">#1191</a></td></tr>
+<tr><td class="sym">Unreasonably high loss with sample packing (Qwen3-MoE)</td><td>Packing needs correct cumulative-length attention; model-specific paths can miss it</td><td>Disable packing to confirm; upgrade; check the model's packing support</td><td><a href="https://github.com/axolotl-ai-cloud/axolotl/issues/2626">#2626</a>; the <a href="https://github.com/huggingface/transformers/pull/31670">transformers sliding-window mask fix</a> explains one historical cause</td></tr>
+<tr><td class="sym">Sample packing refused without flash attention</td><td>By design — packing relies on the varlen attention path</td><td>Enable flash attention (or a supported backend)</td><td>validation added in <a href="https://github.com/axolotl-ai-cloud/axolotl/pull/1465">#1465</a></td></tr>
+<tr><td class="sym">DPO with chat_template fails on extra columns; Llama-3 DPO broken on main</td><td>Dataset columns vs the strategy's expected fields; fast-moving preference code</td><td>Drop extra columns; pin a release</td><td><a href="https://github.com/axolotl-ai-cloud/axolotl/issues/2415">#2415</a>, <a href="https://github.com/axolotl-ai-cloud/axolotl/issues/1624">#1624</a></td></tr>
+<tr><td class="sym">Tokenization extremely slow at the end for long multi-turn data</td><td>Chat-template tokenization cost grows with conversation length</td><td>Pre-tokenize once with <code>axolotl preprocess</code>; cap turns</td><td><a href="https://github.com/axolotl-ai-cloud/axolotl/issues/2396">#2396</a></td></tr>
+<tr><td class="sym">NCCL watchdog / illegal memory access during training</td><td>Usually a kernel crash on one rank (OOM, bad dtype)</td><td>Find the first failing rank's traceback; see §15</td><td><a href="https://github.com/axolotl-ai-cloud/axolotl/issues/1473">#1473</a></td></tr>
+<tr><td class="sym">Install: bitsandbytes wheels missing (macOS), ModuleNotFoundError after pip</td><td>Platform wheels and optional extras</td><td>Use the Docker image or the documented extras</td><td><a href="https://github.com/axolotl-ai-cloud/axolotl/issues/1436">#1436</a>, <a href="https://github.com/axolotl-ai-cloud/axolotl/issues/910">#910</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> Packing changes the attention contract (cumulative sequence lengths instead of a mask — <a href="training.html">Training §6</a>), so any model whose attention path does not honor it trains on cross-contaminated sequences and shows it as loss weirdness. Always A/B one step packed vs unpacked when adopting a new model family.</p>
+
+<h2 id="trl">12. TRL (GRPO/SFT/DPO trainers)</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">RuntimeError: same CUDA device for multiple distinct roles</td><td>vLLM server and trainer placed on the same GPU</td><td>Dedicate GPUs to the vLLM server; or use colocate mode knowingly (memory contention)</td><td><a href="https://huggingface.co/docs/trl/main/en/vllm_integration">vLLM integration docs</a></td></tr>
+<tr><td class="sym">OOM at vLLM init in GRPO</td><td><code>gpu_memory_utilization</code> default 0.9 too high alongside the trainer</td><td>Lower it; check the supported vLLM version range (docs list an explicit range)</td><td>same docs; LoRA+vLLM thread <a href="https://github.com/huggingface/trl/issues/2698">#2698</a></td></tr>
+<tr><td class="sym">GRPO loss starts at 0 then rises</td><td>Expected: with on-policy samples the ratio is 1 and the clipped objective's gradient is zero at step 0; the loss value is not the training signal</td><td>Watch reward and KL, not loss</td><td><a href="https://github.com/huggingface/trl/issues/2703">#2703</a></td></tr>
+<tr><td class="sym">think_format_reward always 0 when the chat template prefills &lt;think&gt;</td><td>Reward function expects the tag in the completion</td><td>Adjust the reward to the template (or the template to the reward)</td><td><a href="https://github.com/huggingface/trl/issues/6966">#6966</a></td></tr>
+<tr><td class="sym">AsyncGRPO NCCL weight transfer hangs forever with no error</td><td>Weight sync path stalls silently</td><td>Add timeouts/logging around sync; pin versions</td><td><a href="https://github.com/huggingface/trl/issues/6796">#6796</a></td></tr>
+<tr><td class="sym">Batch-size divisibility constraint (<code>per_device_batch × n_processes % n_generations</code>)</td><td>Groups must be whole within a global batch</td><td>Choose sizes so groups divide evenly</td><td><a href="https://github.com/huggingface/trl/issues/3061">#3061</a></td></tr>
+<tr><td class="sym">Multi-node GRPO with DeepSpeed + vLLM</td><td>Placement of server vs trainer ranks across nodes</td><td>Follow the thread's topology; keep the server on its own nodes</td><td><a href="https://github.com/huggingface/trl/issues/2754">#2754</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> The simplest GRPO implementation still contains the whole trainer–rollout problem: device placement, memory split, weight sync and reward-format contracts (<a href="rl-systems.html">RL Systems</a>). The "loss is zero" thread is a good interview question: why is the PPO/GRPO objective's value uninformative on-policy?</p>
+
+<h2 id="quant">13. llm-compressor / AutoAWQ</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">OOM during save_pretrained of the compressed model</td><td>Compression/serialization materializes full tensors</td><td>Use sequential onloading; save per-shard; free calibration data</td><td><a href="https://github.com/vllm-project/llm-compressor/issues/1183">#1183</a>, RFC <a href="https://github.com/vllm-project/llm-compressor/issues/2180">#2180</a></td></tr>
+<tr><td class="sym">New scale_dtype / zp_dtype not loadable by the released vLLM; dependency mismatch with a vLLM version</td><td>Checkpoint format moved ahead of the serving engine</td><td>Match llm-compressor and vLLM releases; re-export with the compatible config</td><td><a href="https://github.com/vllm-project/llm-compressor/issues/2057">#2057</a>, <a href="https://github.com/vllm-project/llm-compressor/issues/1474">#1474</a></td></tr>
+<tr><td class="sym">Output not loadable by latest HF Transformers</td><td>compressed-tensors format vs transformers version</td><td>Pin transformers / compressed-tensors together</td><td><a href="https://github.com/vllm-project/llm-compressor/issues/865">#865</a></td></tr>
+<tr><td class="sym">W8A8 slower than FP16; FP8-block fails to load on SM120 (orig_dtype)</td><td>Kernel availability per GPU generation; post-processing bug</td><td>Pick the scheme with kernels for your GPU (see <a href="quantization.html">Quantization §8</a>); track the issue</td><td><a href="https://github.com/vllm-project/llm-compressor/issues/2549">#2549</a>, <a href="https://github.com/vllm-project/llm-compressor/issues/1919">#1919</a></td></tr>
+<tr><td class="sym">AWQ accuracy/perf regressions on VLMs; AWQ only in float16 in vLLM</td><td>Vision towers and bf16 kernels are special cases</td><td>Exclude the vision tower from quantization; test with <code>--dtype float16</code></td><td><a href="https://discuss.vllm.ai/t/performance-degradation-and-compatibility-issues-with-awq-quantization-in-vllm-qwen2-5-vl-32b/1159">vLLM forum</a></td></tr>
+<tr><td class="sym">AutoAWQ deprecated</td><td>Maintenance moved to llm-compressor</td><td>Use llm-compressor's AWQ modifier for new work</td><td>commonly reported; secondary sources</td></tr>
+</table>
+<p><strong>What this teaches.</strong> A quantized checkpoint is a three-way contract between the compressor, the serving engine and transformers; the eval-after-quantization gate in <a href="deployment.html">Deployment §2</a> exists because format drift fails silently as accuracy, not as an exception.</p>
+
+<h2 id="loadtest">14. Locust and NVIDIA GenAI-Perf</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">Locust reports response time, not TTFT; no token metrics</td><td>Locust is a generic HTTP load tool; it has no LLM notion</td><td>Use <code>stream=True</code> + a first-chunk timer and custom metrics (the locustfile in <a href="deployment.html">Deployment §3</a>); or an LLM-specific wrapper</td><td><a href="https://github.com/locustio/locust/issues/3076">#3076</a> (tokens/s stats request), <a href="https://github.com/locustio/locust/issues/3018">#3018</a> (iter_lines for FastHttpUser)</td></tr>
+<tr><td class="sym">Chunk counts ≠ token counts</td><td>Servers stream 0..n tokens per SSE chunk</td><td>Count tokens with the model's tokenizer (or <code>stream_options.include_usage</code>), never chunks</td><td>commonly reported; no single canonical thread</td></tr>
+<tr><td class="sym">RPS lower than other tools / fixed-RPS mode</td><td>Closed-loop users with wait times; fixed-rate arrivals were a long-requested feature</td><td>Use constant-throughput pacing or an open-loop tool for rate sweeps</td><td><a href="https://github.com/locustio/locust/issues/646">#646</a>, <a href="https://github.com/locustio/locust/issues/277">#277</a></td></tr>
+<tr><td class="sym">GenAI-Perf: --streaming sometimes fails with OpenAI-style models; stream_options ignored</td><td>Endpoint/format edge cases</td><td>Pin the GenAI-Perf release; test one streaming request manually first</td><td><a href="https://github.com/triton-inference-server/perf_analyzer/issues/416">#416</a>, <a href="https://github.com/triton-inference-server/perf_analyzer/issues/413">#413</a></td></tr>
+<tr><td class="sym">GenAI-Perf metric definitions (request count, RPS, output throughput) unclear; custom datasets with OpenAI APIs</td><td>Documentation gaps</td><td>Read the metrics thread; align definitions with your SLOs before comparing tools</td><td><a href="https://github.com/triton-inference-server/perf_analyzer/issues/393">#393</a>, <a href="https://github.com/triton-inference-server/perf_analyzer/issues/412">#412</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> TTFT and TPOT are only comparable across tools when "token" and "arrival" mean the same thing — tokenizer-counted tokens and open-loop arrivals. That is why <a href="deployment.html">Deployment §3</a> insists on open-loop sweeps and a shared tokenizer.</p>
+
+<h2 id="gliner">15. GLiNER</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">Bad results when fine-tuning</td><td>Data format (character vs token spans), label naming, too-high LR for the encoder, no threshold tuning</td><td>Follow the data format thread; split LRs; tune the threshold on a dev set; watch span-F1 (<a href="customization.html">Customization §8</a>)</td><td><a href="https://github.com/urchade/GLiNER/issues/294">#294</a>, format <a href="https://github.com/urchade/GLiNER/issues/291">#291</a>, example broken <a href="https://github.com/urchade/GLiNER/issues/169">#169</a></td></tr>
+<tr><td class="sym">max_length / truncation not working; 384-token limit</td><td>Encoder context limit; chunking is the intended path</td><td>Chunk long documents (the library keeps a chunking argument)</td><td><a href="https://github.com/urchade/GLiNER/issues/244">#244</a>, <a href="https://github.com/urchade/GLiNER/issues/82">#82</a>, <a href="https://github.com/urchade/GLiNER/issues/185">#185</a></td></tr>
+<tr><td class="sym">CUBLAS_STATUS_NOT_INITIALIZED on Blackwell with cu130</td><td>PyTorch/CUDA wheel mismatch for new GPUs</td><td>Use a PyTorch build with Blackwell kernels</td><td><a href="https://github.com/urchade/GLiNER/issues/343">#343</a></td></tr>
+<tr><td class="sym">Install downgrades transformers; model fails to load</td><td>Pinned dependency ranges</td><td>Install in its own environment; pin transformers</td><td><a href="https://github.com/urchade/GLiNER/issues/290">#290</a>, <a href="https://github.com/urchade/GLiNER/issues/216">#216</a></td></tr>
+<tr><td class="sym">Repeated partial entity forms missed; no metrics logging during training</td><td>Model/training-loop limitations</td><td>Post-process repeats; add a metrics callback</td><td><a href="https://github.com/urchade/GLiNER/issues/242">#242</a>, <a href="https://github.com/urchade/GLiNER/issues/243">#243</a></td></tr>
+</table>
+
+<h2 id="lerobot">16. LeRobot</h2>
+<table class="cmp">
+<tr><th>Symptom</th><th>Root cause</th><th>Fix / workaround</th><th>Status / thread</th></tr>
+<tr><td class="sym">Dataset version errors (v1 → v2 → v2.1); "better way to manage dataset versions"</td><td>The on-disk format changed (per-episode stats, video layout); forward/backward compatibility is checked at load</td><td>Run the converter the error names; upgrade LeRobot for newer datasets; always use the <code>lerobot/</code> namespace</td><td><a href="https://github.com/huggingface/lerobot/issues/2446">#2446</a>; <a href="https://www.mintlify.com/huggingface/lerobot/resources/troubleshooting">troubleshooting</a></td></tr>
+<tr><td class="sym">FrameTimestampError on concatenated datasets; slow video decoding; missing ffmpeg/libsvtav1</td><td>Floating-point timestamp drift; codec availability</td><td>Install ffmpeg with the AV1 encoder; follow the drift fix thread</td><td><a href="https://github.com/huggingface/lerobot/issues/3177">#3177</a>, <a href="https://github.com/huggingface/lerobot/issues/1623">#1623</a></td></tr>
+<tr><td class="sym">Config decoding errors (fields not valid for ACTConfig)</td><td>Config schema changed between releases</td><td>Match config keys to the installed version</td><td><a href="https://github.com/huggingface/lerobot/issues/850">#850</a></td></tr>
+<tr><td class="sym">π0 weight/key mismatch with transformers ≥ 4.52; memory regression from double model construction</td><td>Upstream library changes; a loading bug</td><td>Pin transformers; upgrade past the fix</td><td><a href="https://github.com/huggingface/lerobot/issues/1406">#1406</a>, <a href="https://github.com/huggingface/lerobot/issues/3251">#3251</a></td></tr>
+<tr><td class="sym">Cannot reproduce SmolVLA LIBERO results; GPU underutilization after a release</td><td>Eval setup details; dataloader regressions</td><td>Follow the reproduction threads; compare versions</td><td><a href="https://github.com/huggingface/lerobot/issues/2354">#2354</a>, <a href="https://github.com/huggingface/lerobot/issues/2282">#2282</a></td></tr>
+</table>
+<p><strong>What this teaches.</strong> Robot-learning stacks (<a href="robot-learning.html">RL &amp; Robotics §8</a>) fail at the data layer more than the model layer: dataset format versions, video codecs and timestamps are the recurring cost.</p>
+
+<h2 id="cross">17. Cross-cutting gotchas and the debugging order</h2>
+<table class="cmp">
+<tr><th>Gotcha</th><th>Why it bites</th><th>Habit</th></tr>
+<tr><td>CUDA / driver / PyTorch / flash-attn version matrix</td><td>Every framework pins a different combination; consumer Blackwell needs CUDA 12.8+ wheels</td><td>One container tag per stack; record it in the run config</td></tr>
+<tr><td>pip resolver conflicts (vLLM vs SGLang vs verl vs TRL vs Megatron)</td><td>They pin overlapping torch/transformers/flash-attn ranges (TRL's docs give an explicit vLLM range; llm-compressor's format moved ahead of vLLM)</td><td>Separate environments per role (trainer vs engine); use the frameworks' images</td></tr>
+<tr><td>Chat template / tokenizer mismatch between training and serving</td><td>Silent: the model answers, just worse; reward functions and parsers also depend on it (TRL #6966, vLLM #22403)</td><td>Serialize the exact template with the checkpoint; add a round-trip test to the eval harness</td></tr>
+<tr><td>bf16 vs fp16 NaNs; FP8 scales</td><td>fp16 overflows in attention logits/norms; FP8 needs per-tensor or block scales</td><td>bf16 by default; keep norms/softmax in fp32 (<a href="quantization.html">Quantization §1</a>)</td></tr>
+<tr><td>NCCL hangs / watchdog timeouts</td><td>Wrong NIC, blocked fabric, diverging ranks (one rank in eval/checkpoint), tiny /dev/shm in Docker; raising the timeout hides it</td><td><code>NCCL_DEBUG=INFO</code>, <code>NCCL_SOCKET_IFNAME</code>, <code>TORCH_DISTRIBUTED_DEBUG=DETAIL</code>, flight recorder; find the rank that is not in the collective (<a href="https://discuss.huggingface.co/t/nccl-watchdog-timeout-error-while-using-deepspeed-and-accelerate/163195">HF forum</a>, <a href="https://nvidia.github.io/OSMO/main/user_guide/troubleshooting/nccl.html">NVIDIA OSMO guide</a>)</td></tr>
+<tr><td>Checkpoint format conversions (HF ↔ Megatron ↔ DCP ↔ compressed-tensors)</td><td>Parallel sizes, TE metadata versions, quantization config versions</td><td>Round-trip test: convert, load, compare logits on 8 prompts</td></tr>
+<tr><td>Compile caches (Neuron NEFF, Triton/torch.compile, fused kernels)</td><td>Cold starts and "works on my pod" differences</td><td>Persist caches in the image or a shared store</td></tr>
+<tr><td>Static-shape assumptions</td><td>Neuron requires them; CUDA graphs prefer them; dynamic batching breaks both</td><td>Bucket shapes; test the largest bucket first</td></tr>
+</table>
+<div class="formula">Debugging order that finds most bugs fastest:
+1. Pin versions and reproduce on one GPU, one process, eager mode.
+2. Memory: compute the budget (weights + KV/activations) before touching flags.
+3. Numerics: bf16 everywhere? NaN on step 1 = dtype/mask; NaN later = LR/data.
+4. Comms: NCCL_DEBUG=INFO; which rank is missing from the collective?
+5. Formats: tokenizer/template/parser round-trip on 8 prompts.
+6. Only then: performance flags, graphs, speculation, packing.</div>
+
+<h2 id="board">18. Interactive: the triage board</h2>
+<div class="card">
+<div class="fb" id="fwFilter"></div>
+<div class="fb" id="classFilter"></div>
+<canvas id="scatter" class="viz" width="900" height="300"></canvas>
+<p class="caption">Each dot is a thread from the tables above: x = 👍 reactions at the time of writing (log scale, approximate; GitHub API), y = how often the class recurs across frameworks in this chapter. Filter by framework or problem class; the cards update. Hover a dot for its title.</p>
+<div class="cards" id="cards"></div>
+</div>
+
+<h2 id="living">19. Keeping this page alive</h2>
+<details><summary>How this page was built and how to refresh it</summary>
+<p>Issue lists came from the GitHub search API (<code>/search/issues?q=repo:… is:issue …&amp;sort=reactions-+1</code>), queried per repository for the top-reacted issues and for bug-class keywords, on 2026-11-04; docs and forum pages came from web search. Re-run the same queries (unauthenticated: 10 requests/minute) and replace the tables' links; keep the rule that only fetched or search-returned URLs are cited. Queries used: repo-only top lists for vllm-project/vllm, sgl-project/sglang, verl-project/verl, THUDM/slime, radixark/miles, pytorch/pytorch (FSDP2), NVIDIA/Megatron-LM, NVIDIA-NeMo/RL, NVIDIA-NeMo/Gym, aws-neuron/aws-neuron-sdk, axolotl-ai-cloud/axolotl, huggingface/trl, vllm-project/llm-compressor, locustio/locust, triton-inference-server/perf_analyzer, urchade/GLiNER, huggingface/lerobot; plus keyword queries: "out of memory", "chat template", "illegal memory access", "NCCL hang", "Qwen3 reasoning parser", "mem-fraction-static", "hang", "radix cache", "nan loss", "sample_packing flash attention", "chat_template tokenizer", "GRPO vllm", "checkpoint convert huggingface", "unsupported operator compile", "accuracy mismatch GPU", "dataset version", "ffmpeg", "fine-tuning", "threshold", "streaming response", "genai-perf tokenizer", "vllm load error", "update weights", "FSDP2 fully_shard checkpoint DTensor", "FSDP2 mixed precision".</p></details>
+
+<h2 id="reading">20. Where to go deeper</h2>
+<ul>
+<li>Issue trackers sorted by reactions: <a href="https://github.com/vllm-project/vllm/issues?q=is%3Aissue+sort%3Areactions-%2B1-desc">vLLM</a>, <a href="https://github.com/sgl-project/sglang/issues?q=is%3Aissue+sort%3Areactions-%2B1-desc">SGLang</a>, <a href="https://github.com/verl-project/verl/issues?q=is%3Aissue+sort%3Areactions-%2B1-desc">verl</a>, <a href="https://github.com/THUDM/slime/issues">slime</a>, <a href="https://github.com/radixark/miles/issues">Miles</a>, <a href="https://github.com/NVIDIA/Megatron-LM/issues">Megatron-LM</a>, <a href="https://github.com/NVIDIA-NeMo/RL/issues">NeMo RL</a>, <a href="https://github.com/NVIDIA-NeMo/Gym/issues">NeMo Gym</a>, <a href="https://github.com/aws-neuron/aws-neuron-sdk/issues">Neuron SDK</a>, <a href="https://github.com/axolotl-ai-cloud/axolotl/issues">Axolotl</a>, <a href="https://github.com/huggingface/trl/issues">TRL</a>, <a href="https://github.com/vllm-project/llm-compressor/issues">llm-compressor</a>, <a href="https://github.com/locustio/locust/issues">Locust</a>, <a href="https://github.com/triton-inference-server/perf_analyzer/issues">GenAI-Perf</a>, <a href="https://github.com/urchade/GLiNER/issues">GLiNER</a>, <a href="https://github.com/huggingface/lerobot/issues">LeRobot</a>.</li>
+<li>Troubleshooting docs: <a href="https://docs.sglang.ai/references/troubleshooting.html">SGLang</a>, <a href="https://awsdocs-neuron.readthedocs-hosted.com/en/latest/_sources/torch/troubleshooting.rst">torch-neuronx</a>, <a href="https://docs.nvidia.com/nemo/rl/latest/model-quirks.html">NeMo RL model quirks</a>, <a href="https://huggingface.co/docs/trl/main/en/vllm_integration">TRL vLLM integration</a>, <a href="https://docs.nvidia.com/deeplearning/transformer-engine/installation.html">Transformer Engine install</a>, <a href="https://docs.nvidia.com/nemo-framework/user-guide/latest/knownissues.html">NeMo known issues</a>, <a href="https://qwen.readthedocs.io/en/latest/deployment/vllm.html">Qwen on vLLM</a>.</li>
+<li>Forums: <a href="https://discuss.vllm.ai/">discuss.vllm.ai</a>, <a href="https://discuss.huggingface.co/">Hugging Face forums</a>, <a href="https://discuss.pytorch.org/">PyTorch forums</a>, <a href="https://repost.aws/">AWS re:Post</a>.</li>
+<li>This notebook: <a href="frameworks.html">Frameworks</a> for what each tool is, <a href="deployment.html">Deployment</a> for the runbook, the <em>Framework Gotchas</em> deck on <a href="flashcards.html">Flashcards</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="deployment.html">← Deployment</a><a href="robot-learning.html">RL &amp; Robotics →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------- triage board ----------
+(function(){
+const ISSUES=[
+ {fw:"vLLM",cls:"memory",up:0,n:"15617",t:"KV cache cannot hold max seq len after upgrade",u:"https://github.com/vllm-project/vllm/issues/15617"},
+ {fw:"vLLM",cls:"memory",up:0,n:"1479",t:"OOM running AWQ 7B; fix via max-model-len / utilization",u:"https://github.com/vllm-project/vllm/issues/1479"},
+ {fw:"vLLM",cls:"correctness",up:20,n:"5060",t:"AsyncEngineDeadError: background loop errored",u:"https://github.com/vllm-project/vllm/issues/5060"},
+ {fw:"vLLM",cls:"versions",up:27,n:"14452",t:"Steps to run vLLM on RTX 5080/5090",u:"https://github.com/vllm-project/vllm/issues/14452"},
+ {fw:"vLLM",cls:"versions",up:21,n:"22279",t:"gpt-oss: FA3 not detected on RTX 5090 (sinks need FA3)",u:"https://github.com/vllm-project/vllm/issues/22279"},
+ {fw:"vLLM",cls:"correctness",up:35,n:"22403",t:"gpt-oss: expected 2 output messages, got 7 (parser)",u:"https://github.com/vllm-project/vllm/issues/22403"},
+ {fw:"vLLM",cls:"correctness",up:22,n:"23567",t:"Harmony: unexpected tokens in message header",u:"https://github.com/vllm-project/vllm/issues/23567"},
+ {fw:"vLLM",cls:"correctness",up:40,n:"17327",t:"Qwen3 usage guide (thinking, parsers)",u:"https://github.com/vllm-project/vllm/issues/17327"},
+ {fw:"vLLM",cls:"correctness",up:13,n:"39056",t:"Qwen3.5 tool calls lost with XML tool_call",u:"https://github.com/vllm-project/vllm/issues/39056"},
+ {fw:"vLLM",cls:"correctness",up:5,n:"47194",t:"Qwen3.6 hybrid + prefix caching + MTP: tool-call leakage",u:"https://github.com/vllm-project/vllm/issues/47194"},
+ {fw:"vLLM",cls:"memory",up:10,n:"40756",t:"MTP speculative decoding illegal memory access on long seqs",u:"https://github.com/vllm-project/vllm/issues/40756"},
+ {fw:"vLLM",cls:"performance",up:129,n:"38171",t:"TurboQuant KV-cache quantization (feature)",u:"https://github.com/vllm-project/vllm/issues/38171"},
+ {fw:"SGLang",cls:"memory",up:4,n:"9365",t:"[Tracking] VLM/LLM OOM related issues",u:"https://github.com/sgl-project/sglang/issues/9365"},
+ {fw:"SGLang",cls:"memory",up:1,n:"6309",t:"EAGLE2: illegal memory access",u:"https://github.com/sgl-project/sglang/issues/6309"},
+ {fw:"SGLang",cls:"comms",up:4,n:"22511",t:"2×H100 GLM5 health check failed",u:"https://github.com/sgl-project/sglang/issues/22511"},
+ {fw:"SGLang",cls:"correctness",up:5,n:"36537",t:"Thinking + tool parser loops on token 0",u:"https://github.com/sgl-project/sglang/issues/36537"},
+ {fw:"SGLang",cls:"correctness",up:15,n:"22607",t:"PP + HiCache consistency fix plan",u:"https://github.com/sgl-project/sglang/issues/22607"},
+ {fw:"SGLang",cls:"performance",up:65,n:"6017",t:"Running DeepSeek with large-scale PD and EP",u:"https://github.com/sgl-project/sglang/issues/6017"},
+ {fw:"verl",cls:"versions",up:16,n:"2723",t:"datasets version incompatibility (Feature type 'List')",u:"https://github.com/verl-project/verl/issues/2723"},
+ {fw:"verl",cls:"versions",up:2,n:"5853",t:"Adopt uv for environment management",u:"https://github.com/verl-project/verl/issues/5853"},
+ {fw:"verl",cls:"correctness",up:4,n:"3794",t:"Agentic RL support in GPT-OSS",u:"https://github.com/verl-project/verl/issues/3794"},
+ {fw:"verl",cls:"correctness",up:1,n:"5224",t:"Unable to train GPT-OSS with Megatron-Bridge backend",u:"https://github.com/verl-project/verl/issues/5224"},
+ {fw:"Miles/slime",cls:"comms",up:0,n:"950",t:"qwen3-4b example hangs on update_weights",u:"https://github.com/THUDM/slime/issues/950"},
+ {fw:"Miles/slime",cls:"comms",up:0,n:"2104",t:"Delta weight sync: failed engine apply silently swallowed",u:"https://github.com/THUDM/slime/issues/2104"},
+ {fw:"Miles/slime",cls:"memory",up:3,n:"205",t:"CPU RAM leakage as training progresses",u:"https://github.com/THUDM/slime/issues/205"},
+ {fw:"Miles/slime",cls:"memory",up:0,n:"1845",t:"Ray OOM when saving checkpoint",u:"https://github.com/THUDM/slime/issues/1845"},
+ {fw:"Miles/slime",cls:"performance",up:6,n:"1072",t:"4× slower than verl on the same model",u:"https://github.com/THUDM/slime/issues/1072"},
+ {fw:"FSDP2",cls:"correctness",up:4,n:"153354",t:"got mixed torch.Tensor and DTensor",u:"https://github.com/pytorch/pytorch/issues/153354"},
+ {fw:"FSDP2",cls:"numerics",up:4,n:"148831",t:"autocast lost in checkpoint recompute (dtype mismatch)",u:"https://github.com/pytorch/pytorch/issues/148831"},
+ {fw:"FSDP2",cls:"comms",up:6,n:"143536",t:"FSDP hangs when saving the model",u:"https://github.com/pytorch/pytorch/issues/143536"},
+ {fw:"FSDP2",cls:"memory",up:0,n:"149100",t:"Memory leak in get_model_state_dict",u:"https://github.com/pytorch/pytorch/issues/149100"},
+ {fw:"FSDP2",cls:"correctness",up:0,n:"201049",t:"Silent parameter corruption after async CPU offload",u:"https://github.com/pytorch/pytorch/issues/201049"},
+ {fw:"FSDP2",cls:"numerics",up:1,n:"154984",t:"Slower convergence than DDP (Qwen2-VL)",u:"https://github.com/pytorch/pytorch/issues/154984"},
+ {fw:"Megatron",cls:"versions",up:17,n:"696",t:"transformer_engine has no attribute 'pytorch'",u:"https://github.com/NVIDIA/Megatron-LM/issues/696"},
+ {fw:"Megatron",cls:"correctness",up:7,n:"2357",t:"Attention mask ignored with packed sequences (TE)",u:"https://github.com/NVIDIA/Megatron-LM/issues/2357"},
+ {fw:"Megatron",cls:"correctness",up:4,n:"7452",t:"Silent numerical bugs in parallelism composition",u:"https://github.com/NVIDIA/Megatron-LM/issues/7452"},
+ {fw:"Megatron",cls:"comms",up:1,n:"1025",t:"Context-parallel long-context training hangs",u:"https://github.com/NVIDIA/Megatron-LM/issues/1025"},
+ {fw:"Megatron",cls:"versions",up:10,n:"37",t:"HF ↔ Megatron checkpoint compatibility",u:"https://github.com/NVIDIA/Megatron-LM/issues/37"},
+ {fw:"NeMo RL/Gym",cls:"memory",up:0,n:"PR 2394",t:"CPU OOM in NeMo Gym rollouts → empty epochs",u:"https://github.com/NVIDIA-NeMo/RL/pull/2394"},
+ {fw:"NeMo RL/Gym",cls:"versions",up:2,n:"680",t:"FSDP2 needs PyTorch ≥ 2.7",u:"https://github.com/NVIDIA-NeMo/RL/issues/680"},
+ {fw:"NeMo RL/Gym",cls:"comms",up:3,n:"4104",t:"nccl_reshard refit: generation-side PP",u:"https://github.com/NVIDIA-NeMo/RL/issues/4104"},
+ {fw:"Neuron",cls:"versions",up:0,n:"1303",t:"NCC compilation failure on inf2 (Qwen2.5-14B)",u:"https://github.com/aws-neuron/aws-neuron-sdk/issues/1303"},
+ {fw:"Neuron",cls:"versions",up:0,n:"1392",t:"tensor_map verification failed above ~12 layers",u:"https://github.com/aws-neuron/aws-neuron-sdk/issues/1392"},
+ {fw:"Neuron",cls:"performance",up:0,n:"1368",t:"NEFF cache not reused across pods (vllm-neuron)",u:"https://github.com/aws-neuron/aws-neuron-sdk/issues/1368"},
+ {fw:"Neuron",cls:"numerics",up:0,n:"1400",t:"TopK returns wrong indices for some sizes (silent)",u:"https://github.com/aws-neuron/aws-neuron-sdk/issues/1400"},
+ {fw:"Neuron",cls:"versions",up:0,n:"1393",t:"FP8 storage dtype rejected on Trn2",u:"https://github.com/aws-neuron/aws-neuron-sdk/issues/1393"},
+ {fw:"Neuron",cls:"versions",up:4,n:"564",t:"Dynamic shapes for training on Trn1",u:"https://github.com/aws-neuron/aws-neuron-sdk/issues/564"},
+ {fw:"Axolotl",cls:"numerics",up:0,n:"1706",t:"Zero loss / NaN grad norm with Flash Attention",u:"https://github.com/axolotl-ai-cloud/axolotl/issues/1706"},
+ {fw:"Axolotl",cls:"numerics",up:0,n:"3077",t:"NaN with FSDP and cpu_ram_efficient_loading=false",u:"https://github.com/axolotl-ai-cloud/axolotl/issues/3077"},
+ {fw:"Axolotl",cls:"correctness",up:3,n:"2626",t:"High loss with sample packing on Qwen3-MoE",u:"https://github.com/axolotl-ai-cloud/axolotl/issues/2626"},
+ {fw:"Axolotl",cls:"correctness",up:4,n:"2415",t:"DPO chat_template fails on extra columns",u:"https://github.com/axolotl-ai-cloud/axolotl/issues/2415"},
+ {fw:"Axolotl",cls:"performance",up:2,n:"2396",t:"Very slow tokenization of long multi-turn data",u:"https://github.com/axolotl-ai-cloud/axolotl/issues/2396"},
+ {fw:"Axolotl",cls:"comms",up:4,n:"1473",t:"NCCL watchdog: illegal memory access",u:"https://github.com/axolotl-ai-cloud/axolotl/issues/1473"},
+ {fw:"TRL",cls:"memory",up:5,n:"2698",t:"GRPO + vLLM does not work with LoRA",u:"https://github.com/huggingface/trl/issues/2698"},
+ {fw:"TRL",cls:"numerics",up:4,n:"2703",t:"GRPO loss starts at 0 then rises",u:"https://github.com/huggingface/trl/issues/2703"},
+ {fw:"TRL",cls:"correctness",up:0,n:"6966",t:"think_format_reward always 0 with prefilled <think>",u:"https://github.com/huggingface/trl/issues/6966"},
+ {fw:"TRL",cls:"comms",up:1,n:"6796",t:"AsyncGRPO NCCL weight transfer hangs silently",u:"https://github.com/huggingface/trl/issues/6796"},
+ {fw:"TRL",cls:"comms",up:15,n:"2754",t:"Multi-node GRPO with DeepSpeed + vLLM",u:"https://github.com/huggingface/trl/issues/2754"},
+ {fw:"llm-compressor",cls:"memory",up:5,n:"1183",t:"OOM during save_pretrained of compressed model",u:"https://github.com/vllm-project/llm-compressor/issues/1183"},
+ {fw:"llm-compressor",cls:"versions",up:2,n:"2057",t:"scale_dtype/zp_dtype not loadable by released vLLM",u:"https://github.com/vllm-project/llm-compressor/issues/2057"},
+ {fw:"llm-compressor",cls:"versions",up:3,n:"1474",t:"Dependency mismatch with vLLM 0.8.5.post1",u:"https://github.com/vllm-project/llm-compressor/issues/1474"},
+ {fw:"llm-compressor",cls:"performance",up:1,n:"2549",t:"W8A8 slower than FP16",u:"https://github.com/vllm-project/llm-compressor/issues/2549"},
+ {fw:"llm-compressor",cls:"versions",up:0,n:"1919",t:"FP8-block fails to load on SM120 (orig_dtype)",u:"https://github.com/vllm-project/llm-compressor/issues/1919"},
+ {fw:"Locust/GenAI-Perf",cls:"correctness",up:0,n:"3076",t:"Locust: tokens-per-second stats entry",u:"https://github.com/locustio/locust/issues/3076"},
+ {fw:"Locust/GenAI-Perf",cls:"correctness",up:0,n:"3018",t:"iter_lines support for FastHttpUser (streaming)",u:"https://github.com/locustio/locust/issues/3018"},
+ {fw:"Locust/GenAI-Perf",cls:"performance",up:70,n:"646",t:"Locust: allow a fixed RPS rate",u:"https://github.com/locustio/locust/issues/646"},
+ {fw:"Locust/GenAI-Perf",cls:"correctness",up:0,n:"416",t:"GenAI-Perf --streaming fails with OpenAI models",u:"https://github.com/triton-inference-server/perf_analyzer/issues/416"},
+ {fw:"Locust/GenAI-Perf",cls:"correctness",up:0,n:"393",t:"GenAI-Perf: how are metrics calculated?",u:"https://github.com/triton-inference-server/perf_analyzer/issues/393"},
+ {fw:"GLiNER",cls:"correctness",up:4,n:"294",t:"Bad results when fine-tuning",u:"https://github.com/urchade/GLiNER/issues/294"},
+ {fw:"GLiNER",cls:"correctness",up:4,n:"244",t:"max_length / truncation not working",u:"https://github.com/urchade/GLiNER/issues/244"},
+ {fw:"GLiNER",cls:"versions",up:3,n:"343",t:"CUBLAS_STATUS_NOT_INITIALIZED on Blackwell cu130",u:"https://github.com/urchade/GLiNER/issues/343"},
+ {fw:"GLiNER",cls:"versions",up:2,n:"290",t:"0.2.22 downgrades transformers",u:"https://github.com/urchade/GLiNER/issues/290"},
+ {fw:"LeRobot",cls:"versions",up:12,n:"2446",t:"Better way to manage dataset versions",u:"https://github.com/huggingface/lerobot/issues/2446"},
+ {fw:"LeRobot",cls:"correctness",up:2,n:"3177",t:"Timestamp drift → FrameTimestampError",u:"https://github.com/huggingface/lerobot/issues/3177"},
+ {fw:"LeRobot",cls:"versions",up:9,n:"1406",t:"π0 key mismatch with transformers ≥ 4.52",u:"https://github.com/huggingface/lerobot/issues/1406"},
+ {fw:"LeRobot",cls:"memory",up:9,n:"3251",t:"π0 memory regression (double model construction)",u:"https://github.com/huggingface/lerobot/issues/3251"},
+ {fw:"LeRobot",cls:"performance",up:2,n:"2282",t:"GPU underutilization after 0.3.4",u:"https://github.com/huggingface/lerobot/issues/2282"},
+];
+const FWS=[...new Set(ISSUES.map(i=>i.fw))],CLS=["memory","numerics","versions","comms","performance","correctness"];
+const COL={memory:"#e5604c",numerics:"#f2a65a",versions:"#b07cff",comms:"#4cc3e5",performance:"#38c6a0",correctness:"#5b8cff"};
+let fw=null,cls=null;
+const fwF=document.getElementById('fwFilter'),clF=document.getElementById('classFilter'),cardsEl=document.getElementById('cards');
+function btn(parent,label,on,cb){const b=document.createElement('button');b.textContent=label;if(on)b.classList.add('on');b.onclick=cb;parent.appendChild(b);}
+function renderFilters(){fwF.innerHTML='';clF.innerHTML='';btn(fwF,'All frameworks',fw===null,()=>{fw=null;render();});FWS.forEach(f=>btn(fwF,f,fw===f,()=>{fw=fw===f?null:f;render();}));
+ btn(clF,'All classes',cls===null,()=>{cls=null;render();});CLS.forEach(c=>btn(clF,c,cls===c,()=>{cls=cls===c?null:c;render();}));}
+function sel(){return ISSUES.filter(i=>(!fw||i.fw===fw)&&(!cls||i.cls===cls));}
+const cv=document.getElementById('scatter'),ctx=cv.getContext('2d');let hover=null;
+function freq(c){return ISSUES.filter(i=>i.cls===c).map(i=>i.fw).filter((v,i,a)=>a.indexOf(v)===i).length;}
+function pts(){return sel().map(i=>{const x=60+Math.log10(i.up+1)/Math.log10(140)*(cv.width-120);const y=cv.height-40-(freq(i.cls)/FWS.length)*(cv.height-80)+(ISSUES.indexOf(i)%7-3)*3;return {i,x,y};});}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),bd=css('--border');
+ ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(60,H-40);ctx.lineTo(W-40,H-40);ctx.moveTo(60,H-40);ctx.lineTo(60,30);ctx.stroke();
+ ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';[0,1,3,10,30,100].forEach(v=>{const x=60+Math.log10(v+1)/Math.log10(140)*(W-120);ctx.fillText(v,x,H-24);});
+ ctx.fillText('👍 reactions (log, approximate)',W/2,H-8);ctx.save();ctx.translate(16,H/2);ctx.rotate(-Math.PI/2);ctx.fillText('frameworks sharing this class',0,0);ctx.restore();
+ pts().forEach(p=>{ctx.fillStyle=COL[p.i.cls];ctx.globalAlpha=hover&&hover!==p.i?0.5:0.95;ctx.beginPath();ctx.arc(p.x,p.y,hover===p.i?8:6,0,7);ctx.fill();ctx.globalAlpha=1;});
+ if(hover){ctx.fillStyle=css('--text');ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText(hover.fw+' #'+hover.n+' — '+hover.t,70,20);}
+ CLS.forEach((c,k)=>{ctx.fillStyle=COL[c];ctx.fillRect(W-150,34+k*16,10,10);ctx.fillStyle=dim;ctx.textAlign='left';ctx.font='11px sans-serif';ctx.fillText(c,W-136,43+k*16);});}
+cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect();const mx=(e.clientX-r.left)*cv.width/r.width,my=(e.clientY-r.top)*cv.height/r.height;let best=null,bd=14;pts().forEach(p=>{const d=Math.hypot(p.x-mx,p.y-my);if(d<bd){bd=d;best=p.i;}});hover=best;draw();});
+cv.addEventListener('click',()=>{if(hover)window.open(hover.u,'_blank');});
+function renderCards(){cardsEl.innerHTML=sel().map(i=>'<div class="ic" style="border-left:4px solid '+COL[i.cls]+'"><div class="t"><a href="'+i.u+'">'+i.fw+' #'+i.n+'</a></div><div>'+i.t+'</div><div class="m">'+i.cls+' · 👍 '+i.up+'</div></div>').join('');}
+function render(){renderFilters();draw();renderCards();}
+render();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>

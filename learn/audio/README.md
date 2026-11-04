@@ -10,32 +10,35 @@ voices, regenerate them with the steps below.
 
 | Script | Voice | Words | Length | MP3 present |
 |---|---|---|---|---|
+| [aditya-verma-patterns](scripts/aditya-verma-patterns.txt) | `af_heart` | 2,163 | 13:19 | yes |
 | [agents](scripts/agents.txt) | `am_echo` | 1,787 | 9:53 | yes |
-| [architectures](scripts/architectures.txt) | `af_bella` | 2,841 | 19:04 | yes |
-| [attention](scripts/attention.txt) | `am_fenrir` | 3,073 | 16:58 | yes |
+| [architectures](scripts/architectures.txt) | `af_bella` | 3,334 | 22:25 | yes |
+| [attention](scripts/attention.txt) | `am_fenrir` | 3,247 | 17:51 | yes |
 | [coding-patterns](scripts/coding-patterns.txt) | `af_bella` | 2,136 | 13:08 | yes |
-| [customization](scripts/customization.txt) | `af_heart` | 2,237 | 14:20 | yes |
-| [deep-learning](scripts/deep-learning.txt) | `am_michael` | 2,406 | 16:38 | yes |
+| [customization](scripts/customization.txt) | `af_heart` | 2,519 | 16:10 | yes |
+| [deep-learning](scripts/deep-learning.txt) | `am_michael` | 2,570 | 17:36 | yes |
+| [deployment](scripts/deployment.txt) | `af_heart` | 2,165 | 12:55 | yes |
+| [framework-issues](scripts/framework-issues.txt) | `af_heart` | 1,820 | 11:17 | yes |
 | [frameworks](scripts/frameworks.txt) | `af_heart` | 2,248 | 14:38 | yes |
 | [gallery](scripts/gallery.txt) | `bm_george` | 834 | 5:37 | yes |
 | [gpu](scripts/gpu.txt) | `bm_lewis` | 1,604 | 10:08 | yes |
 | [hardware](scripts/hardware.txt) | `bf_isabella` | 1,804 | 10:21 | yes |
-| [inference](scripts/inference.txt) | `af_heart` | 1,813 | 11:17 | yes |
+| [inference](scripts/inference.txt) | `af_heart` | 2,026 | 12:31 | yes |
 | [interview-journey](scripts/interview-journey.txt) | `af_heart` | 2,082 | 12:25 | yes |
 | [interview-math](scripts/interview-math.txt) | `af_heart` | 2,767 | 16:54 | yes |
 | [kernels](scripts/kernels.txt) | `af_sarah` | 1,775 | 10:51 | yes |
 | [math](scripts/math.txt) | `af_heart` | 2,298 | 14:06 | yes |
 | [ml-coding](scripts/ml-coding.txt) | `af_heart` | 2,838 | 17:22 | yes |
 | [multimodal](scripts/multimodal.txt) | `af_nicole` | 1,900 | 18:45 | yes |
-| [parallelism](scripts/parallelism.txt) | `bm_daniel` | 1,811 | 9:37 | yes |
+| [parallelism](scripts/parallelism.txt) | `bm_daniel` | 2,072 | 10:56 | yes |
 | [quantization](scripts/quantization.txt) | `am_adam` | 1,809 | 10:12 | yes |
 | [rl-systems](scripts/rl-systems.txt) | `af_heart` | 3,232 | 20:51 | yes |
 | [robot-learning](scripts/robot-learning.txt) | `am_michael` | 3,020 | 20:10 | yes |
 | [system-design](scripts/system-design.txt) | `bf_emma` | 1,802 | 10:14 | yes |
 | [training](scripts/training.txt) | `af_nova` | 1,821 | 9:43 | yes |
-| [transformers](scripts/transformers.txt) | `bf_emma` | 2,750 | 16:09 | yes |
+| [transformers](scripts/transformers.txt) | `bf_emma` | 2,917 | 17:00 | yes |
 
-Total: 24 episodes, about 318 minutes. Each script ends by naming which animation
+Total: 27 episodes, about 364 minutes. Each script ends by naming which animation
 or calculator to open on the chapter page, which flashcard deck to drill, and what to read next.
 
 ## Regenerate the audio (Kokoro, CPU, no GPU needed)
