@@ -307,6 +307,20 @@ const DECKS = {
 ["Heap pattern cue?","'k' + 'smallest/largest/closest/frequent' → a heap of size k (min-heap for k largest, max-heap for k smallest): top k frequent, k closest points, connect ropes, sort k-sorted array."],
 ["His three-step DP method?","Write the brute-force recursion with the choice diagram, memoize it top-down, then convert to a bottom-up table — same transitions, no re-derivation."]
 ],
+"Deployment": [
+["The deployment loop in one line?","SFT'd model → eval → quantize → serve (vLLM) → load-test against TTFT/TPOT SLOs → size the fleet → ship with canary and rollback."],
+["Open-loop vs closed-loop load testing?","Open-loop: requests arrive at a rate (Poisson) regardless of responses — realistic, exposes queueing collapse. Closed-loop: fixed concurrency — measures capacity, hides the knee."],
+["How do you measure TTFT with a streaming client?","Time from sending the request to the first SSE chunk with a token; TPOT = (end − first token) / (output tokens − 1). Locust custom events or GenAI-Perf --streaming record both."],
+["Goodput?","Requests per second completed within their TTFT and TPOT SLOs — the number you size a fleet on, not raw throughput."],
+["vLLM flags that move TTFT vs TPOT?","TTFT: --enable-chunked-prefill (chunk size), --enable-prefix-caching, more replicas. TPOT: --max-num-seqs cap, quantization (AWQ/FP8), --tensor-parallel-size, speculative decoding."],
+["Why quantize an SFT'd model before serving?","Decode is bandwidth-bound: W4A16 cuts weight bytes ~4×, FP8 ~2× — more sequences fit (KV headroom) and TPOT drops; verify eval parity after."],
+["ECS vs EKS for LLM serving?","ECS: simpler AWS-native tasks/services on EC2 GPU instances (Fargate has no GPUs). EKS: Kubernetes — GPU node groups with the NVIDIA device plugin, HPA/KEDA/Karpenter, the ecosystem (KServe, Ray Serve, llm-d)."],
+["Minimum EKS pieces to run vLLM?","GPU node group + NVIDIA device plugin, a Deployment requesting nvidia.com/gpu, readiness probe on /health, a Service/ingress, secrets for the HF token, weights on PVC/S3."],
+["What should autoscaling key on for LLMs?","Not CPU: queue depth / waiting requests, KV-cache utilization, TTFT p95 — via KEDA or custom metrics; scale replicas, not TP."],
+["Qwen3's thinking mode and latency?","Thinking tokens are generated before the visible answer, so TTFT-to-answer grows with the thinking budget; use the reasoning parser and cap the budget for latency-sensitive endpoints."],
+["Why p99 and not average latency?","SLOs are tail promises; queueing makes tails fat first. Report p50/p95/p99 and check them against the SLO at the target request rate."],
+["Which vLLM metrics tell you you're saturated?","num_requests_waiting rising, gpu_cache_usage near 1, preemptions > 0, TTFT p95 climbing while throughput plateaus."]
+],
 "GPU": [
 ["GPU vs CPU design philosophy in one line?","CPU minimizes latency of one thread; GPU hides latency with tens of thousands of threads and spends transistors on ALUs, not caches."],
 ["The memory hierarchy, fastest to slowest?","Registers → shared memory/L1 (SRAM, ~TB/s, KBs) → L2 → HBM (GBs, ~TB/s but far) → NVLink/PCIe → host."],
