@@ -10,7 +10,7 @@
 <nav class="topnav">
   <a class="home" href="index.html">Learn</a>
   <div class="links">
-    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html" class="here">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html" class="here">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
   </div>
   <div class="spacer"></div>
   <button class="theme-btn" id="themeBtn">◐ theme</button>
@@ -19,7 +19,7 @@
 <h1>LLM Architecture Evolution</h1>
 <p class="dim">Every architectural development since GPT-2 that survived contact with scale: what changed, why it won, and what it costs at inference time. This chapter assumes the <a href="transformers.html">transformer block</a> and <a href="attention.html">attention variants</a>; here we track how the whole organism evolved.</p>
 
-<div class="card audio-card"><h3>🎧 Listen to this chapter (16:47)</h3><audio controls preload="none" src="audio/architectures.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/architectures.txt">Read the transcript</a>.</p></div>
+<div class="card audio-card"><h3>🎧 Listen to this chapter (22:25)</h3><audio controls preload="none" src="audio/architectures.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/architectures.txt">Read the transcript</a>.</p></div>
 <h2 id="lineage">1. The dense lineage: GPT-2 → Llama 3 as a sequence of small wins</h2>
 <p>Strip away scale, and the modern dense LLM differs from GPT-2 (2019) by half a dozen targeted substitutions. None is dramatic alone; together they are the difference between a model that trains unstably at 1B and one that trains cleanly at 400B. The honest way to read this table is as a list of <em>fixes</em>, each motivated by a failure at larger scale:</p>
 <table class="cmp">
@@ -52,7 +52,42 @@
 <p class="caption">Each column of blocks is the model's repeating layer pattern (bottom = first layer). Color = block type: attention flavor, MLP vs MoE, or SSM. Switch models and watch the composition change — the industry's whole architectural history is visible as changes in this stacking pattern.</p>
 </div>
 
-<h2 id="moe">2. Mixture of Experts: paying for capacity, not per token</h2>
+<h2 id="qwen3">2. Case study: the Qwen3 family — one lineage, every 2025–26 idea</h2>
+<p>If you want one family that walks through everything in this chapter, use Qwen3. Alibaba's April 2025 release (Qwen3 technical report, Yang et al. 2025) shipped <strong>six dense models from 0.6B to 32B</strong> and <strong>two mixture-of-experts models, 30B-A3B and 235B-A22B</strong>, all under Apache-2.0, all trained on roughly <strong>36 trillion tokens</strong> in three pretraining stages (general web and code, then a knowledge-and-reasoning-heavy mix, then long-context data to stretch the window). Architecturally the dense models are the modern recipe from <a href="#lineage">Section 1</a> executed carefully: pre-norm RMSNorm, SwiGLU, RoPE with YaRN-style extension to 128K, GQA with 8 KV heads, no biases, a 151K vocabulary, plus <strong>QK-norm</strong> — normalizing queries and keys before the dot product so attention logits cannot blow up during long training runs. The MoE models use fine-grained routing (128 experts, 8 active in 30B-A3B) and, unusually for 2025, <strong>no shared expert</strong>; the gallery notes the 235B-A22B design as "optimized for serving efficiency without a shared expert", a choice later Qwen variants reversed.</p>
+<p>What made Qwen3 a reference point was its post-training more than its layers. It introduced <strong>hybrid thinking</strong>: a single checkpoint that can answer directly (System 1, in the vocabulary of <a href="#paradigms">Section 10</a>) or reason inside <code>&lt;think&gt;</code> tags first (System 2), switched per request, with a <strong>thinking budget</strong> — a cap on reasoning tokens after which the model is forced to answer. The pipeline that produced it is now the standard four-stage recipe: (1) a <em>long chain-of-thought cold start</em> — supervised fine-tuning on curated reasoning traces so the model can think at all; (2) <em>reasoning RL</em> with verifiable rewards on math and code (GRPO-family, see <a href="rl-systems.html">RL Systems</a>); (3) <em>thinking-mode fusion</em> — SFT that teaches the model to respect the on/off switch and the budget by mixing thinking and non-thinking data; (4) <em>general RL</em> across many tasks for instruction following, agent use, and safety. The small models were not trained this way at all: they were produced by <strong>strong-to-weak distillation</strong> from the large ones (off-policy on teacher outputs, then on-policy matching the teacher's logits), the pattern <a href="customization.html">Customization</a> recommends whenever a strong teacher exists.</p>
+<p>Then the lineage changed shape. The gallery dataset records <strong>Qwen3-Next 80B-A3B (September 2025)</strong> as the first Qwen to adopt the <strong>3:1 Gated DeltaNet / gated attention hybrid</strong> — 36 linear-attention layers to 12 full-attention layers — with many more experts, a shared expert, native 262K context, and an MTP head for speculative decoding (a KV cache of 24 KiB per token, against 96 KiB for the dense-attention 30B-A3B). <strong>Qwen3.5 397B-A17B (February 2026)</strong> "turns the former Qwen3-Next side branch into the new core design" with 512 experts; <strong>Qwen3.6 27B and 35B-A3B (April 2026)</strong> keep the 3:1 hybrid in both dense and sparse form; <strong>Qwen3.8 27B (August 2026)</strong> adds partial RoPE and one MTP layer; and <strong>Qwen3.8-Flash-Next 125B-A6B (August 2026)</strong> replaces full attention with micro-block <em>Qwen Sparse Attention</em>, adds four gated residual branches and a 20M-entry n-gram embedding at layer 2 — the per-layer-embedding idea from the developments table below. One family, eighteen months, and the whole arc of this chapter: dense recipe → MoE → hybrid linear attention → sparse attention and exotic embeddings.</p>
+<table class="cmp">
+<tr><th>Model (gallery entry)</th><th>Released</th><th>Type</th><th>Active / total</th><th>Context</th><th>Notable</th></tr>
+<tr><td>Qwen3 0.6B / 4B / 8B / 32B</td><td>2025-04</td><td>Dense, GQA (+QK-norm)</td><td>0.6B–32B</td><td>32K–128K</td><td>Reference dense stack; 0.6B is "unusually practical for local experiments and teaching"</td></tr>
+<tr><td>Qwen3 30B-A3B</td><td>2025-04</td><td>Sparse MoE, 128 experts, top-8</td><td>3B / 30B</td><td>128K</td><td>No shared expert; deeper and narrower than GPT-OSS</td></tr>
+<tr><td>Qwen3 235B-A22B</td><td>2025-04</td><td>Sparse MoE</td><td>22B / 235B</td><td>128K</td><td>Flagship; serving-efficiency design without a shared expert</td></tr>
+<tr><td>Qwen3 Coder Flash 30B-A3B</td><td>2025-07</td><td>Sparse MoE</td><td>3.3B / 30B</td><td>256K</td><td>Native long context for coding agents</td></tr>
+<tr><td>Qwen3-Next 80B-A3B</td><td>2025-09</td><td>Sparse hybrid, 3:1 DeltaNet/attention</td><td>3B / 80B</td><td>262K</td><td>Shared expert returns; MTP; 24 KiB KV per token</td></tr>
+<tr><td>Qwen3.5 397B</td><td>2026-02</td><td>Sparse hybrid, 512 experts</td><td>17B / 397B</td><td>262K</td><td>The Next design becomes the core design</td></tr>
+<tr><td>Qwen3.6 27B · 35B-A3B</td><td>2026-04</td><td>Dense hybrid · sparse hybrid</td><td>27B · 3B / 35B</td><td>262K</td><td>3:1 DeltaNet/gated attention in both dense and MoE form</td></tr>
+<tr><td>Qwen3.8 27B · 3.8-Flash-Next 125B-A6B</td><td>2026-08</td><td>Dense hybrid · sparse hybrid with Qwen Sparse Attention</td><td>27B · 6B / 125B</td><td>262K</td><td>Partial RoPE + MTP; micro-block QSA, gated residuals, 20M-entry n-gram embedding</td></tr>
+</table>
+<p><strong>Why Qwen3 is this notebook's default for hands-on work.</strong> The weights are open (Apache-2.0), every size from 0.6B to the MoE flagships is supported out of the box by vLLM and SGLang (see <a href="inference.html">Inference</a> and <a href="frameworks.html">Frameworks</a>), Axolotl and TRL have ready configs for SFT, LoRA/QLoRA, DPO and GRPO on it (<a href="training.html">Training</a>), and the 0.6B–8B sizes fit a 16&nbsp;GB consumer GPU in BF16 or 4-bit — so the same family serves the ML-coding drills, the fine-tuning exercise, the quantization comparisons, and the serving benchmarks. The thinking budget is also the cleanest place to <em>feel</em> the System 1/System 2 trade-off in latency terms, which the interactive below makes concrete.</p>
+
+<div class="card">
+<h3>Interactive: thinking budget vs time-to-first-visible-token</h3>
+<div class="controls">
+  <label class="ctl">Thinking budget (tokens) <input type="range" id="tbBudget" min="0" max="8000" step="100" value="1500"> <span id="tbBudgetLabel">1500</span></label>
+  <label class="ctl">TPOT (ms/token) <input type="range" id="tbTpot" min="5" max="80" step="1" value="25"> <span id="tbTpotLabel">25</span></label>
+  <label class="ctl">Prefill TTFT (ms) <input type="range" id="tbTtft" min="50" max="2000" step="50" value="400"> <span id="tbTtftLabel">400</span></label>
+  <label class="ctl">Visible answer (tokens) <input type="range" id="tbAns" min="50" max="2000" step="50" value="300"> <span id="tbAnsLabel">300</span></label>
+</div>
+<canvas id="tbViz" class="viz" width="900" height="220"></canvas>
+<div class="kpi">
+  <div class="box"><div class="v" id="tbFirst">–</div><div class="l">first visible token</div></div>
+  <div class="box"><div class="v" id="tbTotal">–</div><div class="l">total wall time</div></div>
+  <div class="box"><div class="v" id="tbBilled">–</div><div class="l">tokens billed</div></div>
+  <div class="box"><div class="v" id="tbShare">–</div><div class="l">of output spent thinking</div></div>
+</div>
+<p class="caption">A thinking model pays prefill, then streams hidden reasoning tokens at the decode rate, then streams the answer. The user's perceived time-to-first-token is the prefill plus the whole thinking budget at TPOT — at 25&nbsp;ms per token a 1,500-token budget adds 37&nbsp;seconds before the first visible word, and every thinking token is billed like an output token. Drag the budget to zero to see the System 1 floor; this is the arithmetic behind Qwen3's per-request switch and budget cap. Latency terms are defined in <a href="inference.html#two-phases">Inference</a>.</p>
+</div>
+
+<h2 id="moe">3. Mixture of Experts: paying for capacity, not per token</h2>
 <p>A dense model spends every parameter on every token. MoE breaks that coupling: replace the MLP with <em>E</em> expert MLPs and a tiny <strong>router</strong> that sends each token to its top-k experts. Total parameters grow with E (knowledge capacity); per-token FLOPs grow only with k (compute cost). DeepSeek-V3 is the canonical modern datapoint: <strong>671B total parameters, 37B active per token</strong> — GPT-4-class capacity at mid-size compute.</p>
 <p>The engineering is all in the routing:</p>
 <ul>
@@ -73,7 +108,42 @@
 <p class="caption">Tokens stream through a top-2-of-8 router. Bars show cumulative load per expert. Untick balancing and watch the rich-get-richer collapse: the router's slight initial preference compounds until two experts take nearly all traffic — the failure every MoE training recipe is designed to prevent.</p>
 </div>
 
-<h2 id="ssm">3. State-space models: Mamba and the case against the KV cache</h2>
+
+<h2 id="rnn">4. Before transformers: RNNs and LSTMs (and why attention won)</h2>
+<p>Every "why transformers?" interview answer is really a comparison with recurrent networks, so it pays to know them properly. A <strong>vanilla RNN</strong> processes a sequence one step at a time, carrying a hidden state <code>h_t ∈ ℝ^H</code> that is updated from the current input and the previous state with weights shared across time:</p>
+<div class="formula">h_t = tanh(W_x·x_t + W_h·h_{t−1} + b),    y_t = W_out·h_t + b_out</div>
+<p>Training unrolls the recurrence and backpropagates through time (BPTT). The Jacobian between consecutive states is <code>∂h_t/∂h_{t−1} = diag(tanh′(z_t))·W_h</code>, and the gradient reaching step <code>t</code> from a loss at step <code>T</code> is a product of <code>T−t</code> such factors. <code>tanh′ ∈ (0, 1]</code> only shrinks, and repeated multiplication by <code>W_h</code> either shrinks or blows up depending on its largest singular value — so gradients across long gaps <strong>vanish or explode</strong>, and a vanilla RNN cannot learn dependencies more than a few dozen steps long. Gradient clipping handles the exploding side; nothing in the vanilla cell fixes vanishing.</p>
+<p>The <strong>LSTM</strong> fixes it by splitting memory from output. A cell state <code>c_t</code> flows along a "highway" touched only by element-wise gates — no matmul, no squashing nonlinearity between steps — while the hidden state <code>h_t</code> is a filtered view of it that is both the cell's output and its own query for the next step's gates:</p>
+<div class="formula">f_t = σ(W_f·[h_{t−1}, x_t] + b_f)        forget: what to erase
+i_t = σ(W_i·[h_{t−1}, x_t] + b_i)        input: what to write
+c̃_t = tanh(W_c·[h_{t−1}, x_t] + b_c)     candidate content
+c_t = f_t ⊙ c_{t−1} + i_t ⊙ c̃_t          cell update (the constant-error carousel)
+o_t = σ(W_o·[h_{t−1}, x_t] + b_o)        output: what to expose
+h_t = o_t ⊙ tanh(c_t)</div>
+<p>Because <code>∂c_t/∂c_{t−1} = f_t</code>, as long as the forget gate stays near 1 the gradient travels backward many steps essentially intact — this is the whole trick. The <strong>GRU</strong> is the two-gate simplification (reset and update gates, no separate cell state) that trains a bit faster with similar quality. Both still have the structural limits that attention removed.</p>
+
+<div class="card">
+<h3>Animation: gradients through time — RNN vs LSTM</h3>
+<canvas id="rnnViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <label class="ctl">spectral radius of W_h <input type="range" id="rnnRho" min="0.3" max="1.8" step="0.05" value="0.8"> <span id="rnnRhoL">0.80</span></label>
+  <label class="ctl"><input type="checkbox" id="rnnLstm"> LSTM cell (forget gate f)</label>
+  <label class="ctl">f <input type="range" id="rnnF" min="0.5" max="1" step="0.01" value="0.95"> <span id="rnnFL">0.95</span></label>
+</div>
+<p class="caption">An unrolled 16-step network with the loss at the last step. Bars show (log scale) how much gradient reaches each earlier step. In the vanilla RNN the factor per step is roughly <code>ρ · tanh′</code>: below 1 the signal dies within ~10 steps, above 1 it explodes. Switch to the LSTM: the cell-state path multiplies by the forget gate alone, so with <code>f ≈ 0.95</code> half the signal survives 14 steps and with <code>f → 1</code> all of it does — the constant-error carousel.</p>
+</div>
+
+<h3>Why attention won — and what came back</h3>
+<table class="cmp">
+<tr><th></th><th>RNN / LSTM</th><th>Transformer</th><th>SSM / linear-attention hybrid</th></tr>
+<tr><td>Training</td><td>Sequential over time (BPTT), poor GPU utilization</td><td>All positions in parallel; one big matmul per layer</td><td>Parallel via associative scan / chunked matmuls</td></tr>
+<tr><td>Path between distant tokens</td><td>O(distance) steps; information must survive every intermediate state</td><td>O(1): any token attends directly to any other</td><td>O(distance) through a state, but with learned selective forgetting</td></tr>
+<tr><td>Inference memory per token</td><td>Constant (one state)</td><td>Grows: KV cache O(n)</td><td>Constant state (+ small KV for the few attention layers)</td></tr>
+<tr><td>Exact recall of a specific earlier token</td><td>Weak</td><td>Strong (the KV cache is a lookup table)</td><td>Weak alone; hybrids add attention layers for it</td></tr>
+</table>
+<p>Transformers won on two counts the table makes plain: parallel training that saturates accelerators, and direct O(1) paths for long-range dependencies. The cost was the growing KV cache — which is exactly the pressure that brought recurrence back in modern dress as state-space models and gated linear attention (next section). Knowing the LSTM gate equations is not nostalgia: Mamba's selective gates and Gated DeltaNet's forgetting gates are the same idea with hardware-friendly math.</p>
+
+<h2 id="ssm">5. State-space models: Mamba and the case against the KV cache</h2>
 <p>Attention's superpower is also its bill: a cache that grows linearly with context and a decode step that must re-read all of it (<a href="inference.html#kv-cache">Ch. 9</a>). State-space models make the opposite trade: compress the entire past into a <strong>fixed-size recurrent state</strong>. Decode cost and memory are then <em>constant</em> in sequence length.</p>
 <p><strong>Mamba</strong>'s contribution (over earlier S4-style SSMs) is <em>selectivity</em>: the state-transition and input gates are functions of the current token, so the model can choose what to write into its state and what to forget — recovering some of attention's content-based addressing. <strong>Mamba-2 (SSD)</strong> then showed the selective scan can be computed with matmul-shaped primitives (semiseparable matrices), making it tensor-core friendly and revealing a formal duality with linear attention. Training parallelism comes from the <strong>associative scan</strong> — the same parallel-scan primitive you built in <a href="kernels.html">the kernels chapter</a>.</p>
 <p>The honest scorecard: SSMs win on long-context throughput and memory; pure SSMs lag attention on exact recall ("needle in a haystack", copying, in-context lookup) because a fixed state must lossily compress the past. Which is why the production answer became…</p>
@@ -89,7 +159,7 @@
 <p class="caption">Both models read the same stream. Top: attention appends every token's K,V — memory grows, and each step re-reads it all. Bottom: the SSM folds each token into a fixed-width state (watch it update in place — older contributions fade). Constant memory, constant step cost; the price is that faded information is gone unless a hybrid's attention layer can still see it.</p>
 </div>
 
-<h2 id="linear">4. Linear attention and sliding windows: cheaper mixers</h2>
+<h2 id="linear">6. Linear attention and sliding windows: cheaper mixers</h2>
 <p>Two other families attack the same O(n²)/O(n) costs without abandoning attention entirely:</p>
 <ul>
 <li><strong>Linear attention</strong> replaces softmax(QKᵀ)V with feature-mapped φ(Q)(φ(K)ᵀV), which associativity turns into a running (d×d) state — recurrent at decode, parallel at training. Modern gated variants (GLA, <strong>Gated DeltaNet</strong>, RWKV's line) add forgetting and delta-rule updates that fix the early versions' quality gap. Mamba-2's duality result means this family and SSMs are near-relatives.</li>
@@ -97,11 +167,11 @@
 </ul>
 <p>Pattern to remember for interviews: <strong>full attention is becoming a scarce resource spent on a few layers</strong>, with cheap mixers (windows, SSMs, linear attention) doing everything else. Serving engines mirror this: a hybrid's cache is a mix of per-layer ring buffers (windows), constant states (SSM), and real paged KV (full layers).</p>
 
-<h2 id="mtp">5. Multi-token prediction and architecture-for-inference</h2>
+<h2 id="mtp">7. Multi-token prediction and architecture-for-inference</h2>
 <p>DeepSeek-V3 trains an auxiliary <strong>MTP head</strong>: at each position the model also predicts the token after next, through a small extra transformer block. Training signal densifies (slightly better model), but the real payoff is serving: the MTP head is a built-in draft model for <a href="inference.html#speculative">speculative decoding</a> — self-speculation with high acceptance, no separate draft model to deploy. Medusa and EAGLE (Ch. 9) are the bolt-on versions of the same idea.</p>
 <p>This is the clearest example of a broader shift: <strong>architectures are now co-designed with their inference systems</strong>. MLA exists to shrink the cache; fine-grained MoE assumes expert parallelism; window/global ratios are tuned against paged-KV implementations; MTP assumes a speculative scheduler. Reading a model card now means reading its serving plan.</p>
 
-<h2 id="multimodal">6. Multimodal architectures</h2>
+<h2 id="multimodal">8. Multimodal architectures</h2>
 <p>Three dominant patterns, in increasing order of integration:</p>
 <ul>
 <li><strong>Encoder + projector (LLaVA pattern)</strong>: a pretrained vision encoder (ViT/SigLIP) turns the image into patch embeddings; a small projector (MLP or cross-attention resampler) maps them into the LLM's embedding space as "image tokens"; the LLM is then fine-tuned on interleaved data. Cheap, modular, and still the workhorse — Llama-Vision, Qwen-VL, Pixtral, InternVL all descend from it. Resolution handling (tiling, any-res) decides most of the quality.</li>
@@ -109,7 +179,7 @@
 <li><strong>Generation-side</strong>: diffusion or autoregressive image decoders bolted to the same trunk — outside this plan's scope, but the serving implication isn't: image tokens are thousands of prefill tokens, making multimodal serving prefill-heavy (<a href="inference.html">Ch. 9</a>'s chunked prefill matters even more; see vLLM's multimodal-inputs doc from Step 12).</li>
 </ul>
 
-<h2 id="frontier">7. The current frontier, honestly labeled</h2>
+<h2 id="frontier">9. The current frontier, honestly labeled</h2>
 <ul>
 <li><strong>Reasoning-era training</strong> (o1/R1 lineage): long chain-of-thought via RL (GRPO, <a href="training.html">Ch. 11</a>). Architecturally mostly <em>unchanged</em> — the innovation is post-training + test-time compute, and the serving impact is huge: thousands-of-token "thinking" generations shift load decode-ward.</li>
 <li><strong>Text diffusion LMs</strong>: generate by iterative denoising of whole sequences instead of left-to-right AR — parallel token generation, very different serving profile. Real research momentum (and an Axolotl training feature), not yet a production default.</li>
@@ -118,10 +188,10 @@
 </ul>
 
 
-<h2 id="paradigms">8. Generation paradigms and thinking modes: CLM, masked and diffusion LMs, System 1 vs System 2</h2>
+<h2 id="paradigms">10. Generation paradigms and thinking modes: CLM, masked and diffusion LMs, System 1 vs System 2</h2>
 <p>Everything above assumed one way of producing text: predict the next token, left to right, one forward pass per token. That is a <em>choice</em>, and it is worth seeing the alternatives clearly — both because they are now shipping (diffusion language models) and because the biggest capability jump of the last two years came not from a new block but from changing <em>how long</em> the model thinks before it answers.</p>
 
-<h3>8.1 Training objectives as paradigms: CLM, MLM, and the middle ground</h3>
+<h3>10.1 Training objectives as paradigms: CLM, MLM, and the middle ground</h3>
 <p><strong>Causal language modeling (CLM)</strong> is the GPT lineage: a decoder-only transformer with a causal mask, trained to predict token <em>t+1</em> from tokens <em>1…t</em>. It won for generation for three unglamorous reasons. One objective covers every task that can be phrased as text continuation. Every position in every sequence is supervised in a single pass, so no training tokens are wasted. And sampling is trivial: the training-time computation <em>is</em> the inference-time computation, just fed its own outputs. The causal mask also hands you incremental decoding for free — the <a href="inference.html#kv-cache">KV cache</a> exists only because earlier tokens never look at later ones, so their keys and values never change.</p>
 <p><strong>Masked language modeling (MLM)</strong> is the BERT lineage: corrupt ~15% of tokens, let every position attend bidirectionally, predict the masked ones. Bidirectional context makes it a superb <em>encoder</em> — embeddings, classification, retrieval still lean on it — but it is awkward for generation: you must decide how many tokens to emit and iteratively fill them, and only 15% of positions carry loss per pass. <strong>Prefix-LM and encoder–decoder</strong> models (T5, and UL2's "mixture of denoisers" that trains span corruption, prefix-LM, and extreme masking together) sit in between: bidirectional over the prompt, causal over the output. They remain strong for sequence-to-sequence tasks and are the shape of most speech and translation systems (the Deepgram encoder–decoder in <a href="hardware.html">Ch. 15</a> is one).</p>
 <table class="cmp">
@@ -133,7 +203,7 @@
 </table>
 <p>The serving column is the one to memorize: <strong>only CLM gets incremental decoding for free.</strong> Bidirectional models recompute every position every pass. That is why the engines in <a href="inference.html">Ch. 11</a> are built around CLM, and why diffusion LMs need their own serving stack.</p>
 
-<h3>8.2 Diffusion language models: generating a whole canvas at once</h3>
+<h3>10.2 Diffusion language models: generating a whole canvas at once</h3>
 <p>Diffusion for text comes in two families, and the acronym <strong>CDM</strong> is used for two different things, so keep the terms straight:</p>
 <ul>
 <li><strong>Discrete / masked diffusion</strong> (LLaDA, Dream, Mercury, Gemini Diffusion, LLaDA2/MoE variants): the "noise" is masking. Training masks a random <em>fraction</em> of tokens (uniformly from 0 to 100%, not a fixed 15%) and predicts them with a bidirectional transformer; the objective is a weighted MLM averaged over mask ratios, and it is a proper likelihood bound. Generation starts from an all-masked canvas and, over <em>T</em> steps, unmasks the tokens the model is most confident about, optionally re-masking low-confidence ones so later steps can revise them. Several tokens are revealed per step, so the number of forward passes is <em>T</em>, not the sequence length.</li>
@@ -154,7 +224,7 @@
 <p class="caption">Top: a 24-token canvas starts fully masked; each step the diffusion model reveals its most confident tokens (green) and may re-mask a low-confidence one (orange flash) to revise it later. Bottom: the autoregressive baseline reveals exactly one token per forward pass. Drag T: at T = 6 the diffusion model finishes in six passes where AR needs twenty-four; at T = 24 it has spent the same passes for no speed gain. Fewer steps means more tokens committed at once — the quality/latency trade in one slider.</p>
 </div>
 
-<h3>8.3 System 1 and System 2: fast pattern completion vs deliberate computation</h3>
+<h3>10.3 System 1 and System 2: fast pattern completion vs deliberate computation</h3>
 <p>Kahneman's split between <strong>System 1</strong> (fast, automatic, pattern-matching) and <strong>System 2</strong> (slow, effortful, sequential) maps cleanly onto language models. A standard CLM answering directly is pure System 1: one forward pass per token, a fixed amount of computation regardless of how hard the question is, and an answer that is a <em>pattern completion</em> of the prompt. Nothing in the architecture lets the model spend more compute on a harder problem.</p>
 <p><strong>System 2 behavior is test-time compute.</strong> The cheapest version is prompting: <em>chain-of-thought</em> makes the model write intermediate steps, so each later token conditions on scratch work — compute scales with the length of the reasoning. <em>Self-consistency</em> samples several chains and votes. Search and verification (tree search over partial solutions, a verifier or process-reward model scoring steps, best-of-N with a checker) spend still more. And the <strong>reasoning models</strong> — o1/o3, DeepSeek-R1, Qwen3 in thinking mode, Gemini's thinking variants — bake the behavior in: they are trained with <a href="rl-systems.html">RL on verifiable rewards</a> to produce long private "thinking" before the visible answer, and their accuracy rises with the number of thinking tokens they are allowed (<a href="training.html">Ch. 13</a> covers the GRPO recipe). Architecturally these are ordinary CLMs; what changed is the policy, and the serving bill: thousands of decode tokens per query, which pushes load firmly decode-ward (<a href="inference.html">Ch. 11</a>).</p>
 <p>Three refinements matter in practice. <strong>Thinking budgets</strong> cap the private tokens (an explicit latency/accuracy dial per request), and <strong>hybrid thinking modes</strong> ship one model that can run either way — Qwen3's <code>/think</code> and <code>/no_think</code>, Claude's extended thinking, Gemini's thinking budgets — so a product routes easy requests to System 1 and hard ones to System 2. <strong>Latent reasoning</strong> moves the deliberation out of the token stream: Coconut ("chain of continuous thought") feeds the last hidden state back as the next input embedding so the model reasons in vector space without decoding words, and the <em>looped / depth-recurrent</em> models from the developments table (Ouro's four passes over one stack, Nanbeige's two) do System 2 <em>inside</em> the forward pass by iterating the same layers until a learned exit gate fires — compute that scales with difficulty, with no visible chain at all.</p>
@@ -171,10 +241,10 @@
 <p class="caption">Illustrative curves shaped like the published test-time-compute scaling results (not measurements): x is tokens generated per query on a log scale, y is accuracy on a hard benchmark. Direct answering is a single cheap point; chain-of-thought buys a step up; self-consistency climbs with k but with diminishing returns and linear cost; a reasoning model's curve keeps rising with its thinking budget until it saturates. The dashed marker is the distilled System 1 student: the teacher's accuracy at a fraction of the cost — on problems like the ones it was distilled on.</p>
 </div>
 
-<h3>8.4 The non-autoregressive frontier (research)</h3>
+<h3>10.4 The non-autoregressive frontier (research)</h3>
 <p>Beyond masked diffusion, three lines are trying to make whole-sequence generation competitive with CLM and are best read as research rather than tooling: <strong>flow-matching</strong> text models that learn a straight-line transport from noise to token embeddings (the same objective π0 uses for robot actions in <a href="robot-learning.html">Ch. 17</a>); <strong>consistency</strong>-style models that collapse many denoising steps into one or two; and <strong>energy-based</strong> formulations that score whole sequences and sample by iterative refinement. All promise parallel, revisable generation; none has yet matched CLM at frontier scale on long-form coherence, which is why the practical answer today is "CLM for the backbone, diffusion for infilling and low-latency niches, System 2 via RL-trained thinking."</p>
 
-<h2 id="data">9. What 109 architectures say: the data</h2>
+<h2 id="data">11. What 109 architectures say: the data</h2>
 <p>Narratives drift; counts don't. The chart below is computed live from the <a href="gallery.html">Architecture Gallery</a> dataset vendored in this repo (Sebastian Raschka's metadata for every notable open-weight model, 2019–2026): for each release year, the share of models using each component. Read it as adoption curves.</p>
 <div class="card">
 <h3>Component adoption by release year</h3>
@@ -182,8 +252,8 @@
 <p class="caption">Share of models released each year that use the component (detected from the dataset's attention, layer-mix, and highlight fields; 2019 is GPT-2 alone, 2024 has six models, so weight the 2025–2026 columns most). GQA is near-universal; MoE crossed half the field; hybrids with SSM/linear-attention layers and sliding-window ratios went from rare to mainstream in one year; MLA, MTP, QK-norm, and NoPE follow. Open the gallery to filter the models behind any bar.</p>
 </div>
 
-<h2 id="recent">10. 2025–2026 developments, model by model</h2>
-<p>Beyond the big families above, the last two years added a layer of refinements that now appear in most new releases. Each one below is grounded in specific gallery entries; click through to the <a href="gallery.html">gallery</a> for the fact sheets and config files.</p>
+<h2 id="recent">12. 2025–2026 developments, model by model</h2>
+<p>Beyond the big families above, the last two years added a layer of refinements that now appear in most new releases. Each one below is grounded in specific gallery entries; click through to the <a href="gallery.html">gallery</a> for the fact sheets and config files. The <a href="#sharing">weight-sharing subsection</a> at the end collects the designs that reuse weights across layers, passes, or adapters.</p>
 <table class="cmp">
 <tr><th>Development</th><th>What it is</th><th>Seen in (gallery)</th></tr>
 <tr><td><strong>Gated DeltaNet / Kimi Delta Attention hybrids</strong></td><td>Linear-attention layers with a delta-rule state update and learned forgetting gates, interleaved 3:1 (sometimes 5:1) with full or latent attention — the dominant 2026 recipe for long-context efficiency.</td><td>Qwen3-Next lineage, Kimi Linear → Kimi K3, Solar Open 2, Ling 3.0 Flash, GLM-5.3-Flash</td></tr>
@@ -204,8 +274,30 @@
 </table>
 <p>Step back and the pattern of <a href="#lineage">Section 1</a> still holds: <strong>cheaper mixers (DeltaNet, sliding windows, sparse indexers) take most layers; exact attention becomes rationed; residual streams and norms get re-engineered for stability; and inference hooks (MTP, KV sharing, index caches) ship inside the architecture</strong>. If you can explain those four sentences with two model examples each, you understand the 2026 frontier.</p>
 
-<h2 id="reading">11. Where to go deeper</h2>
+<h3 id="sharing">Weight sharing and repeating patterns</h3>
+<p>A quieter thread runs through the developments above: <strong>reusing the same weights in more than one place</strong>. The oldest form is <em>tied input/output embeddings</em> — the unembedding matrix is the transpose of the token-embedding table — which saves V·D parameters (a quarter of a small model) at a small quality cost; most sub-4B models tie them, most large ones do not (the gallery's Nanbeige 4.1 3B is explicitly noted as "without tying input embeddings to the output layer"). <em>Cross-layer weight sharing</em> goes further: ALBERT (2019) shared one transformer block's weights across all layers and recovered most of BERT's quality with a fraction of the parameters, and Universal Transformers applied the same block repeatedly with a learned halting signal. MobileLLM (2024) found that <em>immediate block-wise sharing</em> — applying each block twice in a row before moving on — gives depth for free on phones, where memory bandwidth, not FLOPs, bounds decode. The 2025–26 <em>looped / depth-recurrent</em> models in the table are this idea at LLM scale: Ouro-Thinking 2.6B (October 2025) reuses one 48-layer MHA stack across four passes, 192 block applications from 2.6B parameters, with sandwich RMSNorm and a learned exit gate; Nanbeige 4.2 3B (July 2026) runs its 22-layer stack twice for 44 applications with 3B non-embedding parameters — compute of a model twice its size, weights of a model its size, and "System 2 inside the forward pass" when the loop count is adaptive.</p>
+<p>Sharing also appears inside layers. The table's <em>cross-layer KV sharing</em> (Gemma 4's unified K/V on global layers; DeepSeek V4.1-Flash's decoder KV taken from encoder states) and <em>per-layer embeddings</em> (Gemma 3n/4, Qwen3.8-Flash-Next's n-gram table) are patterns of what gets reused and where; in MoE, the <em>shared expert</em> is a weight everyone uses alongside their routed experts, and <em>expert replication</em> (EPLB, <a href="parallelism.html">Parallelism</a>) copies hot experts across devices for load — a sharing pattern decided at serving time. LoRA is the training-side version: a low-rank pattern ΔW = BA laid over a frozen base, so many tasks share one base and differ by a few megabytes (<a href="training.html">Training</a>, <a href="customization.html">multi-adapter serving</a>).</p>
+<p>What sharing buys is clear from the decode arithmetic in <a href="inference.html#two-phases">Inference</a>: a decode step is bounded by the bytes of <em>unique</em> weights streamed from HBM, so a looped model with half the unique weights has half the bandwidth floor while doing the same compute — and it fits in half the memory. What it costs is capacity (fewer free parameters to store facts; ALBERT's gap vs BERT-large grew with scale) and training stability (recurrent application compounds like an RNN, which is why looped models add sandwich norms and exit gates). The interactive makes the trade visible: unique layers set parameters and memory, applied layers set compute and depth.</p>
+<div class="card">
+<h3>Interactive: same weights, more depth</h3>
+<div class="controls">
+  <label class="ctl">Unique layers <input type="range" id="wsUnique" min="4" max="64" step="2" value="24"> <span id="wsUniqueLabel">24</span></label>
+  <label class="ctl">Applied layers (passes × unique) <input type="range" id="wsPasses" min="1" max="4" step="1" value="1"> <span id="wsPassesLabel">1</span></label>
+  <label class="ctl">Width d_model <select id="wsWidth"><option value="1024">1024</option><option value="2048" selected>2048</option><option value="4096">4096</option></select></label>
+</div>
+<canvas id="wsViz" class="viz" width="900" height="200"></canvas>
+<div class="kpi">
+  <div class="box"><div class="v" id="wsParams">–</div><div class="l">block parameters</div></div>
+  <div class="box"><div class="v" id="wsFlops">–</div><div class="l">FLOPs / token</div></div>
+  <div class="box"><div class="v" id="wsDepth">–</div><div class="l">effective depth</div></div>
+  <div class="box"><div class="v" id="wsBw">–</div><div class="l">weight bytes per decode step (BF16)</div></div>
+</div>
+<p class="caption">Each block is 12·d² parameters (attention 4d², SwiGLU MLP 8d²), 2 FLOPs per parameter per token. Raising passes multiplies compute and depth but not parameters or the bytes a decode step must stream — the looped-model bargain. Compare Ouro's 48 × 4 with a plain 192-layer stack.</p>
+</div>
+
+<h2 id="reading">13. Where to go deeper</h2>
 <ul>
+<li><a href="https://arxiv.org/abs/2505.09388">Qwen3 Technical Report</a> (Yang et al. 2025) — hybrid thinking, the four-stage post-training recipe, and strong-to-weak distillation; the gallery's Qwen3-Next, 3.5, 3.6 and 3.8 cards for the hybrid lineage.</li>
 <li><a href="https://arxiv.org/abs/2405.04434">DeepSeek-V2</a> (MLA) and <a href="https://arxiv.org/html/2412.19437">DeepSeek-V3</a> (fine-grained MoE, aux-loss-free balancing, MTP) — the densest single sources of modern architecture ideas.</li>
 <li><a href="https://arxiv.org/abs/2312.00752">Mamba</a> and <a href="https://arxiv.org/abs/2405.21060">Mamba-2/SSD</a>; <a href="https://arxiv.org/abs/2502.11089">Native Sparse Attention</a>.</li>
 <li>Paradigms: <a href="https://arxiv.org/abs/1810.04805">BERT</a>, <a href="https://arxiv.org/abs/1910.10683">T5</a> and <a href="https://arxiv.org/abs/2205.05131">UL2</a>; diffusion LMs: <a href="https://arxiv.org/abs/2205.14217">Diffusion-LM</a> (Li et al. 2022), <a href="https://arxiv.org/abs/2502.09992">LLaDA</a> (2025), <a href="https://www.inceptionlabs.ai/">Mercury</a>, the <a href="https://deepmind.google/models/gemini-diffusion/">Gemini Diffusion</a> post.</li>
@@ -495,6 +587,91 @@ function draw(){
   ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('share of models released that year using the component',x0,H-30);
 }
 draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 3. RNN vs LSTM gradient flow ----------
+(function(){
+const cv=document.getElementById('rnnViz');if(!cv)return;const ctx=cv.getContext('2d');
+const rho=document.getElementById('rnnRho'),rl=document.getElementById('rnnRhoL'),lstm=document.getElementById('rnnLstm'),fg=document.getElementById('rnnF'),fl=document.getElementById('rnnFL');
+const T=16;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn');
+  const r=parseFloat(rho.value),f=parseFloat(fg.value),useL=lstm.checked;rl.textContent=r.toFixed(2);fl.textContent=f.toFixed(2);
+  const per=useL?f:r*0.65; // tanh' averages well below 1 on typical activations
+  const x0=60,y0=H-70,ph=H-130,cw=(W-x0-40)/T;
+  // log scale from 1e-6 to 1e+3
+  const lo=-6,hi=3;const yOf=v=>{const l=Math.max(lo,Math.min(hi,Math.log10(Math.max(v,1e-12))));return y0-(l-lo)/(hi-lo)*ph;};
+  ctx.strokeStyle=bd;ctx.lineWidth=1;ctx.font='11px sans-serif';ctx.fillStyle=dim;ctx.textAlign='right';
+  for(let l=lo;l<=hi;l+=3){const y=yOf(Math.pow(10,l));ctx.beginPath();ctx.moveTo(x0,y);ctx.lineTo(W-40,y);ctx.stroke();ctx.fillText('1e'+l,x0-6,y+4);}
+  ctx.strokeStyle=warn;ctx.setLineDash([4,4]);const y1=yOf(1);ctx.beginPath();ctx.moveTo(x0,y1);ctx.lineTo(W-40,y1);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('gradient = 1 (no decay)',W-180,y1-6);
+  for(let t=0;t<T;t++){
+    const g=Math.pow(per,T-1-t);const x=x0+t*cw+4,y=yOf(g);
+    ctx.fillStyle=useL?acc2:(g>1?warn:acc);ctx.fillRect(x,Math.min(y,y1),cw-8,Math.abs(y1-y)+1);
+    ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('h'+(t+1),x+(cw-8)/2,y0+16);
+    if(t<T-1){ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x+cw-8,y0+6);ctx.lineTo(x+cw+2,y0+6);ctx.stroke();}
+  }
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  const g10=Math.pow(per,10);
+  ctx.fillText(useL?('LSTM cell path: ∂c_t/∂c_{t−1} = f = '+f.toFixed(2)+'  → after 10 steps '+ (g10>=0.01?(100*g10).toFixed(0)+'% of the gradient survives':'<1% survives'))
+             :('Vanilla RNN: per-step factor ≈ ρ·tanh′ ≈ '+per.toFixed(2)+'  → after 10 steps ×'+(g10>=100?g10.toExponential(1):g10.toFixed(g10<0.01?4:2))+(per>1?'  (exploding)':'  (vanishing)')),x0,28);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.fillText('loss at h16 → gradient reaching each earlier step (log scale)',x0,46);
+}
+[rho,fg].forEach(e=>e.oninput=draw);lstm.onchange=draw;draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- Qwen3: thinking budget vs first visible token ----------
+(function(){
+const cv=document.getElementById('tbViz');if(!cv)return;const ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+function fmtMs(ms){return ms>=1000?(ms/1000).toFixed(1)+' s':Math.round(ms)+' ms';}
+function draw(){
+  const budget=+$('tbBudget').value,tpot=+$('tbTpot').value,ttft=+$('tbTtft').value,ans=+$('tbAns').value;
+  $('tbBudgetLabel').textContent=budget;$('tbTpotLabel').textContent=tpot;$('tbTtftLabel').textContent=ttft;$('tbAnsLabel').textContent=ans;
+  const think=budget*tpot,answer=ans*tpot,total=ttft+think+answer;
+  $('tbFirst').textContent=fmtMs(ttft+think);$('tbTotal').textContent=fmtMs(total);
+  $('tbBilled').textContent=(budget+ans).toLocaleString();$('tbShare').textContent=Math.round(100*budget/Math.max(1,budget+ans))+'%';
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn');
+  const x0=30,w=W-60,y=70,h=46;
+  const seg=[[ttft,acc,'prefill'],[think,warn,'thinking tokens (hidden)'],[answer,acc2,'visible answer']];
+  let x=x0;ctx.font='12px sans-serif';
+  seg.forEach(([ms,c,l])=>{const sw=w*ms/total;ctx.fillStyle=c;ctx.fillRect(x,y,Math.max(sw,1),h);
+    if(sw>60){ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText(l+' · '+fmtMs(ms),x+sw/2,y+28);}x+=sw;});
+  const fx=x0+w*(ttft+think)/total;ctx.strokeStyle=txt;ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(fx,y-22);ctx.lineTo(fx,y+h+22);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=txt;ctx.textAlign=fx>W/2?'right':'left';ctx.font='bold 12px sans-serif';ctx.fillText('first visible token at '+fmtMs(ttft+think),fx+(fx>W/2?-6:6),y-8);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('wall-clock → (bar spans '+fmtMs(total)+')',x0,y+h+40);
+  ctx.textAlign='right';ctx.fillText('budget 0 = System 1 floor: first token at '+fmtMs(ttft),x0+w,y+h+40);
+}
+['tbBudget','tbTpot','tbTtft','tbAns'].forEach(id=>document.getElementById(id).oninput=draw);draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- weight sharing: unique vs applied layers ----------
+(function(){
+const cv=document.getElementById('wsViz');if(!cv)return;const ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+function fmt(n){return n>=1e12?(n/1e12).toFixed(2)+' T':n>=1e9?(n/1e9).toFixed(2)+' B':n>=1e6?(n/1e6).toFixed(1)+' M':String(n);}
+function draw(){
+  const u=+$('wsUnique').value,p=+$('wsPasses').value,d=+$('wsWidth').value;
+  $('wsUniqueLabel').textContent=u;$('wsPassesLabel').textContent=p;
+  const params=12*d*d*u,flops=2*params*p,depth=u*p,bytes=params*2;
+  $('wsParams').textContent=fmt(params);$('wsFlops').textContent=fmt(flops);$('wsDepth').textContent=depth+' blocks';$('wsBw').textContent=fmt(bytes)+'B';
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),bd=css('--border');
+  const cols=['#5b8cff','#38c6a0','#f2a65a','#e5604c','#b07cff','#4cc3e5','#e5a0c3','#9ad24c'];
+  const bw=Math.max(3,Math.min(14,(W-80)/depth-2)),x0=40,y0=H-50,bh=70;
+  for(let i=0;i<depth;i++){const layer=i%u,pass=Math.floor(i/u);ctx.fillStyle=cols[layer%cols.length];ctx.globalAlpha=pass===0?1:0.45;
+    ctx.fillRect(x0+i*(bw+2),y0-bh,bw,bh);ctx.globalAlpha=1;
+    if(i%u===0&&p>1){ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x0+i*(bw+2)-1,y0-bh-10);ctx.lineTo(x0+i*(bw+2)-1,y0+6);ctx.stroke();}}
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';
+  ctx.fillText(p>1?('same '+u+' blocks applied '+p+'× (faded = reused weights): depth '+depth+', parameters unchanged'):(u+' unique blocks, applied once'),x0,y0+22);
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.fillText('weights stream from HBM once per step: '+fmt(bytes)+'B — compute per token: '+fmt(flops)+' FLOPs',x0,30);
+}
+['wsUnique','wsPasses'].forEach(id=>$(id).oninput=draw);$('wsWidth').onchange=draw;draw();
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 </script>
 </body>

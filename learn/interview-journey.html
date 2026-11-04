@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>The Interview Journey</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html" class="here">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>The Interview Journey: how the ML / research job search actually runs</h1>
+<p class="dim">Everything else in this notebook is about <em>what</em> to know. This chapter is about the process that tests it: how long it takes, which kinds of rounds exist and what each one is really measuring, how to prepare for a specific interview in three days, what happens after the offers arrive, and how to stay sane. It is built from two first-hand accounts written by people who kept the receipts — Alisa Liu's <a href="https://alisawuffles.github.io/blog/job-search/">Notes on the Industry Job Search</a> (June 2026) and Nathan Lambert's <a href="https://natolambert.com/writing/ai-phd-job-hunt">Job Hunt as a PhD in AI / ML / RL</a> (July 2022) — both mirrored in the companion <a href="https://github.com/kedardg/job-prep">job-prep</a> repository.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (12:25)</h3><audio controls preload="none" src="audio/interview-journey.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/interview-journey.txt">Read the transcript</a>.</p></div>
+<h2 id="why">1. Why this chapter exists</h2>
+<p>Alisa Liu describes the job search, from the outside, as a <em>sorting hat</em>: senior students disappear for months and re-emerge with their fates decided, and nobody tells you what happened in between. Her central observation after going through it is that the process is "far more demanding than I had imagined," that it has its own rules you learn while playing, and that most of what she learned "now feels like common knowledge" — the kind of knowledge that is only common once someone writes it down. This chapter writes it down.</p>
+<p>Two accounts anchor everything here, and both are unusually quantitative:</p>
+<ul>
+<li><strong>Alisa Liu</strong> finished a six-year NLP PhD at the University of Washington and applied for Research Scientist and Member of Technical Staff roles. She interviewed at <strong>11 companies across 57 interviews</strong>, with <strong>46 additional recruiter calls and 16 post-offer chats</strong> not counted in that number, plus "myriad informal networking conversations." Her consistent research thread in the last two years (tokenization) is something she credits with helping her stand out.</li>
+<li><strong>Nathan Lambert</strong> finished a PhD at Berkeley AI Research in reinforcement learning and robotics, aiming for a Research Scientist position at a top industry lab. He reports "plus or minus <strong>53 one-off interviews, 46 networking calls, 6 (virtual) on-site interviews, and 4 offers from 30 companies</strong>" he contacted or applied to, and published the raw data and plots in a <a href="https://github.com/natolambert/job-search-viz">repository</a>.</li>
+</ul>
+<p>The two posts were written four years apart, for adjacent but different roles (NLP research vs. RL/robotics), by people with different styles — which is exactly why they are useful together. Where they agree, you are probably looking at a structural feature of the process. Where they differ, you are looking at the variance you should expect. Nathan says this himself: "No process will be repeatable, but the themes will continue to unfold."</p>
+<p>One framing from Alisa carries the whole chapter: <strong>"the job search is a full-time job."</strong> It has a timeline, a skill set, a preparation strategy, and an emotional cost, and treating it as a side activity to research is the most common way to under-prepare.</p>
+
+<h2 id="timeline">2. The timeline</h2>
+<p>Both authors describe the same shape: a <strong>networking phase</strong> that turns into an <strong>interview phase</strong>, with recruiter screens fanning out into technical rounds, a few of those converting to onsites, offers clustering near the end, and then a separate, surprisingly long <strong>post-offer phase</strong> of team chats and negotiation.</p>
+<p>Nathan gives dates: he announced he was starting on <strong>26 October 2021</strong>, which "started the influx of emails and messages," and found that "I had a networking phase followed by an interview phase (I was trying to interview earlier, it seemed like most companies were somewhat waiting until 2022)." His 46 networking calls were "a fantastic way to learn what is out there without the constant pressure of interviews." His post, with offers in hand, is dated July 2022. Alisa does not publish calendar dates in the text (her timeline is a figure), but she describes being "stressed, miserable, and not functioning in other parts of my life for several months," and 57 interviews plus 46 recruiter calls plus 16 post-offer chats is not a six-week project.</p>
+<p>On <strong>sequencing companies</strong>, Alisa states the common wisdom — use a few companies for practice, then time the rest so offers land together for negotiation — and adds three corrections from experience: stamina is finite, so practice interviews can burn you out before the companies you care about; external factors like headcount and which teams are actively hiring "can matter more than your preparation," and you learn them from friends and recruiters; and deadlines are more flexible than they look, with "various tricks to delay the offer and decision," <em>except</em> for the notorious "exploding" offers, so always find out how long candidates are usually given to sign. Nathan adds the emotional calibration: "rejections always will come first. It takes a lot longer to get to the accept phase," and some companies hit "total headcount locks mid cycle" — talk to other people applying so you know it is not just you.</p>
+
+<div class="card">
+<h3>Animation: two job searches, side by side</h3>
+<canvas id="tlViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="tlPlay">▶ Play</button>
+  <button class="btn secondary" id="tlStep">Step</button>
+  <button class="btn secondary" id="tlReset">Reset</button>
+</div>
+<p class="caption">Two lanes, one per author, with the phases each describes. Nathan's lane uses the dates he gives (announcement 26 Oct 2021; most interviewing in 2022; post written July 2022) — the month boundaries between his phases are approximate. Alisa's lane has <em>no published dates</em> in the text, so her lane is drawn as a relative sequence over "several months" with her counts (46 recruiter calls, 57 interviews at 11 companies, 16 post-offer chats) attached to the phases they belong to. Treat both as shapes, not schedules.</p>
+</div>
+
+<p>Two things the animation makes visible. First, the <strong>fan-out</strong>: the number of recruiter conversations is close to the number of interviews (46 vs. 57 for Alisa; 46 networking calls vs. 53 interviews for Nathan), so expect roughly as many logistics calls as technical rounds. Second, the <strong>tail</strong>: Alisa's 16 post-offer chats and her account of "an overwhelming amount of communication" after offers are a whole phase that most people do not plan for.</p>
+<p><strong>Getting the first interview</strong> is its own pre-phase. Alisa's advice is unglamorous: do good work, make friends, collaborate widely, be social at conferences — "sometimes you need to have someone inside the company vouching for you" — and during the search, "reach out to people you know (or don't know)." She notes that reconnecting with people you have not spoken to in years "is okay, expected, and turns out to be a wonderful side effect." Nathan is blunt about the role of prestige: "the response rate is astounding" from a top school, every company got back to him, and he did not need a firehose approach — but he frames this honestly as a privilege, and suggests that candidates who expect lower response rates should spend more effort per contact (background, building, networking) rather than sending more emails.</p>
+
+<h2 id="types">3. Interview types and what each actually tests</h2>
+<p>Alisa's headline finding deserves to be read twice: <strong>"technical skills and knowledge are evaluated much more than research experience, though the latter probably gets you the interview in the first place."</strong> The CV opens the door; the rounds test fundamentals. Her taxonomy, enriched with Nathan's role-specific observations:</p>
+<table class="cmp">
+<tr><th>Round</th><th>What happens</th><th>What it really measures</th><th>Prepare with</th></tr>
+<tr><td><strong>ML coding</strong></td><td>"By far the most common" (Alisa). Implement an architecture, a decoding strategy, a traditional ML algorithm, or "way more creative things." PyTorch fluency is a must; occasionally numpy only, e.g. a backward pass from scratch (syntax familiarity not expected).</td><td>Muscle memory: can you write and <em>debug</em> a transformer block, attention, softmax, cross-entropy, a sampler, logistic regression, k-means — under time pressure, without an assistant.</td><td><a href="ml-coding.html">ML Coding</a>, <a href="transformers.html">Transformers</a>, <a href="deep-learning.html">Deep Learning</a>, CS336 assignment 1</td></tr>
+<tr><td><strong>General coding</strong></td><td>"Basically LeetCode, sometimes with some extra flavor." Nathan: LeetCode Premium for a few months "was the best preparation I did."</td><td>Data-structure fluency; these concepts resurface inside ML coding rounds, so they pay twice.</td><td><a href="coding-patterns.html">Coding Patterns</a>, the plan's Blind 75</td></tr>
+<tr><td><strong>Technical discussion (design)</strong></td><td>Extended discussion on one topic: design experiments to answer a research question, defend choices, interpret hypothetical results, propose follow-ups.</td><td>How you think.</td><td><a href="customization.html">Customization &amp; Evals</a>, <a href="training.html">Training</a></td></tr>
+<tr><td><strong>Technical discussion (rapid-fire)</strong></td><td>A list of quick questions — Alisa's examples: ways of encoding positional information, what 5D parallelism is, the difference between PPO and GRPO. Nathan saw "ML background" rounds of "math tricks and basic ML tradeoffs."</td><td>Breadth: that you "know your stuff" across the field.</td><td><a href="flashcards.html">Flashcards</a> (all decks), <a href="parallelism.html">Parallelism</a>, <a href="attention.html">Attention</a>, <a href="rl-systems.html">RL Systems</a></td></tr>
+<tr><td><strong>Research discussion</strong></td><td>"Tell me about a past project," then follow the thread; questions about other papers on your CV.</td><td>Why you chose your problems, the opinions you formed, where the field goes next; whether your profile matches the role's keywords.</td><td>Your own pitch (§5)</td></tr>
+<tr><td><strong>Job talk</strong></td><td>Shorter than an academic talk, focused on one paper or direction (Alisa's was all tokenizers). Nathan: "not about technical content, but conveying a vision and a story" — fewer plots with every round of feedback.</td><td>Vision, narrative, communication.</td><td>§5</td></tr>
+<tr><td><strong>Behavioral</strong></td><td>Textbook behavioral questions, occasionally about AI safety or societal impact.</td><td>Whether you can retrieve a relevant, specific story instantly. Alisa failed her first one by assuming she was "obviously well-behaved" and improvising.</td><td>Story bank (§5)</td></tr>
+<tr><td><strong>Math</strong></td><td>Some companies only: logic puzzles through pen-and-paper derivations. Alisa's math notes exist because of one such interview.</td><td>Probability, linear algebra, calculus under pressure.</td><td><a href="interview-math.html">Interview Math</a>, <a href="math.html">Math</a></td></tr>
+<tr><td><strong>System design</strong></td><td>Engineering-flavored roles; Nathan's MLE interviews pushed "more on practical problems," sometimes 3–5 coding rounds at one company.</td><td>Architecture judgement at scale.</td><td><a href="system-design.html">System Design</a>, <a href="inference.html">Inference</a></td></tr>
+<tr><td><strong>RL-specific</strong></td><td>Nathan: "write down the equation for Q learning," "implement gradient descent," a reward-shaping question, and a large code skeleton to complete, understand and debug (Tesla) — the format he thinks best mirrors real engineering.</td><td>Fundamentals plus the ability to work inside existing code.</td><td><a href="robot-learning.html">RL &amp; Robotics</a>, <a href="rl-systems.html">RL Systems</a></td></tr>
+</table>
+
+<p>Nathan's role buckets explain <em>why</em> the mix varies. Across his 26 processes (12 Research Scientist, 2 Researcher, 2 ML Engineer, 1 Deep Learning Engineer, 1 RL Engineer, 1 Control Engineer, 7 unknown) he felt four distinct interview styles: the <strong>paper-writing research scientist</strong> loop ("all about evaluating your vision, your place in the broader research community, and ability to work with the team" — like a faculty search); the <strong>product-focused research scientist</strong> loop (faculty-style self-promotion mixed with practical engineering questions — a title that, he suspects, exists so the PhD "feels special" while doing engineers' work); the <strong>ML engineer</strong> loop (fundamentals he was surprised to still remember — logistic regression, probability, vector calculus, math puzzles — and many coding rounds); and the <strong>robotics engineer</strong> loop (systems questions, very robotics-specific, little general ML). Alisa's MTS/RS loops in 2026 skew heavily toward the ML-coding and technical-discussion rows above.</p>
+
+<div class="card">
+<h3>Interactive: expected round mix by role</h3>
+<div class="controls">
+  <label class="ctl">Role
+    <select id="roleSel">
+      <option value="rs">Research Scientist (paper-writing lab)</option>
+      <option value="mts" selected>MTS / product-focused research</option>
+      <option value="mle">ML Engineer</option>
+      <option value="as">Applied Scientist</option>
+      <option value="rl">RL researcher / engineer (robotics-adjacent)</option>
+    </select>
+  </label>
+</div>
+<canvas id="mixViz" class="viz" width="900" height="330"></canvas>
+<div id="mixLinks" class="caption"></div>
+<p class="caption"><strong>Illustrative synthesis</strong>, not measured data: the weights are our reading of Alisa's "by far the most common" / "some companies" language and Nathan's four role buckets, normalized per role. Use it to decide where to spend the next week, not to predict a specific company's loop — ask the recruiter (Nathan: they will often say "LeetCode," but sometimes give you a real topic area).</p>
+</div>
+
+<h2 id="prep">4. Preparation principles</h2>
+<p>Alisa's preparation section is the most actionable part of her post, because it is a method rather than a list. Each principle below is hers unless attributed to Nathan, and each comes with the reasoning she gives.</p>
+<ol>
+<li><strong>Studying is the best use of your time.</strong> "There is truly no better use of your time than studying for interviews." Her process felt like undergrad: notes (her <a href="https://alisawuffles.notion.site/alisa-s-book-of-llms">Book of LLMs</a>, maintained throughout; her math notes, "all for a single fateful interview"), diagrams, practice problems, whole days in coffee shops on fundamentals. The skills tested "require dedicated effort to develop outside of doing research."</li>
+<li><strong>Map the field first, then deep-dive one concept at a time.</strong> She started by watching <em>all</em> of Stanford's CS336 lectures, which "helped me organize many scattered concepts in my brain into one coherent picture of the field," then deep-dived concepts individually through blog posts, papers, long conversations with ChatGPT and Claude, and implementing things from scratch. This notebook's chapter order is deliberately the same move: survey, then depth.</li>
+<li><strong>Muscle memory over understanding.</strong> "Homework 1 is crucial: implementing / debugging a transformer comes up so often in interviews that it will pay off massively to turn it into muscle memory and really isn't worth losing points on." Understanding attention is not the bar; writing it correctly in eight minutes while talking is.</li>
+<li><strong>Practice with AI assistance completely off.</strong> "You will underestimate your reliance otherwise." Interviews are assistant-free; your practice should be too, or your calibration about what you can actually produce is wrong.</li>
+<li><strong>Each interview is its own mini-cram.</strong> Build a picture of an interview's scope from the description, the company's topics, recruiter hints, and the company's reputation; then load the relevant knowledge fresh. Her image: "each interview is a slightly different math or CS class, you never went to lectures, and now you have ~3 days to cram for the midterm." The planner below operationalizes exactly this.</li>
+<li><strong>Sleep beats cramming.</strong> She did her first technical interview on two hours of sleep after cramming LLM-inference details: "none of the last-minute knowledge came up, and I ended up spending 10 minutes on an off-by-one error because my gears were barely turning."</li>
+<li><strong>Record notes after every interview</strong> — for future studying and reflection, and because interviewer questions repeat across companies.</li>
+<li><strong>Ask what to prepare, and push back on bad logistics</strong> (Nathan). Recruiters will often give you a topic area if asked; and "you can say no to companies" that refuse to communicate a schedule or offer one time slot — "the vast majority of times they want it to be a positive experience for you."</li>
+<li><strong>More coding practice always helps</strong> (Nathan). LeetCode Premium for a few months was his single best investment; he found CLRS too dry to make progress in and "did not do that much and made it."</li>
+<li><strong>Write out a research agenda with timelines and goals</strong> (Nathan) — it clarifies what starting the new job will look like and feeds the research-discussion and job-talk rounds.</li>
+</ol>
+<p>Nathan's list of <strong>the most common questions</strong> he faced is worth memorizing because it is short: <em>What do you want to work on when you show up? Who do you want to work with? If you had unlimited compute, what would you work on? What was a past project — its impact, what you learned? What communication styles do you prefer; do you work in teams; do you value mentorship?</em> Every one of these can be prepared in advance.</p>
+<p>Alisa also reports a result that reframes the whole effort: the studying had "enormous side benefits." Broader knowledge made her more confident in research conversations, less compelled to hide gaps, and — surprisingly — "enormously more effective at my ongoing project," able to have technical ideas she could not have reached before. The preparation is not a tax on research; done this way, it compounds into it.</p>
+
+<div class="card">
+<h3>Interactive: the 48-hour mini-cram planner</h3>
+<div class="controls">
+  <label class="ctl">Round type
+    <select id="cramType">
+      <option value="mlcode" selected>ML coding</option>
+      <option value="leet">General coding</option>
+      <option value="rapid">Technical discussion (rapid-fire)</option>
+      <option value="design">Technical discussion (experiment design)</option>
+      <option value="research">Research discussion / job talk</option>
+      <option value="behavioral">Behavioral</option>
+      <option value="math">Math</option>
+      <option value="sysdesign">System design</option>
+      <option value="rlround">RL-specific</option>
+    </select>
+  </label>
+  <label class="ctl">Company flavor
+    <select id="cramFlavor">
+      <option value="frontier" selected>Frontier lab (pretraining / inference heavy)</option>
+      <option value="posttrain">Post-training / RL-heavy lab</option>
+      <option value="product">Product ML team</option>
+      <option value="infra">Infra / accelerator team (GPU, Trainium)</option>
+      <option value="robotics">Robotics / embodied</option>
+    </select>
+  </label>
+  <button class="btn" id="cramGo">Build my 48 hours</button>
+</div>
+<canvas id="cramViz" class="viz" width="900" height="220"></canvas>
+<div id="cramOut" class="caption"></div>
+<p class="caption">Follows Alisa's method: scope from the round type and company flavor, swap the right knowledge in, keep the evening before for sleep — the schedule always ends with an empty final block on purpose. Every item links into this notebook; the chapters do the teaching, the planner just sequences them.</p>
+</div>
+
+<h2 id="nontech">5. The non-technical rounds, in depth</h2>
+<p>These are the rounds people under-prepare because they feel like conversation rather than examination. Both authors learned otherwise.</p>
+<h3>The behavioral story bank</h3>
+<p>Alisa's method, after her first failure: <strong>enumerate memorable stories</strong> from your PhD or work before any interview, <strong>map each story onto the common behavioral question families</strong> (conflict, failure, leadership, ambiguity, feedback, deadline, disagreement with a senior person, influencing without authority, ethics/safety), and rehearse until "you can retrieve the right anecdotes instantly." The failure mode she describes is specific and avoidable: reconstructing hazy memories <em>while</em> narrating them, then hearing "You didn't answer the question." A practical format: 8–12 stories, each written as situation → what you did → result → what you'd do differently, tagged with 2–3 question families each, so any question has at least two candidate stories.</p>
+<h3>The research pitch</h3>
+<p>Alisa's preparation for research discussions: step back and articulate <em>why</em> you chose the problems you did, the insights and opinions you developed, and what you believe are promising future directions. Then <strong>tailor the pitch per role</strong>: "interviewers are tired, so hitting the right keywords makes it easier for them to believe that your profile is relevant." Nathan's version of the same advice is to write a research agenda with timelines, so that "what do you want to work on when you show up" has a concrete answer.</p>
+<h3>The job talk</h3>
+<p>Both agree it is not an academic talk. Alisa: shorter, focused on a single paper or direction; hers spent most of the time on one first-author work and tied second-author and ongoing work into the same thread. Nathan: "Spend a lot of time on your job talk. It's not about technical content, but conveying a vision and a story. Honestly, the more feedback I got, the fewer plots I felt like I should have in my talk." Practice it on people who will tell you where they got lost, and cut a plot each time.</p>
+<h3>Questions to ask</h3>
+<p>Nathan's own evaluation question for robotics companies — how do you intend to deal with new and continuous data from deployed systems? — is a model: ask something that reveals how the team actually works and that you genuinely care about the answer to. Alisa's post-offer phase (team chats, lunches, manager conversations) is where these questions pay off most.</p>
+
+<h2 id="offers">6. Offers and negotiation</h2>
+<p>Alisa was "shocked to learn that the work is not nearly done after you receive your offers." The post-offer period is long, involves "many conversations with potential future teammates / managers, lunch visits, and recruiter calls," and she describes managing "an overwhelming amount of communication." Her guidance, point by point:</p>
+<ul>
+<li><strong>Initial offers leave room by design.</strong> Recruiters explicitly invited her to negotiate: "I don't expect you to take our first offer." Not negotiating is "doing yourself a disservice" even if you would be happy with the offer as is.</li>
+<li><strong>The stakes are large relative to the effort.</strong> "Putting in energy here for a few weeks can, literally, be equivalent to years of work at the initial offer."</li>
+<li><strong>You are outmatched, so borrow strength.</strong> Compared to recruiters you know less about the market and are less practiced; "lean on your friends for the know-how of interacting with recruiters and for more data points to help calibrate your asks."</li>
+<li><strong>Script every call.</strong> Before each recruiter call she wrote down what she was and was not willing to share, with quotes she could recite verbatim; post-offer, she anticipated their questions and arguments and constructed responses she could deliver comfortably while still advocating for herself.</li>
+<li><strong>Timing is flexible, mostly.</strong> Deadlines bend and there are legitimate ways to delay decisions, but check for exploding offers early.</li>
+</ul>
+<p>Nathan's offers (HuggingFace, Amazon Robotics &amp; AI, Boston Dynamics, NNAISENSE) show the other half of the decision: all were "very good technical matches," so the choice came down to people and life — one offer was close but had "weirdly structured" compensation, one lacked structures to stay active in the academic community, one would have required a move he was not ready for. He declines to share numbers and points to aipaygrad.es for data, and credits a negotiation coach from Rora.</p>
+<div class="card">
+<h3>A scripted counter, illustrated</h3>
+<p class="dim">An illustrative script in the shape Alisa describes — prepared lines, decided disclosures, no improvisation. Not advice on numbers.</p>
+<div class="formula">Recruiter: "Where are you on the offer? Anything we can do?"
+You (prepared): "I'm genuinely excited about the team — the [X] direction is exactly what I want to work on. I do have a competing offer whose total compensation is meaningfully higher, and I'd love to bring this one closer so the decision is about the work. Is there flexibility on base and the equity grant?"
+Recruiter: "What's the other number?"
+You (decided in advance NOT to disclose the exact figure): "I'd rather not share the exact breakdown, but it's above this offer on both base and equity. If you can move on those two, I can commit quickly."
+Recruiter: "We'd need something from you to go back to the committee."
+You: "Understood. If you can reach [range you decided beforehand with friends' data], I'll sign by [date you can actually keep]."</div>
+<p class="caption">What the script encodes: a reason the recruiter can carry upstairs (a competing offer, a specific component), a disclosure boundary set beforehand, a number calibrated with outside data, and a deadline you control. Everything Alisa recommends writing down before the call is in it.</p>
+</div>
+
+<h2 id="perspective">7. Perspective: prestige, noise, and staying sane</h2>
+<p>Nathan is candid about <strong>prestige</strong>: his search "would've been very different without" a Berkeley email address, AI "is certainly a community driven by prestige," and the "research scientist" title "is carrying a lot of prestige for some reason" while the day-to-day work often matches an engineer's on moderately sized projects. He also flags <strong>noise</strong>: even a very similar candidate six months later will see a different process. Read both posts, and this chapter, as themes rather than scripts.</p>
+<p>Alisa's concluding words are about the part no study plan covers: "a huge part of my personal experience was managing all the emotions that come with being on the market" — comparison with peers, everyone's opinions about where you should go, a huge decision space with incomplete information where "small choices with no right or wrong answers … have an outsized impact." She was, in her words, "stressed, miserable, and not functioning in other parts of my life for several months," and writes so that readers in the same place know they are not alone. Her closing advice is to cherish the PhD for what it is while it lasts, and she notes that she did her best work "when I was having fun and chasing the questions my mind would not lay to rest" — the two goals are complementary.</p>
+<p>Nathan's view from the other side is the counterweight: having a job is "really amazing" — exit paths exist, you join a team whose breadth you can draw on, and "most companies actually respect your life and time." The search is a season, not a state.</p>
+<p>Practical pacing, synthesized from both: plan the company order with your stamina in mind (Alisa); expect rejections before acceptances and headcount locks that are not about you (Nathan); keep a post-interview journal (Alisa); and protect sleep as a performance variable, not a luxury (Alisa).</p>
+
+<h2 id="plan">8. How this maps onto the study plan</h2>
+<table class="cmp">
+<tr><th>Plan step</th><th>What this chapter adds</th></tr>
+<tr><td><a href="../index.html">Step 1</a> — roles/companies list, Trello pipeline</td><td>Sequence companies by stamina and headcount, not just excitement; track recruiter calls and post-offer chats as pipeline stages too (they outnumber interviews).</td></tr>
+<tr><td>Step 20 — portfolio and resume</td><td>The CV gets the interview; the rounds test fundamentals. Make the portfolio evidence of muscle memory (kernels, from-scratch transformer) rather than breadth.</td></tr>
+<tr><td>Step 21 — system design</td><td>Weight it by role: heavy for engineering loops, light for paper-writing RS loops (§3).</td></tr>
+<tr><td>Step 22 — mock interviews (interviewing.io, pramp)</td><td>Run them with AI off, record notes afterwards, and rotate round types — including behavioral and research-pitch mocks, which the plan's interview-mode weeks 12–13 should include alongside coding.</td></tr>
+<tr><td>Step 23 — applying</td><td>Add the networking phase: reconnect broadly, ask for internal vouching, and calibrate email volume to expected response rate.</td></tr>
+<tr><td>Step 24 — interviewing</td><td>Use the mini-cram planner per round; sleep; journal.</td></tr>
+<tr><td>Step 25 — selecting the offer</td><td>Budget weeks, not days, for the post-offer phase; script every recruiter call; use friends' data points; check for exploding deadlines.</td></tr>
+</table>
+
+<h2 id="reading">9. Where to go deeper</h2>
+<ul>
+<li>Alisa Liu, <a href="https://alisawuffles.github.io/blog/job-search/">Notes on the Industry Job Search</a> (2026) — the primary source for §§3–6; her <a href="https://alisawuffles.notion.site/alisa-s-book-of-llms">Book of LLMs</a> and <a href="https://alisawuffles.notion.site/math-notes">math notes</a> are the study artifacts the process produced.</li>
+<li>Nathan Lambert, <a href="https://natolambert.com/writing/ai-phd-job-hunt">Job Hunt as a PhD in AI / ML / RL</a> (2022) and his <a href="https://github.com/natolambert/job-search-viz">job-search-viz</a> data.</li>
+<li>The <a href="https://github.com/kedardg/job-prep">job-prep</a> repository, which mirrors both posts, Alisa's notes (as PDFs and text), CS336 assignment 1, and the full scaling book, with the distilled six-phase learning path in <code>raw/00-source-learning-path.md</code>.</li>
+<li>In this notebook: <a href="ml-coding.html">ML Coding</a> for the most common round, <a href="interview-math.html">Interview Math</a> for the math round, <a href="coding-patterns.html">Coding Patterns</a> for general coding, and the <a href="flashcards.html">flashcard decks</a> for rapid-fire breadth.</li>
+</ul>
+
+<div class="footer-nav"><a href="aditya-verma-patterns.html">← AV Patterns</a><a href="notes.html">Notes →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function watchTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+// ---------- 2. timeline ----------
+(function(){
+const cv=document.getElementById('tlViz'),ctx=cv.getContext('2d');
+// phases as fractions of each lane [start,end], label, count note, approx flag
+const NATHAN=[
+ {s:0.00,e:0.22,l:'Networking phase',n:'46 networking calls · announced 26 Oct 2021',c:'#5b8cff'},
+ {s:0.18,e:0.62,l:'Interview phase',n:'~53 one-off interviews · companies mostly waited until 2022 (approx.)',c:'#38c6a0'},
+ {s:0.45,e:0.70,l:'Onsites',n:'6 virtual onsites (approx. placement)',c:'#f2a65a'},
+ {s:0.62,e:0.80,l:'Offers',n:'4 offers from 30 companies (order of receipt: HF, Amazon, BD, NNAISENSE)',c:'#b07cff'},
+ {s:0.78,e:1.00,l:'Decision · post written',n:'post dated 11 Jul 2022',c:'#e5a0c3'}];
+const ALISA=[
+ {s:0.00,e:0.20,l:'Networking + recruiter calls',n:'46 recruiter calls (no dates published)',c:'#5b8cff'},
+ {s:0.15,e:0.62,l:'Interview phase',n:'57 interviews at 11 companies (sequence, not dates)',c:'#38c6a0'},
+ {s:0.40,e:0.68,l:'Onsites / final rounds',n:'(approx. placement)',c:'#f2a65a'},
+ {s:0.60,e:0.80,l:'Offers',n:'offers timed to land together where possible',c:'#b07cff'},
+ {s:0.72,e:1.00,l:'Post-offer: chats + negotiation',n:'16 post-offer chats · "a few weeks" of negotiation',c:'#e5a0c3'}];
+let t=0,timer=null;
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const x0=150,x1=W-30,span=x1-x0;
+  ctx.font='bold 13px sans-serif';ctx.fillStyle=txt;ctx.textAlign='left';
+  ctx.fillText('Nathan Lambert (2021–22)',20,42);ctx.fillText('Alisa Liu (2026)',20,192);
+  ctx.font='11px sans-serif';ctx.fillStyle=dim;
+  ctx.fillText('RL / robotics · Berkeley',20,58);ctx.fillText('NLP · UW · RS / MTS roles',20,208);
+  // month axis (Nathan) — Oct 2021 .. Jul 2022
+  const months=['Oct','Nov','Dec','Jan','Feb','Mar','Apr','May','Jun','Jul'];
+  months.forEach((m,i)=>{const x=x0+span*i/(months.length-1);ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x,30);ctx.lineTo(x,150);ctx.stroke();ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText(m,x,26);});
+  ctx.textAlign='left';ctx.fillStyle=dim;ctx.fillText('relative sequence over "several months" — no calendar dates in the text',x0,178);
+  function lane(ph,yTop){
+    ph.forEach((p,i)=>{
+      const y=yTop+i*22;const xs=x0+span*p.s,xe=x0+span*Math.min(p.e,t);
+      if(t<=p.s)return;
+      ctx.fillStyle=p.c;ctx.globalAlpha=0.85;rr(ctx,xs,y,Math.max(4,xe-xs),16,5);ctx.fill();ctx.globalAlpha=1;
+      if(t>=p.e-0.02){ctx.fillStyle=txt;ctx.font='bold 11px sans-serif';ctx.fillText(p.l,xs+6,y+12);}
+    });
+  }
+  lane(NATHAN,66);lane(ALISA,216);
+  // notes for the phase currently being revealed
+  const cur=[...NATHAN].reverse().find(p=>t>p.s)||NATHAN[0];const cur2=[...ALISA].reverse().find(p=>t>p.s)||ALISA[0];
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText('↳ '+cur.n,x0,172-6);
+  ctx.fillText('↳ '+cur2.n,x0,H-18);
+  // progress marker
+  const xm=x0+span*t;ctx.strokeStyle=css('--accent');ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(xm,30);ctx.lineTo(xm,H-30);ctx.stroke();ctx.setLineDash([]);
+}
+function tick(){if(t<1){t=Math.min(1,t+0.02);draw();}else stop();}
+function stop(){if(timer){clearInterval(timer);timer=null;document.getElementById('tlPlay').textContent='▶ Play';}}
+document.getElementById('tlPlay').onclick=function(){if(timer){stop();return;}if(t>=1)t=0;this.textContent='⏸ Pause';timer=setInterval(tick,120);};
+document.getElementById('tlStep').onclick=()=>{stop();t=Math.min(1,t+0.1);draw();};
+document.getElementById('tlReset').onclick=()=>{stop();t=0;draw();};
+draw();watchTheme(draw);
+})();
+
+// ---------- 3. round mix by role ----------
+(function(){
+const cv=document.getElementById('mixViz'),ctx=cv.getContext('2d');
+const ROUNDS=[['ML coding','ml-coding.html'],['General coding','coding-patterns.html'],['Rapid-fire breadth','flashcards.html'],['Experiment design','customization.html'],['Research discussion / talk','#nontech'],['Behavioral','#nontech'],['Math','interview-math.html'],['System design','system-design.html'],['RL-specific','robot-learning.html']];
+// illustrative weights per role (sum ~ 100)
+const W={
+ rs:  [18,8,14,14,24,8,6,2,6],
+ mts: [28,12,16,12,14,8,6,4,0],
+ mle: [22,24,12,6,6,10,8,12,0],
+ as:  [20,16,12,14,10,10,10,8,0],
+ rl:  [16,10,10,10,16,8,6,6,18]};
+const COLS=['#5b8cff','#4cc3e5','#38c6a0','#9ad24c','#f2a65a','#e5604c','#b07cff','#e5a0c3','#d2b84c'];
+const sel=document.getElementById('roleSel');
+function draw(){
+  const Wd=cv.width,H=cv.height;ctx.clearRect(0,0,Wd,H);
+  const dim=css('--text-dim'),txt=css('--text');const w=W[sel.value];const max=Math.max(...w);
+  const x0=200,bw=Wd-x0-120;
+  ROUNDS.forEach(([name],i)=>{
+    const y=18+i*33;
+    ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='right';ctx.fillText(name,x0-12,y+15);
+    ctx.fillStyle=COLS[i];ctx.globalAlpha=w[i]?0.9:0.15;rr(ctx,x0,y,Math.max(3,bw*w[i]/max),22,6);ctx.fill();ctx.globalAlpha=1;
+    ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText(w[i]?w[i]+'% of prep weight':'rare',x0+bw*w[i]/max+8,y+15);
+  });
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('illustrative weights synthesized from the two posts; ask the recruiter what to prepare',x0,H-8);
+  document.getElementById('mixLinks').innerHTML='Where to drill for this role: '+ROUNDS.map(([n,h],i)=>w[i]>=12?'<a href="'+h+'">'+n+'</a>':null).filter(Boolean).join(' · ');
+}
+sel.onchange=draw;draw();watchTheme(draw);
+})();
+
+// ---------- 4. mini-cram planner ----------
+(function(){
+const cv=document.getElementById('cramViz'),ctx=cv.getContext('2d');
+const out=document.getElementById('cramOut');
+const BASE={
+ mlcode:[['Re-implement attention + transformer block from scratch, AI off','transformers.html'],['Softmax / cross-entropy / RMSNorm / RoPE by hand, check vs PyTorch','ml-coding.html'],['One decoding strategy (top-p, beam) and one classic ML algo (logistic regression, k-means)','ml-coding.html'],['numpy backward pass for a 2-layer MLP','deep-learning.html'],['Deck: Transformers + Deep Learning','flashcards.html']],
+ leet:[['Two patterns per block: sliding window, binary search, trees, graphs, DP','coding-patterns.html'],['Re-solve 6 Blind 75 problems you missed, timed','coding-patterns.html'],['Deck: Coding Patterns','flashcards.html']],
+ rapid:[['All flashcard decks, due cards first','flashcards.html'],['Positional encodings, GQA/MLA, FlashAttention in one breath','attention.html'],['5D parallelism: DP/TP/PP/EP/SP + collectives','parallelism.html'],['PPO vs GRPO vs DPO, said aloud','robot-learning.html#llm'],['Architecture tour: GPT-2 → Llama → DeepSeek, MoE, hybrids','architectures.html']],
+ design:[['Eval design: metrics, baselines, ablations, significance','customization.html'],['Data strategy and synthetic data pipelines','customization.html'],['Training recipes: SFT → preference → RL, what each teaches','training.html'],['Practice: pick a research question, design 3 experiments, predict results, plan follow-ups','#']],
+ research:[['Write the why/insights/future-directions pitch; tailor to the role keywords','#nontech'],['Job talk: one paper, cut a plot, rehearse the transitions','#nontech'],['Prepare answers to Nathan\'s common questions (unlimited compute, who to work with)','#prep'],['Research agenda with timelines','#prep']],
+ behavioral:[['Build or refresh the story bank (8–12 stories, tagged by question family)','#nontech'],['Rehearse retrieval: random question → story in 10 seconds','#nontech'],['One AI-safety / societal-impact position you can defend','agents.html']],
+ math:[['Distributions, expectations, indicators, first-step analysis','interview-math.html'],['Classic puzzles: birthday, gambler\'s ruin, coupon collector, Monty Hall','interview-math.html'],['Derivatives of softmax/cross-entropy, matrix calculus basics','math.html'],['Deck: Math','flashcards.html']],
+ sysdesign:[['4-step framework + back-of-envelope drill','system-design.html'],['Design an LLM serving system end to end','inference.html'],['Consistent hashing, caches, queues, LSM trees','system-design.html'],['Deck: System Design','flashcards.html']],
+ rlround:[['Write Q-learning, TD(0), policy gradient updates from memory','robot-learning.html'],['PPO clipped objective and GAE in code','robot-learning.html'],['Reward shaping question: design and critique a reward','rl-systems.html'],['Complete-a-skeleton practice: read, implement two functions, find the bug','robot-learning.html'],['Deck: RL & Robotics','flashcards.html']]};
+const FLAVOR={
+ frontier:[['Inference arithmetic: KV cache, prefill/decode, batching','inference.html'],['Scaling laws and the 6ND rule','training.html']],
+ posttrain:[['RLVR, GRPO/DAPO, trainer–rollout systems','rl-systems.html'],['Multi-turn RFT recipe and graders','rl-systems.html']],
+ product:[['Customization ladder: when to fine-tune vs RAG vs prompt','customization.html'],['Evaluation methodology and release gates','customization.html']],
+ infra:[['Roofline, SIMT, memory hierarchy','gpu.html'],['Trainium/NKI and the migration playbook','hardware.html'],['Kernels: matmul ladder, online softmax','kernels.html']],
+ robotics:[['Imitation, diffusion policy, VLAs','robot-learning.html'],['Multimodal tokenization (vision, 3D)','multimodal.html']]};
+function build(){
+  const type=document.getElementById('cramType').value,fl=document.getElementById('cramFlavor').value;
+  const items=BASE[type].concat(FLAVOR[fl]);
+  // 48h: 6 blocks of ~3h across two days + sleep block
+  const blocks=[['Day 1 · morning','scope + survey'],['Day 1 · afternoon','deep dive 1'],['Day 1 · evening','deep dive 2'],['Day 2 · morning','drill, AI off'],['Day 2 · afternoon','mock + notes'],['Day 2 · evening','SLEEP']];
+  const Wd=cv.width,H=cv.height;ctx.clearRect(0,0,Wd,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  const bw=(Wd-40)/6;
+  blocks.forEach((b,i)=>{const x=20+i*bw;ctx.fillStyle=i===5?acc2:acc;ctx.globalAlpha=i===5?0.9:0.35+0.1*i;rr(ctx,x,40,bw-8,110,10);ctx.fill();ctx.globalAlpha=1;
+    ctx.fillStyle='#fff';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(b[0],x+(bw-8)/2,64);ctx.font='12px sans-serif';ctx.fillText(b[1],x+(bw-8)/2,84);
+    if(i<5){const it=items[Math.min(i,items.length-1)];ctx.font='11px sans-serif';wrap(ctx,it[0],x+8,104,bw-24,14);}
+    else{ctx.font='11px sans-serif';ctx.fillText('no cramming (Alisa\'s rule)',x+(bw-8)/2,110);}
+  });
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('Scope → swap knowledge in → drill without assistance → mock + journal → sleep. Record what was asked afterwards.',20,H-16);
+  out.innerHTML='<strong>Your list</strong> (in order): '+items.map(([n,h])=>'<a href="'+h+'">'+n+'</a>').join(' → ')+'.';
+  function wrap(c,text,x,y,w,lh){const words=text.split(' ');let line='',yy=y;c.textAlign='left';for(const wd of words){const t=line+wd+' ';if(c.measureText(t).width>w){c.fillText(line,x,yy);line=wd+' ';yy+=lh;if(yy>y+3*lh){c.fillText(line.trim()+'…',x,yy);return;}}else line=t;}c.fillText(line,x,yy);}
+}
+document.getElementById('cramGo').onclick=build;build();watchTheme(build);
+})();
+</script>
+</body>
+</html>

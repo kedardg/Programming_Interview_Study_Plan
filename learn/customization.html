@@ -16,13 +16,13 @@
 </head>
 <body>
 <nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links">
-    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html" class="here">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html" class="here">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
   </div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
 <main>
 <h1>Model Customization Strategy, Data &amp; Evaluation</h1>
 <p class="dim">The chapter for the person who has to <em>decide</em>: a customer wants a model that is better, faster, or cheaper at their task — which of a dozen techniques do you reach for, what data makes it work, and how do you prove it worked? This is the technical-lead counterpart of the <a href="training.html">training</a> and <a href="inference.html">inference</a> chapters: less about how the machinery runs, more about choosing the machinery and making the choice defensible.</p>
 
-<div class="card audio-card"><h3>🎧 Listen to this chapter (14:20)</h3><audio controls preload="none" src="audio/customization.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/customization.txt">Read the transcript</a>.</p></div>
+<div class="card audio-card"><h3>🎧 Listen to this chapter (16:10)</h3><audio controls preload="none" src="audio/customization.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/customization.txt">Read the transcript</a>.</p></div>
 <h2 id="framing">1. Framing the problem: from a business ask to an eval bar</h2>
 <p>Customization engagements fail at the start, not the end. The failure mode is beginning with a technique ("we want to fine-tune Llama") instead of a target. A technical lead's first job is to turn an ambiguous ask into three numbers that an executive and an engineer both accept, and to agree on how those numbers will be measured <em>before</em> any model is touched. The three numbers are always the same triad:</p>
 <ul>
@@ -257,7 +257,70 @@ def paired_delta_ci(a, b, iters=5000, seed=0):
 #        mean_gain, lo, hi = paired_delta_ci(a, b)   # ship only if lo > 0 and the regression suite holds</div>
 <p><strong>Task-specific suites</strong> you should know the shape of: SWE-bench (resolve a real GitHub issue so hidden tests pass — the coding-agent standard; its Verified subset fixes broken tasks), τ-bench (agents following policies with tools and simulated users — measures consistency across trials with pass^k), and domain exam sets (bar exams, USMLE-style, internal certification questions) for vertical models. Build your customer's suite in the same shape as the public one closest to their task so results are interpretable to outsiders.</p>
 
-<h2 id="production">8. Production patterns</h2>
+<h2 id="encoders">8. Not everything is a decoder: fine-tuning GLiNER-style encoders vs LLaMA/Qwen-style decoders for extraction</h2>
+<p>The customization ladder above assumes the model is a generative decoder. For a large class of customer asks — pull the entities, fields, and relations out of documents at volume — that assumption quietly costs you a hundredfold in latency and dollars. <strong>GLiNER</strong> (Zaratiana, Tomeh, Holat and Charnois, 2023/2024) is the clearest example of the alternative: a <em>bidirectional encoder</em> (a DeBERTa-v3 or mDeBERTa backbone, roughly 50M–300M parameters) that reads the entity-type names as a prompt prefix in front of the text, builds a representation for every candidate span up to a maximum width, embeds each label name into the same space, and scores every span×label pair with a sigmoid. There is no generation: one forward pass yields every entity of every requested type, and because the label names are <em>inputs the model reads</em>, a label it has never seen works zero-shot. The family has grown around that trick — multi-task and bi-encoder GLiNER variants (labels encoded once and cached), <strong>GLiClass</strong> for zero-shot text classification, <strong>GLiREL</strong> for relation extraction — while extraction-tuned small decoders such as <strong>NuExtract</strong> occupy the middle ground: still generative, but trained only to emit JSON that matches a template.</p>
+<h3>How fine-tuning differs from decoder SFT</h3>
+<table class="cmp">
+<tr><th></th><th>GLiNER-style encoder</th><th>LLaMA / Qwen-style decoder (SFT)</th></tr>
+<tr><td>Objective</td><td>Binary cross-entropy on span×label matches (each candidate span scored against each label; negatives sampled)</td><td>Next-token cross-entropy on an instruction → JSON target (cross-link <a href="training.html">Training</a>)</td></tr>
+<tr><td>Data format</td><td>Text + character/token spans + free-text label strings — a few hundred examples sharpen a label set</td><td>Instruction and schema in the prompt, serialized JSON as the answer — thousands of examples for a new format</td></tr>
+<tr><td>Label semantics</td><td>Labels are read as text: rename or add a label at inference, zero-shot; fine-tuning teaches the <em>boundaries</em> your annotators use</td><td>Labels are whatever the model was taught to write; new fields need new examples or prompt engineering</td></tr>
+<tr><td>Compute to adapt</td><td>Minutes on one GPU (or CPU for small backbones); full fine-tune of a 200M model is cheap</td><td>Hours on multi-GPU for a 7B+ model even with LoRA; eval loops dominate</td></tr>
+<tr><td>Inference</td><td>One forward pass, milliseconds per document, batchable, deterministic, no hallucinated or paraphrased entities, runs on CPU</td><td>Autoregressive decode: seconds, cost per output token, constrained decoding required for valid JSON (<a href="inference.html#structured">Ch. 11 §7</a>); can reason over context and normalize or link entities</td></tr>
+<tr><td>Context</td><td>512–2K tokens per window; long documents are chunked with overlap</td><td>32K+ tokens; whole-document reasoning</td></tr>
+<tr><td>Structure</td><td>Nested and overlapping spans handled natively (every span is scored); relations via GLiREL</td><td>Any schema the prompt describes, including normalized values, but spans are not grounded unless you ask for offsets</td></tr>
+<tr><td>Languages</td><td>mDeBERTa backbones give strong multilingual zero-shot</td><td>Depends on the base model's pretraining mix</td></tr>
+</table>
+<p>The practical consequence: an encoder is fine-tuned the way a classifier is — small learning rate on the backbone, larger on the span and label heads, a span-width cap, negative sampling so the model learns to say <em>no entity here</em>, a decision threshold tuned on a validation set, early stopping on span-F1. A decoder is fine-tuned the way this chapter already described: data engineering, SFT, evals, with the extra burden that the output must parse.</p>
+
+<div class="card">
+<h3>Interactive: span × label matching, zero-shot vs fine-tuned</h3>
+<canvas id="spanViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <label class="ctl">Label 1 <input type="text" id="spanL1" value="person" size="12"></label>
+  <label class="ctl">Label 2 <input type="text" id="spanL2" value="organization" size="12"></label>
+  <label class="ctl">Label 3 <input type="text" id="spanL3" value="date" size="12"></label>
+</div>
+<div class="controls">
+  <label class="ctl">Threshold <input type="range" id="spanThr" min="0.2" max="0.9" step="0.05" value="0.5"> <span id="spanThrLabel">0.50</span></label>
+  <label class="ctl"><input type="checkbox" id="spanFT"> fine-tuned on 300 examples</label>
+  <span class="dim" id="spanKpi"></span>
+</div>
+<p class="caption">Every candidate span of width ≤ 3 (arcs) is scored against every label (heat strips below the tokens; the best span per label is outlined). Zero-shot scores are soft because the model only knows the label by its name; the fine-tuned toggle sharpens them toward the annotator's boundary conventions (e.g. "Acme Corp" vs "Acme Corp Ltd", "March 3" vs "3rd"). Move the threshold: lowering it trades precision for recall and the span-F1 against the hidden gold annotation moves with it. Rename a label — "company", "firm", "employer" — and watch the organization scores survive, which is the whole point of reading labels as text.</p>
+</div>
+
+<h3>Recipes</h3>
+<div class="formula"># GLiNER: zero-shot extraction, then fine-tuning (gliner library; flags illustrative)
+from gliner import GLiNER
+model = GLiNER.from_pretrained("urchade/gliner_multi-v2.1")          # mDeBERTa backbone, ~300M params
+labels = ["person", "organization", "date", "contract value"]       # free-text labels, read as a prompt prefix
+ents = model.predict_entities(text, labels, threshold=0.5)          # one forward pass -> [{"text","label","start","end","score"}]
+
+# fine-tuning data: whitespace/wordpiece tokens + token-index spans + label strings
+example = {"tokenized_text": ["Acme", "Corp", "hired", "Ana", "Ruiz", "on", "March", "3"],
+           "ner": [[0, 1, "organization"], [3, 4, "person"], [6, 7, "date"]]}   # [start, end] inclusive token indices
+
+# training (the library's train loop / Trainer config — sketch of the knobs that matter)
+cfg = dict(
+    lr_encoder=1e-5, lr_others=5e-5,   # backbone slower than span/label heads
+    max_width=8,                       # longest span considered, in tokens
+    max_neg_type_ratio=1,              # sample negative labels so "no entity" is learned
+    num_steps=3000, batch_size=8, warmup_ratio=0.1, eval_every=200,
+    shuffle_types=True, random_drop=True)   # label order/dropout augmentation
+# train(model, cfg, train_data, eval_data) -> pick the threshold that maximizes span-F1 on eval,
+# early-stop on eval F1; export; serve on CPU or a small GPU.</div>
+<div class="formula"># Decoder alternative: Qwen3 / LLaMA SFT for extraction, then constrained decoding at inference
+# Axolotl (see the YAML anatomy in training.html): instruction -> JSON matching a schema
+{"messages": [
+  {"role": "system", "content": "Extract entities as JSON matching the schema."},
+  {"role": "user", "content": "Schema: {person: [str], organization: [str], date: [str]}\nText: Acme Corp hired Ana Ruiz on March 3."},
+  {"role": "assistant", "content": "{\"person\": [\"Ana Ruiz\"], \"organization\": [\"Acme Corp\"], \"date\": [\"March 3\"]}"}]}
+# serve with a JSON-schema grammar so every token is valid (vLLM: response_format / guided_json; see inference.html#structured)</div>
+<p><strong>Evaluate them on the same footing.</strong> For the encoder, span-level precision, recall, and F1 with <em>exact</em> matching (boundaries and label identical) and a <em>relaxed</em> variant (overlap counts) — the gap between the two tells you whether errors are boundary conventions or real misses. For the decoder, field-level accuracy on the parsed JSON plus the parse-failure rate, and, if you asked for offsets, the same span metrics. Then put latency and cost per 1K documents next to the quality numbers: an encoder on one L4 processes thousands of documents a minute for cents; a 7B decoder emitting 200 tokens per document is seconds and dollars. The customer's SLO decides which table matters more (<a href="#cost">Section 10</a>).</p>
+<h3>Decision rule, and the hybrid that usually wins</h3>
+<p>The <strong>encoder wins</strong> when the schema is fixed or changes slowly, volume is high, latency and cost are constraints, outputs must be auditable (every entity is a literal span with a score), or deployment is on-prem/CPU. The <strong>decoder wins</strong> when extraction needs reasoning over context, documents are long, values must be normalized or linked (dates to ISO, companies to IDs), the schema is open-ended, or the output is prose. In practice the strongest pattern is the <strong>hybrid</strong>: GLiNER extracts grounded candidates at scale and the LLM reasons over, normalizes, and links only those — or, in the other direction, a frontier LLM labels a few thousand documents, a human spot-checks them, and GLiNER is fine-tuned on that silver data to run the volume. That second pattern is <a href="#distillation">distillation</a> in all but name: the expensive model's judgment compiled into a model that costs a hundredth as much to run.</p>
+
+<h2 id="production">9. Production patterns</h2>
 <h3>Multi-adapter serving</h3>
 <p>Once customization is cheap, every team, tenant, or task wants its own model — and you cannot afford a GPU per LoRA. <strong>Multi-adapter serving</strong> (S-LoRA, Sheng et al. 2023; Punica, Chen et al. 2023) keeps one base model's weights resident and batches requests that use <em>different</em> adapters together: the shared base matmul runs once for the whole batch, and the small per-request LoRA products (x·A·B with per-row adapter selection — a "segmented gather matmul") run as a custom kernel. Adapter weights are paged in and out of GPU memory like KV blocks. The trade: unmerged adapters add a few percent latency per token versus a merged single model, but one replica serves hundreds of adapters. vLLM exposes this as <code>--enable-lora --max-loras N --max-lora-rank R</code>, with adapters selected per request by name.</p>
 <div class="card">
@@ -272,7 +335,7 @@ def paired_delta_ci(a, b, iters=5000, seed=0):
 <h3>Coding agents and vertical models as engagement patterns</h3>
 <p>The two most common customer patterns in 2025–26 combine everything above. A <strong>coding agent</strong> for an internal codebase: CPT on the repository history and docs (knowledge), SFT on agent trajectories (format and tool use), RL with the customer's own test suite as the verifiable reward (reasoning and reliability — <a href="rl-systems.html">Ch. 15</a>), distillation into a size that meets the IDE latency budget, served with prefix caching because every agent turn re-sends the same context (<a href="agents.html">Ch. 18</a>). A <strong>vertical foundation model</strong> (finance, legal, health): CPT with replay on the domain corpus, tokenizer extension, SFT on expert-written tasks, preference tuning with domain reviewers, multi-adapter serving for sub-specialties, and an exam-style suite plus a regression suite as the release gate. In both, the eval suite is the deliverable the customer keeps using after you leave.</p>
 
-<h2 id="cost">9. Cost and capacity</h2>
+<h2 id="cost">10. Cost and capacity</h2>
 <p>Capacity decisions are made from benchmark evidence, so the lead must be able to turn measured tokens/sec into dollars. The model: a replica (one GPU or TP group) achieves some sustained throughput in prefill tokens/sec and decode tokens/sec at the latency targets; divide the replica's hourly price by throughput to get $ per million tokens of each kind; weight by your workload's input:output ratio; divide by requests. Everything else — model size, precision, adapters, batching — enters through the measured throughput.</p>
 <div class="card">
 <h3>Interactive: dollars per million tokens</h3>
@@ -297,12 +360,13 @@ def paired_delta_ci(a, b, iters=5000, seed=0):
 </div>
 <p>The TCO comparison every customer asks for — <em>prompt the frontier API</em> vs <em>fine-tune and self-host a smaller model</em> — comes down to volume and output length: API pricing is linear in tokens with zero fixed cost; self-hosting has a fixed replica floor and a steep volume discount. Below a few million tokens a day the API almost always wins; above it, a distilled model on reserved hardware wins by 3–10× — <em>if</em> the eval suite says the student clears the bar, which is why Sections 3 and 7 come before this one.</p>
 
-<h2 id="reading">10. Where to go deeper</h2>
+<h2 id="reading">11. Where to go deeper</h2>
 <ul>
 <li>Distillation: Hinton et al., <em>Distilling the Knowledge in a Neural Network</em> (2015); Gu et al., <em>MiniLLM</em> (2023); Agarwal et al., <em>On-Policy Distillation of Language Models (GKD)</em> (2024).</li>
 <li>Synthetic data and self-improvement: Wang et al., <em>Self-Instruct</em> (2022); Xu et al., <em>WizardLM / Evol-Instruct</em> (2023); Zelikman et al., <em>STaR</em> (2022); Yuan et al., <em>Scaling Relationship… Rejection Sampling Fine-Tuning</em> (2023); Shumailov et al. on model collapse (Nature, 2024).</li>
 <li>Data: Lee et al., <em>Deduplicating Training Data Makes Language Models Better</em> (2022); the Dolma and FineWeb/FineWeb-Edu dataset papers; Hoffmann et al., <em>Chinchilla</em> (2022) for the compute arithmetic.</li>
 <li>Evaluation: Chen et al., <em>Evaluating LLMs Trained on Code</em> (2021) for pass@k; Zheng et al., <em>Judging LLM-as-a-Judge with MT-Bench</em> (2023); Liang et al., <em>HELM</em>; the lm-evaluation-harness; SWE-bench and SWE-bench Verified; τ-bench.</li>
+<li>Encoders for extraction: Zaratiana et al., <em>GLiNER: Generalist Model for Named Entity Recognition using Bidirectional Transformer</em> (arXiv 2311.08526, NAACL 2024); the <a href="https://github.com/urchade/GLiNER">gliner repository</a> and model hub; GLiClass and GLiREL; NuExtract; He et al., <em>DeBERTa-v3</em> (2021).</li>
 <li>Serving: Sheng et al., <em>S-LoRA</em> (2023); Chen et al., <em>Punica</em> (2023); vLLM's LoRA documentation.</li>
 <li>In this notebook: <a href="training.html">Training</a> for the mechanics of each rung, <a href="rl-systems.html">RL Systems</a> for verifiable-reward RL harnesses, <a href="inference.html">Inference</a> and <a href="hardware.html">Hardware</a> for the throughput numbers that feed the cost model; the study plan's Axolotl and vLLM hands-on steps; the Customization flashcard deck.</li>
 </ul>
@@ -489,7 +553,72 @@ function upd(){
 ['ssBase','ssDelta','ssPaired'].forEach(id=>$(id).oninput=upd);upd();
 })();
 
-// ---------- 8. multi-adapter batch ----------
+// ---------- 8. span x label matching (GLiNER) ----------
+(function(){
+const cv=$('spanViz');if(!cv)return;const ctx=cv.getContext('2d');
+const TOK=['Acme','Corp','Ltd','hired','Ana','Ruiz','on','March','3','in','Berlin'];
+// hidden gold: span [start,end] (inclusive) -> concept
+const GOLD={org:[0,2],person:[4,5],date:[7,8]};
+const SYN={person:['person','people','name','individual','employee','human'],org:['organization','organisation','company','firm','employer','corp','business','org'],date:['date','time','day','when','month']};
+function concept(label){const l=label.trim().toLowerCase();for(const k in SYN)if(SYN[k].some(w=>l.includes(w)||w.includes(l)&&l.length>2))return k;return null;}
+function spans(){const out=[];for(let w=1;w<=3;w++)for(let i=0;i+w<=TOK.length;i++)out.push([i,i+w-1]);return out;}
+function seedRand(a,b,c){let x=Math.sin(a*12.9898+b*78.233+c*37.719)*43758.5453;return x-Math.floor(x);}
+function score(sp,label,ft,li){
+  const c=concept(label);const g=c?GOLD[c]:null;let s=0.08+0.25*seedRand(sp[0],sp[1],li);
+  if(g){const ov=Math.max(0,Math.min(sp[1],g[1])-Math.max(sp[0],g[0])+1);const len=sp[1]-sp[0]+1,glen=g[1]-g[0]+1;
+    if(ov>0){const jac=ov/(len+glen-ov);s=0.28+0.28*jac+0.08*seedRand(sp[1],sp[0],li);}
+    // zero-shot boundary softness: "Acme Corp" vs "Acme Corp Ltd", "March 3" vs "March"
+    if(c==='org'&&sp[0]===0&&sp[1]===1)s=ft?0.52:0.66;
+    if(c==='org'&&sp[0]===0&&sp[1]===2)s=ft?0.93:0.61;
+    if(c==='person'&&sp[0]===4&&sp[1]===5)s=ft?0.95:0.78;
+    if(c==='person'&&sp[0]===4&&sp[1]===4)s=ft?0.3:0.55;
+    if(c==='date'&&sp[0]===7&&sp[1]===8)s=ft?0.92:0.63;
+    if(c==='date'&&sp[0]===7&&sp[1]===7)s=ft?0.28:0.66;
+    if(c==='date'&&sp[0]===8&&sp[1]===8)s=ft?0.2:0.52;
+  }
+  if(ft&&(!g||s<0.5))s*=0.6; // fine-tuning suppresses noise
+  return Math.min(0.99,Math.max(0.02,s));
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2'),bd=css('--border');
+  const labels=[$('spanL1').value,$('spanL2').value,$('spanL3').value],thr=parseFloat($('spanThr').value),ft=$('spanFT').checked;
+  $('spanThrLabel').textContent=thr.toFixed(2);
+  const x0=40,cw=(W-80)/TOK.length,yTok=150;
+  // arcs for candidate spans
+  const SP=spans();
+  SP.forEach(sp=>{const w=sp[1]-sp[0];const xa=x0+sp[0]*cw+cw/2,xb=x0+sp[1]*cw+cw/2;const r=(xb-xa)/2+8+w*6;
+    ctx.strokeStyle=bd;ctx.lineWidth=1;ctx.beginPath();ctx.arc((xa+xb)/2,yTok-14,r,Math.PI,2*Math.PI);ctx.stroke();});
+  ctx.font='13px monospace';ctx.textAlign='center';
+  TOK.forEach((t,i)=>{ctx.fillStyle=css('--bg-card');ctx.fillRect(x0+i*cw+3,yTok-10,cw-6,24);ctx.strokeStyle=bd;ctx.strokeRect(x0+i*cw+3,yTok-10,cw-6,24);ctx.fillStyle=txt;ctx.fillText(t,x0+i*cw+cw/2,yTok+7);});
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('candidate spans, width ≤ 3 (arcs) — every one is scored against every label',x0,30);
+  // heat strips per label
+  let tp=0,fp=0,fn=0;const colors=[acc,acc2,'#f2a65a'];
+  labels.forEach((lab,li)=>{
+    const y=yTok+40+li*52;ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText(lab||'(empty)',x0,y+4);
+    let best=null,bs=-1;const scored=SP.map(sp=>({sp,s:score(sp,lab,ft,li)}));
+    scored.forEach(o=>{if(o.s>bs){bs=o.s;best=o;}});
+    // per-token max score strip
+    for(let i=0;i<TOK.length;i++){let m=0;scored.forEach(o=>{if(o.sp[0]<=i&&i<=o.sp[1])m=Math.max(m,o.s);});
+      ctx.fillStyle=colors[li];ctx.globalAlpha=0.12+0.85*m;ctx.fillRect(x0+i*cw+3,y+8,cw-6,16);ctx.globalAlpha=1;}
+    // predicted spans above threshold: non-overlapping greedy
+    const pred=scored.filter(o=>o.s>=thr).sort((a,b)=>b.s-a.s);const used=[];const chosen=[];
+    pred.forEach(o=>{if(!used.some(u=>!(o.sp[1]<u[0]||o.sp[0]>u[1]))){used.push(o.sp);chosen.push(o);}});
+    chosen.forEach(o=>{ctx.strokeStyle=colors[li];ctx.lineWidth=2.5;ctx.strokeRect(x0+o.sp[0]*cw+2,y+6,(o.sp[1]-o.sp[0]+1)*cw-4,20);
+      ctx.fillStyle=dim;ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText(o.s.toFixed(2),x0+(o.sp[0]+o.sp[1]+1)*cw/2,y+36);});
+    // metrics vs gold
+    const c=concept(lab);const g=c?GOLD[c]:null;
+    chosen.forEach(o=>{if(g&&o.sp[0]===g[0]&&o.sp[1]===g[1])tp++;else fp++;});
+    if(g&&!chosen.some(o=>o.sp[0]===g[0]&&o.sp[1]===g[1]))fn++;
+  });
+  const p=tp+fp?tp/(tp+fp):0,r=tp+fn?tp/(tp+fn):0,f=p+r?2*p*r/(p+r):0;
+  $('spanKpi').textContent='exact span-F1 vs hidden gold: '+f.toFixed(2)+' (P '+p.toFixed(2)+' · R '+r.toFixed(2)+') — '+(ft?'fine-tuned':'zero-shot');
+}
+['spanL1','spanL2','spanL3','spanThr','spanFT'].forEach(id=>{$(id).oninput=draw;$(id).onchange=draw;});
+draw();onTheme(draw);
+})();
+
+// ---------- 9. multi-adapter batch ----------
 (function(){
 const cv=$('loraViz'),ctx=cv.getContext('2d');const COL=['#5b8cff','#38c6a0','#f2a65a','#b07cff','#e5604c'];
 let reqs=[],t=0,timer=null,loaded=new Set([0,1]),flash=null;
@@ -511,7 +640,7 @@ $('loraPlay').onclick=function(){if(timer){stop();return;}if(t>60){t=0;reqs=[];l
 $('loraReset').onclick=()=>{stop();t=0;reqs=[];loaded=new Set([0,1]);flash=null;draw();};draw();onTheme(draw);
 })();
 
-// ---------- 9. cost calculator ----------
+// ---------- 10. cost calculator ----------
 (function(){
 function upd(){
   const hr=+$('cHour').value,pre=+$('cPre').value,dec=+$('cDec').value,inn=+$('cIn').value,out=+$('cOut').value,req=+$('cReq').value;

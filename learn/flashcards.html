@@ -29,7 +29,7 @@
 <nav class="topnav">
   <a class="home" href="index.html">Learn</a>
   <div class="links">
-    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html" class="here">Flashcards</a>
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html" class="here">Flashcards</a>
   </div>
   <div class="spacer"></div>
   <button class="theme-btn" id="themeBtn">◐ theme</button>
@@ -196,6 +196,10 @@ const DECKS = {
 ["The DP recipe?","Define the state, write the recurrence, set base cases, choose the fill order (or memoize top-down), read off the answer."]
 ],
 "Customization & Evals": [
+["GLiNER's mechanism in one line?","A bidirectional DeBERTa encoder reads the label names as a prompt prefix, builds a representation for every candidate span up to a max width, embeds each label, and scores span×label pairs with a sigmoid — zero-shot NER in one forward pass, no generation."],
+["Encoder (GLiNER) vs decoder (Qwen/LLaMA SFT) fine-tuning — data and objective?","Encoder: text + spans + label strings, binary cross-entropy on span×label matches, minutes on one GPU. Decoder: instruction → JSON, next-token cross-entropy, hours; needs constrained decoding at inference."],
+["When does the encoder win vs the decoder for extraction?","Encoder: fixed/slow schema, high volume, latency/cost limits, auditable literal spans, CPU/on-prem. Decoder: reasoning over long context, normalization/linking, open-ended schemas, prose output."],
+["The hybrid extraction pattern?","GLiNER extracts grounded candidates at scale and the LLM reasons/normalizes over them; or the LLM labels silver data and GLiNER is fine-tuned on it — distillation of the expensive model's judgment into a cheap runner."],
 ["The customization ladder, bottom to top?","Prompting/few-shot → RAG → adapter SFT → full SFT → preference optimization → RL with verifiable rewards → distillation into a smaller model → continued pre-training → domain foundation model. Climb only as high as the eval demands."],
 ["First thing to define in a customization engagement?","The eval bar: measurable quality target plus latency and cost ceilings (e.g. pass@1 ≥ X on an internal suite, p95 TTFT ≤ Y, $/1K requests ≤ Z) — before touching a model."],
 ["Knowledge gap vs format gap — which path?","Format/style/skill gaps → SFT or preference tuning on a few thousand examples. Knowledge gaps → RAG first; continued pre-training only if the domain is large, stable, and RAG fails."],
@@ -245,6 +249,95 @@ const DECKS = {
 ["Bedrock vs SageMaker vs self-managed?","Bedrock: managed fine-tuning/distillation and Custom Model Import, no infra. SageMaker: training jobs/HyperPod clusters and endpoints you configure. Self-managed: full control (verl/vLLM on EC2/EKS) when you need it."],
 ["Axolotl vs TRL?","Axolotl: YAML-driven end-to-end SFT/DPO/GRPO with packing, FSDP/DeepSpeed, multimodal. TRL: Python trainers (SFTTrainer, DPOTrainer, GRPOTrainer) for fast experiments."],
 ["Checkpoint formats to know?","safetensors (HF weights), PyTorch DCP (FSDP distributed), Megatron dist-ckpt — conversions between them are a recurring chore."]
+],
+"Interview Math": [
+["Which distribution for 'how many trials until the first success'?","Geometric (discrete) — memoryless; its continuous cousin is the exponential ('how long until the first event')."],
+["Binomial vs Poisson — when each?","Binomial: successes in n fixed trials. Poisson: event counts in a fixed window; it's the n→∞, np=λ limit of the binomial."],
+["Markov vs Chebyshev inequality?","Markov: P(X ≥ a) ≤ E[X]/a for X ≥ 0. Chebyshev: P(|X−μ| ≥ kσ) ≤ 1/k² — bounds from the mean alone vs mean and variance."],
+["Jensen's inequality, and the ML place it bites?","For convex f, f(E[X]) ≤ E[f(X)]. Why log E ≥ E log (the ELBO is a lower bound) and why estimating a function of a mean from samples is biased."],
+["Linearity of expectation with indicators — the move?","E[count] = Σ P(indicator_i = 1), no independence needed. Birthday collisions, fixed points of a permutation, balls-in-bins empty bins all fall to it."],
+["First-step analysis?","Condition on the first step: E[T] = 1 + Σ p(step) E[T | after step]; solve the recurrence. Hitting times, gambler's ruin, expected coin-flip waits."],
+["Gambler's ruin with fair coin from i to N?","P(ruin) = 1 − i/N; expected duration i(N−i). Biased: P(ruin) = (1−(q/p)^i)/(1−(q/p)^N) with the ratio q/p."],
+["Coupon collector expectation?","n·H_n ≈ n(ln n + 0.577); 50 coupons → about 225 draws."],
+["Birthday problem rule of thumb?","P(collision) ≈ 1 − e^{−n²/(2m)}; with m=365 it crosses 50% at n=23; collisions appear around √m."],
+["Reservoir sampling for k of a stream?","Keep the first k; for item i>k, keep it with probability k/i, replacing a uniform slot. Each item ends up chosen with probability k/n."],
+["Monty Hall in one line?","Switching wins 2/3: your first pick is right 1/3 of the time; the host's reveal moves all remaining mass to the other door."],
+["Secretary problem strategy?","Skip the first n/e candidates, then take the first one better than all seen; success ≈ 1/e ≈ 37%."],
+["CLT in one sentence, and when it fails?","Standardized sums of iid finite-variance RVs → Gaussian; fails for heavy tails (infinite variance, e.g. Cauchy) or strong dependence."],
+["MLE for a Gaussian's μ and σ²?","μ̂ = sample mean; σ̂² = (1/n)Σ(x−μ̂)² — biased low by (n−1)/n; divide by n−1 for unbiased."],
+["Bias–variance decomposition?","E[(ŷ−y)²] = bias² + variance + irreducible noise; richer models trade bias for variance."],
+["Expected max of n iid Uniform(0,1)?","n/(n+1); the min is 1/(n+1). Order statistics via P(max ≤ x) = xⁿ."]
+],
+"ML Coding": [
+["RMSNorm in two lines?","x · rsqrt(mean(x², dim=-1) + eps) · g, computed in float32 then cast back; no mean-centering, no bias."],
+["SwiGLU FFN?","W2 · (SiLU(W1 x) ⊙ W3 x); d_ff ≈ 8/3·d_model rounded to a multiple of 64 so parameters match a 4d GeLU MLP."],
+["RoPE in words?","Pair adjacent dims; rotate each pair by angle pos·θ_i with θ_i = base^(−2i/d); applied to Q and K after the head split, before the dot product."],
+["Causal attention mask — the shapes?","Scores (B, h, T, T); mask the upper triangle with −inf before softmax over the last dim; 1/√d_head scaling before masking."],
+["Multi-head reshape dance?","(B, T, d) → (B, T, h, d_h) → transpose to (B, h, T, d_h); after attention, transpose back and merge heads; keep .contiguous() before view."],
+["Numerically stable cross-entropy?","logits − max, then log-sum-exp: loss = −(z_y − m) + log Σ exp(z − m); never softmax then log."],
+["AdamW update?","m = β1 m + (1−β1) g; v = β2 v + (1−β2) g²; θ −= lr · (m/(1−β1^t)) / (√(v/(1−β2^t)) + ε); then θ −= lr·λ·θ (decoupled decay). Skip decay on norms/biases."],
+["Cosine schedule with warmup?","lr linearly 0→max over warmup steps, then max_lr·½(1+cos(π·progress)) down to min_lr, then hold min_lr."],
+["Gradient clipping by global norm?","total = √Σ‖g_i‖²; if total > max, scale every grad by max/(total + eps)."],
+["BPE training loop?","Pre-tokenize (regex, split on special tokens), count byte-pair frequencies, merge the most frequent pair (tie-break lexicographically), repeat until vocab size; record merges in order."],
+["BPE encode?","Pre-tokenize, apply merges in training order to each pre-token's byte sequence, map to ids; special tokens bypass merging."],
+["get_batch for LM training?","Sample B random offsets into the token memmap; inputs = tokens[o:o+T], targets = tokens[o+1:o+T+1]; move to device."],
+["Top-p sampling?","Softmax with temperature; sort probs descending; keep the smallest prefix with cumulative mass ≥ p; renormalize; sample."],
+["Two-layer MLP backward in numpy?","dz2 = (ŷ − y)/B; dW2 = h^T dz2; dh = dz2 W2^T; dz1 = dh ⊙ (z1 > 0); dW1 = x^T dz1 — then gradient-check with finite differences."],
+["The 5 bugs to check first when a transformer won't learn?","Mask dtype/broadcast, missing 1/√d, softmax over the wrong dim, RMSNorm/softmax in bf16, targets not shifted by one."]
+],
+"Interview Journey": [
+["Alisa Liu's single most important prep principle?","Studying is the best use of your time — treat the search as a full-time job; build muscle memory, not just understanding."],
+["Why practice with AI assistance off?","Interviews are AI-off; you underestimate your reliance until you remove it. Blank file, timer, tests."],
+["What is 'each interview is its own mini-cram'?","Infer scope from the description, recruiter hints and company reputation, then load the relevant knowledge fresh right before — rather than cramming everything always."],
+["The most common technical interview type for ML/research roles?","ML coding: implement or debug a transformer or classic ML algorithm in PyTorch/numpy, live."],
+["What does a 'technical discussion' round look like?","Rapid-fire breadth checks and experiment-design talk: 5D parallelism, PPO vs GRPO, positional encodings, how you'd set up an ablation."],
+["Behavioral prep, the method?","Enumerate memorable stories in advance and map them to common question families so retrieval is instant — improvising cost Alisa her first one."],
+["Research discussion — what to prepare?","Why you worked on what you did, the insights you developed, promising directions; tailored to each role's keywords."],
+["Job talk vs academic talk?","Shorter and more focused — one paper or one direction, framed for the team's problems."],
+["Negotiation — the posts' core points?","Initial offers leave room and recruiters expect a counter; use friends for market data and recruiter know-how; prepare what you will and won't share; weeks of effort can equal years of comp."],
+["Sleep or cram the night before?","Sleep. Last-minute cramming rarely pays; fatigue costs you on simple bugs."],
+["Nathan Lambert's 'signal vs noise' point?","Prestige and brand are noisy signals; demonstrated skill in the interview styles each role uses is what gets evaluated — prepare for the styles."],
+["How does this notebook map to the mini-cram?","ML coding → ML Coding chapter + deck; breadth → Parallelism/Inference/RL Systems decks; math round → Interview Math simulators; behavioral → the story bank in Interview Journey."]
+],
+"AV Patterns": [
+["Aditya Verma's 0/1 knapsack identification cue?","Choice per item (take or leave) + a capacity/target constraint + optimize or count → 0/1 knapsack; its variants: subset sum, equal partition, count subsets, min subset difference, target sum."],
+["Unbounded vs 0/1 knapsack in code?","Unbounded lets an item be reused: after taking item i you stay at i (dp[i][w-wt] ) instead of moving to i-1. Rod cutting, coin change (ways/min), ribbon cut."],
+["LCS family — how to recognize?","Two strings and a 'common/subsequence/supersequence/palindrome/edit' question → LCS table; longest palindromic subsequence = LCS(s, reverse(s)); min insertions/deletions = n − LCS."],
+["MCM (matrix chain) pattern cue?","A range [i, j] with a partition point k to try every split and combine (i..k, k+1..j) → MCM template; palindrome partitioning, boolean parenthesization, egg dropping, scrambled strings."],
+["Sliding window: fixed vs variable — the two templates?","Fixed size k: expand to k then slide one in/one out. Variable: expand right while condition holds, shrink left when violated; answer updated on each valid window (longest substring k unique, min window substring)."],
+["Stack pattern cue?","'Nearest greater/smaller to left/right' — monotonic stack; stock span, largest histogram area, max rectangle in binary matrix, trapping rain water all reduce to NGL/NGR/NSL/NSR."],
+["Binary search beyond sorted arrays?","Monotonic predicate → binary search on the answer: allocate minimum pages, Koko eating bananas, split array largest sum; also first/last occurrence, rotations, bitonic peak, infinite arrays."],
+["Recursion playlist's core device?","Input–output method: shrink the input one decision at a time, carry the partial output; subsets, permutations with case/space, balanced parentheses, N-bit binary numbers, Josephus."],
+["Heap pattern cue?","'k' + 'smallest/largest/closest/frequent' → a heap of size k (min-heap for k largest, max-heap for k smallest): top k frequent, k closest points, connect ropes, sort k-sorted array."],
+["His three-step DP method?","Write the brute-force recursion with the choice diagram, memoize it top-down, then convert to a bottom-up table — same transitions, no re-derivation."]
+],
+"Deployment": [
+["The deployment loop in one line?","SFT'd model → eval → quantize → serve (vLLM) → load-test against TTFT/TPOT SLOs → size the fleet → ship with canary and rollback."],
+["Open-loop vs closed-loop load testing?","Open-loop: requests arrive at a rate (Poisson) regardless of responses — realistic, exposes queueing collapse. Closed-loop: fixed concurrency — measures capacity, hides the knee."],
+["How do you measure TTFT with a streaming client?","Time from sending the request to the first SSE chunk with a token; TPOT = (end − first token) / (output tokens − 1). Locust custom events or GenAI-Perf --streaming record both."],
+["Goodput?","Requests per second completed within their TTFT and TPOT SLOs — the number you size a fleet on, not raw throughput."],
+["vLLM flags that move TTFT vs TPOT?","TTFT: --enable-chunked-prefill (chunk size), --enable-prefix-caching, more replicas. TPOT: --max-num-seqs cap, quantization (AWQ/FP8), --tensor-parallel-size, speculative decoding."],
+["Why quantize an SFT'd model before serving?","Decode is bandwidth-bound: W4A16 cuts weight bytes ~4×, FP8 ~2× — more sequences fit (KV headroom) and TPOT drops; verify eval parity after."],
+["ECS vs EKS for LLM serving?","ECS: simpler AWS-native tasks/services on EC2 GPU instances (Fargate has no GPUs). EKS: Kubernetes — GPU node groups with the NVIDIA device plugin, HPA/KEDA/Karpenter, the ecosystem (KServe, Ray Serve, llm-d)."],
+["Minimum EKS pieces to run vLLM?","GPU node group + NVIDIA device plugin, a Deployment requesting nvidia.com/gpu, readiness probe on /health, a Service/ingress, secrets for the HF token, weights on PVC/S3."],
+["What should autoscaling key on for LLMs?","Not CPU: queue depth / waiting requests, KV-cache utilization, TTFT p95 — via KEDA or custom metrics; scale replicas, not TP."],
+["Qwen3's thinking mode and latency?","Thinking tokens are generated before the visible answer, so TTFT-to-answer grows with the thinking budget; use the reasoning parser and cap the budget for latency-sensitive endpoints."],
+["Why p99 and not average latency?","SLOs are tail promises; queueing makes tails fat first. Report p50/p95/p99 and check them against the SLO at the target request rate."],
+["Which vLLM metrics tell you you're saturated?","num_requests_waiting rising, gpu_cache_usage near 1, preemptions > 0, TTFT p95 climbing while throughput plateaus."]
+],
+"Framework Gotchas": [
+["vLLM: 'max seq len larger than what KV cache can store' — fix?","The KV pool under --gpu-memory-utilization can't hold one full sequence: lower --max-model-len, raise utilization, quantize weights/KV, or add TP. Compute the budget first."],
+["vLLM: OOM despite low --gpu-memory-utilization?","Utilization caps only the KV pool; CUDA-graph capture, warmup, or another process take the rest. Lower --max-num-seqs, try --enforce-eager, free the GPU."],
+["Why can a chat/tool/reasoning parser silently ruin a deployment?","Template, reasoning parser and tool-call parser are three contracts that must match the model's trained format; mismatch gives wrong or missing tool calls, not errors. Add a parse-failure rate to evals."],
+["SGLang: OOM in prefill vs decode — the two flags?","Prefill: lower --chunked-prefill-size (4096/2048). Decode: lower --max-running-requests or --mem-fraction-static (0.8/0.7). Illegal-memory-access is often OOM in disguise."],
+["verl/TRL colocated RL OOM — first move?","Lower the rollout engine's gpu_memory_utilization (0.9 → 0.7) or put the vLLM server on separate GPUs; the trainer, reference and engine share HBM."],
+["GRPO loss starts at 0 — bug?","No: on-policy the ratio is 1 and the clipped objective has zero gradient at step 0. Watch reward and KL, not loss."],
+["FSDP2 'got mixed torch.Tensor and DTensor'?","Something wasn't wrapped by fully_shard, or the optimizer was created before sharding. Wrap every block + root; build the optimizer after; checkpoint with DCP, not torch.save."],
+["Axolotl: unreasonably high loss or NaNs with sample packing?","Packing needs cumulative-sequence-length attention; a model path that ignores it cross-contaminates sequences. A/B one packed vs unpacked step; ensure flash attention."],
+["Neuron: model is slow and correct — what to check?","Ops silently falling back to CPU: torch_neuronx.get_fallback_ops(); set TORCH_NEURONX_FALLBACK_ONLY_FOR_UNIMPLEMENTED_OPS=1; bucket shapes; persist the NEFF cache."],
+["NCCL watchdog timeout — real fixes?","Find the rank missing from the collective (eval/checkpoint on one rank), set NCCL_SOCKET_IFNAME, NCCL_DEBUG=INFO, TORCH_DISTRIBUTED_DEBUG=DETAIL; raising the timeout only hides it."],
+["Load testing: why do Locust and GenAI-Perf disagree on tokens/sec?","Chunks ≠ tokens; count with the model's tokenizer or stream_options.include_usage, and use open-loop arrivals for rate sweeps."],
+["Quantized checkpoint won't load in vLLM after compressing?","llm-compressor's format (scale/zp dtypes) moved ahead of the engine; pin llm-compressor, vLLM and transformers together, and gate on eval after quantization."]
 ],
 "GPU": [
 ["GPU vs CPU design philosophy in one line?","CPU minimizes latency of one thread; GPU hides latency with tens of thousands of threads and spends transistors on ALUs, not caches."],

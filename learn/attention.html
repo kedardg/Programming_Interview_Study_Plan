@@ -10,7 +10,7 @@
 <nav class="topnav">
   <a class="home" href="index.html">Learn</a>
   <div class="links">
-    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="attention.html" class="here">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html" class="here">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
   </div>
   <div class="spacer"></div>
   <button class="theme-btn" id="themeBtn">◐ theme</button>
@@ -19,7 +19,7 @@
 <h1>Attention, FlashAttention &amp; Long Context</h1>
 <p class="dim">The mechanism itself, computed by hand; multi-head and its cache-saving variants; RoPE; and the kernel that made long context affordable — FlashAttention's tiling and online softmax, animated tile by tile. This is the deep dive behind Step 12 of the study plan.</p>
 
-<div class="card audio-card"><h3>🎧 Listen to this chapter (16:58)</h3><audio controls preload="none" src="audio/attention.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/attention.txt">Read the transcript</a>.</p></div>
+<div class="card audio-card"><h3>🎧 Listen to this chapter (17:51)</h3><audio controls preload="none" src="audio/attention.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/attention.txt">Read the transcript</a>.</p></div>
 <h2 id="first-principles">1. Attention from first principles</h2>
 <p>Attention is a soft dictionary lookup. Each position emits a <strong>query</strong> ("what am I looking for?"), and offers a <strong>key</strong> ("what do I contain, as an address?") and a <strong>value</strong> ("what do I contribute, as content?"). A query is compared against every key by dot product — the natural "how aligned are we?" measure from the <a href="math.html">math chapter</a> — the comparisons become weights via softmax, and the output is the weight-blended average of the values. Nothing is retrieved exactly; everything is retrieved a little, in proportion to relevance.</p>
 <div class="formula">Attention(Q, K, V) = softmax( QKᵀ / √d_k ) V<br><br>shapes:  Q: n×d_k   K: n×d_k   V: n×d_v   QKᵀ: n×n   output: n×d_v<br>(n = sequence length; d_k = d_v = head dim, typically 64–128)</div>
@@ -123,6 +123,37 @@
 <p><strong>Sparse attention</strong> attacks n² itself. <em>MInference</em> observes that long-context prefill attention is dominated by a few recurring patterns per head (A-shapes, vertical-slash bands, block-sparse blobs), classifies each head offline, and computes only the pattern — up to ~10× faster prefill at 1M tokens on existing models, no retraining. <em>Native Sparse Attention (NSA)</em> instead <em>trains</em> the model sparse: each query reads compressed block summaries, a selected set of fine blocks, and a sliding window, with hardware-aligned block sizes — so the sparsity is learned end-to-end rather than guessed post hoc. <strong>Sliding-window attention</strong> (Mistral) is the degenerate-but-effective case: attend only to the last w tokens; stacked layers still propagate information w tokens per layer, like a CNN's growing receptive field.</p>
 
 
+
+<div class="card">
+<h3>Interactive: attention patterns as masks</h3>
+<canvas id="patViz" class="viz" width="900" height="420"></canvas>
+<div class="controls">
+  <label class="ctl">pattern
+    <select id="patSel">
+      <option value="full">(a) full n² attention</option>
+      <option value="window" selected>(b) sliding window</option>
+      <option value="dilated">(c) dilated sliding window</option>
+      <option value="global">(d) global + sliding window</option>
+      <option value="causal">(e) causal full (decoder)</option>
+      <option value="block">(f) block-sparse / top-k (DSA-style)</option>
+      <option value="sink">(g) sink + window (StreamingLLM / LSA-style)</option>
+    </select>
+  </label>
+  <label class="ctl">T <input type="range" id="patT" min="16" max="64" value="32" step="4"> <span id="patTL">32</span></label>
+  <label class="ctl">window w <input type="range" id="patW" min="1" max="16" value="4"> <span id="patWL">4</span></label>
+  <label class="ctl">dilation <input type="range" id="patD" min="1" max="4" value="2"> <span id="patDL">2</span></label>
+  <label class="ctl">global / sink tokens <input type="range" id="patG" min="0" max="6" value="2"> <span id="patGL">2</span></label>
+  <button class="btn secondary" id="patReroll">Reroll blocks</button>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="patKeys">–</div><div class="l">keys read per query (avg)</div></div>
+  <div class="box"><div class="v" id="patFrac">–</div><div class="l">of the full T×T matrix</div></div>
+  <div class="box"><div class="v" id="patKV">–</div><div class="l">KV cache / layer at T (Llama-70B GQA, BF16)</div></div>
+  <div class="box"><div class="v" id="patKeep">–</div><div class="l">cache that must stay resident</div></div>
+</div>
+<p class="caption">Rows are queries, columns are keys; a filled cell means the query reads that key. (a) is exact and quadratic. (b) caps each row at w keys — cost O(T·w), and stacked layers widen the receptive field like a CNN — but the cache can be a ring buffer of w tokens. (c) skips every d-th key so the same w reaches d× further. (d) and (g) keep a few global or sink tokens every query can see (the attention-sink effect that StreamingLLM exploits, and the sink + window that LSA keeps alongside its selected buckets); global tokens cost one extra row <em>and</em> column each. (e) is what a decoder actually computes: the upper triangle is masked, so even "full" attention reads only T/2 keys on average. (f) picks a few blocks per query from an index (DeepSeek Sparse Attention, NSA, LSA): near-constant keys per query but the whole cache stays resident so any block can be chosen. This is the trade the hybrid-ratio models in <a href="architectures.html#recent">Architectures</a> make — a few (a)/(e) layers for exact recall, many (b)/(g) layers for cheap mixing — and the LSA section below is the learned, hierarchical version of (f). <span class="dim">After figure 5 in Alisa Liu's Book of LLMs (from Longformer).</span></p>
+</div>
+
 <h2 id="lsa">7. Sparse attention at ultra-long context: Latent Sparse Attention, and what attention vs recurrence actually carries in hybrids</h2>
 <p>Section 6 ended with three ways to spend less than n² — pattern-based sparsity (MInference), trained block sparsity (NSA), and plain sliding windows. Production models in 2025–26 converged on a fourth: a learned <strong>indexer</strong> that scores past tokens cheaply and lets each query attend only to its top-k (DeepSeek Sparse Attention and its relatives; see the <a href="architectures.html#recent">developments table</a>). The indexer is the new bottleneck: scoring every past key is still linear per query, which at 10 million tokens is a lot of linear. <strong>Latent Sparse Attention (LSA)</strong>, from Prefrontal AI (<a href="https://arxiv.org/abs/2610.42147">arXiv 2610.42147</a>, <a href="https://github.com/Prefrontal-AI/latent-sparse-attention">code, Apache-2.0</a>), attacks exactly that step: don't score keys, score <em>clusters</em> of keys.</p>
 <p>The mechanism is an approximate-nearest-neighbor index in the spirit of vector databases, built into the attention layer. Keys are projected into a learned latent space and clustered hierarchically into buckets; each bucket keeps a centroid. A query scores the centroids (hundreds or thousands of them, not millions of keys), picks the top buckets, and attends to the keys inside them — plus two fixed companions: the <em>attention sink</em> (the first tokens, which softmax attention leans on) and a <em>local sliding window</em> for recency. Everything downstream is untouched: the FlashAttention-style kernel receives a shorter list of keys and runs as usual. <strong>LSA only decides which keys are read.</strong> That is the deployment-critical property — it slots into an engine as a key-selection policy, not as a new kernel to tune per GPU generation.</p>
@@ -173,7 +204,7 @@
 <li>Then build it: a Triton flash-attention forward pass is the Week 9 project in the <a href="../index.html">3-month schedule</a>, and the <a href="flashcards.html">Attention deck</a> locks in the formulas.</li>
 </ul>
 
-<div class="footer-nav"><a href="transformers.html">← Transformers</a><a href="architectures.html">Architectures →</a></div>
+<div class="footer-nav"><a href="ml-coding.html">← ML Coding</a><a href="architectures.html">Architectures →</a></div>
 </main>
 <script>
 // ---------- theme ----------
@@ -478,6 +509,56 @@ $('lsaTree').onchange=function(){tree=this.checked;draw();};
 $('lsaNewQ').onclick=newQ;
 gen();kmeans();q={x:420,y:170};draw();
 new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- attention patterns as masks ----------
+(function(){
+const cv=document.getElementById('patViz');if(!cv)return;const ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);let seed=7;
+function rnd(){seed=(seed*1103515245+12345)&0x7fffffff;return seed/0x7fffffff;}
+function build(){
+  const T=+$('patT').value,w=+$('patW').value,d=+$('patD').value,g=+$('patG').value,pat=$('patSel').value;
+  $('patTL').textContent=T;$('patWL').textContent=w;$('patDL').textContent=d;$('patGL').textContent=g;
+  const M=[];seed=$('patReroll').dataset.seed?+$('patReroll').dataset.seed:7;
+  const blk=4,nb=Math.ceil(T/blk);
+  for(let i=0;i<T;i++){const row=new Array(T).fill(0);
+    for(let j=0;j<T;j++){
+      let on=false;
+      if(pat==='full')on=true;
+      else if(pat==='causal')on=j<=i;
+      else if(pat==='window')on=Math.abs(i-j)<=w;
+      else if(pat==='dilated')on=Math.abs(i-j)<=w*d&&((i-j)%d===0);
+      else if(pat==='global')on=Math.abs(i-j)<=w||i<g||j<g;
+      else if(pat==='sink')on=(j<=i&&i-j<=w)||(j<g&&j<=i);
+      row[j]=on?1:0;}
+    M.push(row);}
+  if(pat==='block'){for(let i=0;i<T;i++){const qi=Math.floor(i/blk);const chosen=new Set([qi]);const want=Math.min(qi+1,1+Math.ceil(w/2));while(chosen.size<want){chosen.add(Math.floor(rnd()*(qi+1)));}
+    for(let j=0;j<T;j++)M[i][j]=(chosen.has(Math.floor(j/blk))&&j<=i)?1:0;}}
+  return {M,T,w,g,pat};
+}
+function draw(){
+  const {M,T,w,g,pat}=build();
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const acc=css('--accent'),acc2=css('--accent2'),dim=css('--text-dim'),bd=css('--border');
+  const size=Math.min(380,H-40),cell=size/T,x0=30,y0=20;
+  let total=0;
+  for(let i=0;i<T;i++)for(let j=0;j<T;j++){if(M[i][j]){total++;const glob=(pat==='global'&&(i<g||j<g))||(pat==='sink'&&j<g);ctx.fillStyle=glob?acc2:acc;ctx.globalAlpha=i===j?1:0.75;ctx.fillRect(x0+j*cell,y0+i*cell,Math.max(1,cell-0.6),Math.max(1,cell-0.6));}}
+  ctx.globalAlpha=1;ctx.strokeStyle=bd;ctx.strokeRect(x0,y0,size,size);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('keys →',x0,y0+size+16);
+  ctx.save();ctx.translate(x0-10,y0+size/2);ctx.rotate(-Math.PI/2);ctx.textAlign='center';ctx.fillText('queries ↓',0,0);ctx.restore();
+  const perQ=total/T,frac=total/(T*T);
+  const kvPerTok=2*8*128*2; // K and V, 8 KV heads, d=128, BF16 — per layer
+  const tokensResident=(pat==='window'||pat==='dilated')?Math.min(T,2*w+1):(pat==='sink'?Math.min(T,w+g+1):T);
+  $('patKeys').textContent=perQ.toFixed(1);$('patFrac').textContent=(frac*100).toFixed(0)+'%';
+  $('patKV').textContent=(kvPerTok*T/1024).toFixed(0)+' KiB';$('patKeep').textContent=(tokensResident*kvPerTok/1024).toFixed(0)+' KiB';
+  const notes={full:'every query reads every key: O(T²) compute, full cache resident',window:'each query reads ≤ 2w+1 keys: O(T·w); the cache can be a ring buffer of the last w tokens',dilated:'same w, d× the reach; stacked layers cover long ranges cheaply (Longformer)',global:'g global tokens are read by all and read all; the rest is a window',causal:'what decoders compute: half the matrix on average, full cache resident',block:'an index picks a few blocks per query (DSA / NSA / LSA): few keys read, but any block may be chosen so the whole cache stays resident',sink:'a few sink tokens plus the recent window: constant cost per token, bounded cache (StreamingLLM); LSA adds selected buckets on top'};
+  ctx.fillStyle=css('--text');ctx.font='13px sans-serif';const tx=x0+size+24;let ty=y0+20;
+  const words=notes[pat].split(' ');let line='';for(const wd of words){const t=line+wd+' ';if(ctx.measureText(t).width>W-tx-20){ctx.fillText(line,tx,ty);line=wd+' ';ty+=19;}else line=t;}ctx.fillText(line,tx,ty);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('T = '+T+' tokens · filled cells = '+total+' of '+(T*T),tx,ty+34);
+}
+['patSel','patT','patW','patD','patG'].forEach(id=>$(id).oninput=draw);
+$('patReroll').onclick=()=>{$('patReroll').dataset.seed=Math.floor(Math.random()*1e6);draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 </script>
 </body>

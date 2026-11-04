@@ -1,0 +1,639 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploying and Load-Testing LLM Services</title>
+<link rel="stylesheet" href="learn.css">
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html" class="here">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Deploying and Load-Testing LLM Services on AWS: ECS/EKS, vLLM, quantization, TTFT</h1>
+<p class="dim">The last mile of a customization engagement: taking a fine-tuned model from a checkpoint to a service that meets its latency and cost targets under real load. This chapter walks the loop end to end with Qwen3 as the worked model — SFT, quantize, serve with vLLM, load-test time-to-first-token with Locust and GenAI-Perf, then run it on ECS or EKS and keep it healthy. It is the systems counterpart of <a href="inference.html">Inference</a> and the production tail of <a href="customization.html">Customization &amp; Evals</a>.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (12:55)</h3><audio controls preload="none" src="audio/deployment.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/deployment.txt">Read the transcript</a>.</p></div>
+<h2 id="loop">1. The deployment loop and what "better" means in numbers</h2>
+<p>A model is not deployed when it answers a prompt in a notebook. It is deployed when a fleet of replicas serves the expected request mix inside agreed latency bounds at a cost the business accepts, and keeps doing so when a node dies. Everything in this chapter is one iteration of the same loop:</p>
+<div class="formula">SFT'd checkpoint → evaluate (quality bar) → quantize → serve (vLLM) → load-test against SLOs → size the fleet ($) → ship → observe → repeat</div>
+<p>"Improve deployment" has to be translated into five numbers before anyone touches a flag, otherwise every optimization is a matter of taste. They are the same quantities the <a href="inference.html#metrics">inference chapter</a> defines, now with targets attached:</p>
+<table class="cmp">
+<tr><th>Number</th><th>What it measures</th><th>Typical target (chat/agent product)</th><th>What moves it</th></tr>
+<tr><td><strong>TTFT p95</strong></td><td>Queue wait + prefill of the prompt, 95th percentile</td><td>≤ 500–1000 ms interactive; ≤ 2–3 s for agents with long prompts</td><td>Prompt length, batch admission, chunked prefill, prefix caching, replicas</td></tr>
+<tr><td><strong>TPOT p95</strong> (inter-token latency)</td><td>One decode step, 95th percentile</td><td>≤ 30–50 ms (reading speed ≈ 20 ms/token feels instant)</td><td>Batch size, weight bytes (quantization), TP degree, speculative decoding</td></tr>
+<tr><td><strong>Goodput</strong></td><td>Requests/s that met <em>both</em> SLOs</td><td>Whatever the traffic forecast's peak is, with headroom</td><td>Everything above, plus how admission handles overload</td></tr>
+<tr><td><strong>$ per 1M tokens</strong></td><td>GPU-hours × price ÷ tokens served (prefill and decode separately)</td><td>Below the API alternative it replaces, at equal quality</td><td>Utilization at the knee, quantization, right-sized GPU, autoscaling</td></tr>
+<tr><td><strong>Cost per request</strong></td><td>$/M tokens × tokens per request (thinking tokens count!)</td><td>Product-defined</td><td>Output length policy, thinking budgets, caching</td></tr>
+</table>
+<p>Two things people forget: the <strong>quality bar</strong> from the <a href="customization.html">eval methodology</a> has to be re-checked after every quantization and every serving change that touches numerics (FP8 KV cache, speculative decoding with a different sampler, a new kernel), and the <strong>request mix</strong> — prompt length, output length, how many requests share a system prompt — determines every latency number more than the model does. Measure it from production logs before you benchmark anything.</p>
+
+<h2 id="recipe">2. The recipe, worked on Qwen3</h2>
+<p>Qwen3 is a good worked example because the family spans the two deployment shapes you meet most: <strong>Qwen3-8B</strong>, a dense model that fits one mid-range GPU and is the natural SFT target for a single-domain assistant, and <strong>Qwen3-30B-A3B</strong>, a mixture-of-experts model with about 3B active parameters per token — near-8B decode cost with far more knowledge, the throughput choice when memory allows. (Qwen3-32B dense is the quality ceiling of the mid tier and needs 80 GB in BF16 or 48 GB at W4A16.) Qwen3 also ships a <strong>hybrid thinking mode</strong>: the same weights can emit a <code>&lt;think&gt;…&lt;/think&gt;</code> block before answering, toggled per request. That matters for deployment arithmetic: a thinking response can be 5–20× longer than the visible answer, so TPOT and cost per request are dominated by tokens the user never reads. Decide the thinking policy (off, on, budgeted) before you load-test, because it changes the output-length distribution you are testing.</p>
+
+<h3>2a. Fine-tune (SFT) with Axolotl and merge the adapter</h3>
+<p>The training chapter covers the why; here is the minimal config shape for a LoRA SFT that you will later quantize and serve. Train the adapter, then <em>merge</em> it into the base weights — vLLM can serve unmerged LoRAs, but a merged checkpoint quantizes cleanly and removes a per-request adapter lookup from the hot path unless you specifically want multi-adapter serving.</p>
+<div class="formula"># axolotl config (illustrative; check the Axolotl docs for current keys)
+base_model: Qwen/Qwen3-8B
+chat_template: qwen3
+datasets:
+  - path: data/support_conversations.jsonl
+    type: chat_template
+    field_messages: messages
+sequence_len: 8192
+sample_packing: true
+adapter: lora
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target_linear: true
+bf16: true
+gradient_checkpointing: true
+micro_batch_size: 2
+gradient_accumulation_steps: 8
+num_epochs: 2
+learning_rate: 1.0e-4
+lr_scheduler: cosine
+warmup_ratio: 0.03
+output_dir: ./out/qwen3-8b-support-lora
+
+# train, then merge the adapter into the base weights for deployment
+axolotl train config.yml
+axolotl merge-lora config.yml --lora-model-dir ./out/qwen3-8b-support-lora
+# → ./out/qwen3-8b-support-lora/merged/</div>
+<p>Before quantizing, run the task suite on the merged BF16 checkpoint. That number is the reference every later step is compared against.</p>
+
+<h3>2b. Quantize: W4A16 (AWQ) for memory-bound decode, FP8 for throughput</h3>
+<p>Quantization is the single biggest deployment lever because decode is bandwidth-bound: fewer weight bytes per step means lower TPOT at small batch and more KV headroom for larger batches (the <a href="quantization.html">quantization chapter</a> derives this). Two formats cover almost every case:</p>
+<ul>
+<li><strong>W4A16 with AWQ</strong> (weights 4-bit, activations BF16): ~4× smaller weights, decode speedup close to 2–3× at low batch, negligible quality loss on most tasks when calibrated with in-domain data. The right default for memory-constrained GPUs (24 GB L4/A10G, the 16 GB RTX 5080) and for latency-sensitive, low-concurrency services.</li>
+<li><strong>FP8 (W8A8)</strong> on Hopper/Ada/Blackwell: halves weight bytes <em>and</em> runs the matmuls in FP8 tensor cores, so prefill speeds up too — the throughput choice on H100/L40S/B200. Per-tensor dynamic scaling is simplest; blockwise scales track outliers better.</li>
+</ul>
+<p>GPTQ is the other weight-only workhorse (Hessian-aware rounding; slightly better at 4-bit on some models, slower to calibrate); vLLM serves AWQ, GPTQ, FP8, and the compressed-tensors formats produced by <code>llm-compressor</code> through the same flag. A representative llm-compressor run:</p>
+<div class="formula"># pip install llmcompressor   (illustrative API; see the llm-compressor docs)
+from llmcompressor import oneshot
+from llmcompressor.modifiers.awq import AWQModifier
+from llmcompressor.modifiers.quantization import QuantizationModifier
+
+MODEL = "./out/qwen3-8b-support-lora/merged"
+
+# (a) W4A16 AWQ: 4-bit weights, group size 128, calibrated on ~512 in-domain samples
+oneshot(model=MODEL, dataset="data/calib.jsonl", num_calibration_samples=512,
+        max_seq_length=2048,
+        recipe=[AWQModifier(targets="Linear", scheme="W4A16", ignore=["lm_head"])],
+        output_dir="./out/qwen3-8b-support-awq-w4a16")
+
+# (b) FP8 dynamic (W8A8): no calibration data needed
+oneshot(model=MODEL,
+        recipe=[QuantizationModifier(targets="Linear", scheme="FP8_DYNAMIC", ignore=["lm_head"])],
+        output_dir="./out/qwen3-8b-support-fp8")</div>
+<p><strong>What to verify after quantizing</strong> — all three, every time: (1) perplexity on held-out domain text (expect &lt; 1–2% relative change for FP8, &lt; 3–5% for W4A16; a jump means a calibration problem or an outlier-heavy layer that should be excluded); (2) the task suite from your eval bar within its confidence interval of the BF16 reference (the number that matters); (3) a side-by-side sample read of 50 responses for format regressions — JSON validity, tool-call syntax, language drift — which perplexity never catches. For MoE models like 30B-A3B, quantize experts and keep the router in higher precision; vLLM's MoE kernels support FP8 and AWQ expert weights.</p>
+
+<h3>2c. Serve with vLLM</h3>
+<p>The flags that decide latency and capacity, and what each does to the numbers in §1 (exact names are illustrative — check <code>vllm serve --help</code> for your version):</p>
+<div class="formula"># single GPU, W4A16, chat product with prefix reuse and Qwen3 thinking parsed out
+vllm serve ./out/qwen3-8b-support-awq-w4a16 \
+  --served-model-name support-8b \
+  --quantization awq_marlin \          # or: fp8 | compressed-tensors (auto-detected from the checkpoint)
+  --max-model-len 16384 \              # cap context: KV budget = max-num-seqs × max-model-len worst case
+  --max-num-seqs 128 \                 # concurrent sequences in the batch (throughput vs TPOT)
+  --gpu-memory-utilization 0.92 \      # fraction reserved for weights + KV; leave headroom for CUDA graphs
+  --enable-prefix-caching \            # shared system prompts / multi-turn: huge TTFT win
+  --enable-chunked-prefill --max-num-batched-tokens 4096 \   # bound the stall long prompts cause decoders
+  --reasoning-parser qwen3 \           # split <think> content into a separate field
+  --enable-lora --max-loras 8 --max-lora-rank 32 \           # only if serving multiple adapters
+  --port 8000
+
+# 30B-A3B MoE on 2×L40S (TP=2), FP8, with EAGLE-style speculative decoding
+vllm serve Qwen/Qwen3-30B-A3B-FP8 --tensor-parallel-size 2 --max-num-seqs 256 \
+  --speculative-config '{"method":"eagle3","model":"...","num_speculative_tokens":3}'   # illustrative</div>
+<p>The server exposes the OpenAI-compatible API, so clients, load-testers, and gateways work unchanged:</p>
+<div class="formula">curl -s localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{
+  "model": "support-8b",
+  "messages": [{"role":"system","content":"You are the support assistant."},
+               {"role":"user","content":"My order 4471 has not arrived."}],
+  "stream": true, "max_tokens": 300,
+  "chat_template_kwargs": {"enable_thinking": false}      # Qwen3: thinking off for latency-critical paths
+}'</div>
+<p>Rules of thumb for the flags: <code>--max-num-seqs</code> is the throughput/TPOT dial (more sequences = higher aggregate tokens/s, slower per-token until compute-bound); <code>--max-model-len</code> × <code>--max-num-seqs</code> × KV bytes/token must fit in what <code>--gpu-memory-utilization</code> leaves after weights, or vLLM will preempt (recompute) sequences under load — watch the preemption counter in §5; chunked prefill trades a little TTFT for stable TPOT and is on by default in recent versions; prefix caching is free performance whenever requests share a prefix.</p>
+
+<div class="card">
+<h3>Interactive: quantization × batch × SLO explorer</h3>
+<div class="controls">
+  <label class="ctl">Model <select id="slModel"><option value="q8b" selected>Qwen3-8B (dense)</option><option value="q30a3">Qwen3-30B-A3B (MoE, 3.3B active)</option><option value="q32b">Qwen3-32B (dense)</option></select></label>
+  <label class="ctl">Weights <select id="slPrec"><option value="2">BF16</option><option value="1" selected>FP8</option><option value="0.5">W4A16 (AWQ)</option></select></label>
+  <label class="ctl">GPU <select id="slGpu"><option value="l4">L4 24 GB</option><option value="a10g">A10G 24 GB</option><option value="l40s" selected>L40S 48 GB</option><option value="a100">A100 80 GB</option><option value="h100">H100 80 GB</option><option value="rtx5080">RTX 5080 16 GB</option></select></label>
+  <label class="ctl">TP <select id="slTp"><option>1</option><option>2</option><option>4</option><option>8</option></select></label>
+</div>
+<div class="controls">
+  <label class="ctl">Context <input type="range" id="slCtx" min="10" max="15" value="13"> <span id="slCtxL"></span></label>
+  <label class="ctl">Prompt tokens <input type="range" id="slPrompt" min="7" max="14" value="10"> <span id="slPromptL"></span></label>
+  <label class="ctl">Batch <input type="range" id="slBatch" min="0" max="8" value="5"> <span id="slBatchL"></span></label>
+  <label class="ctl">TTFT p95 target ms <input type="number" id="slTtftT" value="800" min="50" step="50" style="width:80px"></label>
+  <label class="ctl">TPOT p95 target ms <input type="number" id="slTpotT" value="40" min="5" step="5" style="width:70px"></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="slW">–</div><div class="l">weights / GPU</div></div>
+  <div class="box"><div class="v" id="slKvHead">–</div><div class="l">KV headroom / GPU</div></div>
+  <div class="box"><div class="v" id="slMaxSeq">–</div><div class="l">max sequences at context</div></div>
+  <div class="box"><div class="v" id="slTtft">–</div><div class="l">TTFT (prefill, no queue)</div></div>
+  <div class="box"><div class="v" id="slTpot">–</div><div class="l">TPOT at batch</div></div>
+  <div class="box"><div class="v" id="slVerdict">–</div><div class="l">verdict</div></div>
+</div>
+<canvas id="slViz" class="viz" width="900" height="300"></canvas>
+<p class="caption">First-order model from the <a href="inference.html">inference chapter</a>: TPOT ≈ max(weight bytes ÷ aggregate HBM bandwidth, 2 × active params × batch ÷ peak FLOPs) + KV read for the batch; TTFT ≈ prefill compute for the prompt (plus the weight read), with no queueing. The curve is TPOT versus batch size; the dashed line is your TPOT target; red means the configuration does not fit or misses a target. Try Qwen3-8B BF16 on the 16 GB RTX 5080 (does not fit), then W4A16 (fits, ~60 concurrent 8K sequences), then push batch until TPOT crosses the target. Real servers land within ~1.5× of this model; use it to pick candidates, then load-test.</p>
+</div>
+
+<h2 id="loadtest">3. Load testing: finding the knee before your users do</h2>
+<p>A single-request latency number is meaningless for a service. Latency depends on how many other requests are in flight, so the only honest measurement is a <strong>sweep over offered load</strong> with the production request mix, reporting percentiles. Two ways to generate load, and they answer different questions:</p>
+<ul>
+<li><strong>Open-loop</strong> (Poisson arrivals at a request rate λ): requests arrive whether or not earlier ones finished — the way users actually behave. It exposes queueing: once λ exceeds what the server drains, the queue grows without bound and TTFT explodes. This is the test that finds the knee and the capacity number you plan around.</li>
+<li><strong>Closed-loop</strong> (fixed concurrency N): each virtual user waits for its response before sending the next. Latency stays bounded because load self-regulates; it measures throughput at a concurrency level, not what happens under overload. Useful for the batch-size sweep, misleading as a capacity test.</li>
+</ul>
+<p><strong>Metrics to record per request</strong>: TTFT (first streamed token), TPOT/ITL (mean and p95 of gaps between tokens), end-to-end latency, output tokens; per run: throughput (requests/s, output tokens/s), <strong>goodput</strong> (requests/s meeting both SLOs — the number that goes in the capacity plan, from the Etalon paper in the plan), and the error/timeout rate. Report p50/p95/p99, never means. <strong>Workload realism</strong>: sample prompt and output lengths from production traces (BurstGPT and ShareGPT distributions are the public stand-ins), include the real share of prefix-sharing requests, and set the thinking policy you will ship. Discard the first 30–60 s (warmup: CUDA graphs, caches) and run each rate for at least 2–3 minutes of steady state.</p>
+<h3>Tools, with the commands that matter</h3>
+<p><strong>vLLM's built-in benchmark</strong> is the fastest way to a rate sweep against any OpenAI-compatible endpoint:</p>
+<div class="formula"># sweep request rates (open-loop Poisson) with ShareGPT-shaped lengths; flags illustrative
+for rate in 1 2 4 8 16 32; do
+  vllm bench serve --backend openai-chat --base-url http://localhost:8000 --model support-8b \
+    --dataset-name sharegpt --dataset-path ShareGPT_V3_unfiltered_cleaned_split.json \
+    --num-prompts 600 --request-rate $rate --burstiness 1.0 \
+    --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,95,99 \
+    --goodput ttft:800 tpot:40 \
+    --save-result --result-filename sweep_rate${rate}.json
+done</div>
+<p><strong>NVIDIA GenAI-Perf</strong> (part of Triton's perf tools, but it drives any OpenAI endpoint) adds synthetic length distributions and nicely formatted percentile tables:</p>
+<div class="formula">genai-perf profile -m support-8b --service-kind openai --endpoint-type chat --streaming \
+  --url localhost:8000 --synthetic-input-tokens-mean 1024 --synthetic-input-tokens-stddev 256 \
+  --output-tokens-mean 256 --output-tokens-stddev 64 --request-rate 8 --measurement-interval 120000 \
+  --profile-export-file rate8.json</div>
+<p><strong>Locust</strong> is what you reach for when the test has to look like your product: custom auth, multi-turn sessions, a mix of endpoints, a web UI for the team, distributed workers. Streaming TTFT is not built in, so measure it yourself from the first SSE chunk. A complete, runnable user class:</p>
+<div class="formula"># locustfile.py — run: locust -f locustfile.py --host http://localhost:8000
+import json, time, random
+from locust import HttpUser, task, between, events
+
+PROMPTS = [l.strip() for l in open("prompts.txt") if l.strip()]     # sampled from production
+SYSTEM = "You are the support assistant for Example Co."
+
+class ChatUser(HttpUser):
+    wait_time = between(0.5, 2.0)        # closed-loop think time; use --spawn-rate/--users for concurrency
+
+    @task
+    def chat(self):
+        body = {"model": "support-8b", "stream": True, "max_tokens": 256,
+                "messages": [{"role": "system", "content": SYSTEM},
+                             {"role": "user", "content": random.choice(PROMPTS)}],
+                "chat_template_kwargs": {"enable_thinking": False}}
+        t0 = time.perf_counter(); ttft = None; n_tok = 0; last = t0; gaps = []
+        with self.client.post("/v1/chat/completions", json=body, stream=True,
+                              catch_response=True, name="chat (stream)") as r:
+            if r.status_code != 200:
+                r.failure(f"HTTP {r.status_code}"); return
+            for line in r.iter_lines():
+                if not line or not line.startswith(b"data:"): continue
+                payload = line[5:].strip()
+                if payload == b"[DONE]": break
+                delta = json.loads(payload)["choices"][0].get("delta", {})
+                if delta.get("content"):
+                    now = time.perf_counter()
+                    if ttft is None: ttft = now - t0
+                    else: gaps.append(now - last)
+                    last = now; n_tok += 1
+            total = time.perf_counter() - t0
+            if ttft is None: r.failure("no tokens"); return
+            r.success()
+        # custom metrics show up as their own rows in the Locust UI / CSV
+        events.request.fire(request_type="LLM", name="ttft_ms", response_time=ttft * 1000, response_length=0, exception=None, context={})
+        if gaps:
+            events.request.fire(request_type="LLM", name="tpot_ms", response_time=1000 * sum(gaps) / len(gaps), response_length=0, exception=None, context={})
+            events.request.fire(request_type="LLM", name="tpot_p95_ms_sample", response_time=1000 * sorted(gaps)[int(0.95 * (len(gaps) - 1))], response_length=0, exception=None, context={})
+        events.request.fire(request_type="LLM", name="e2e_ms", response_time=total * 1000, response_length=n_tok, exception=None, context={})
+
+# Open-loop in Locust: use a constant-throughput pacer instead of think time, e.g.
+#   from locust import constant_throughput;  wait_time = constant_throughput(0.5)   # 0.5 req/s per user
+# and scale users to reach the target rate; or drive rates with the --headless -u/-r flags from a sweep script.</div>
+<p><strong>k6</strong> gives the same open-loop control with its constant-arrival-rate executor and streaming via its HTTP client, in JavaScript — the usual pick when the platform team already standardized on it. <strong>LLMPerf</strong> (Anyscale) is a quick Ray-based harness with built-in correctness checks. Whichever tool, the output of a load test is one chart: TTFT p95 and goodput versus offered rate, with the knee marked.</p>
+
+<div class="card">
+<h3>Interactive: load-test simulator — watch the queue form</h3>
+<div class="controls">
+  <label class="ctl">Offered load (req/s) <input type="range" id="ltRate" min="1" max="60" value="12"> <span id="ltRateL"></span></label>
+  <label class="ctl">Prompt tokens (mean) <input type="range" id="ltPrompt" min="128" max="4096" step="128" value="1024"> <span id="ltPromptL"></span></label>
+  <label class="ctl">Output tokens (mean) <input type="range" id="ltOut" min="32" max="1024" step="32" value="256"> <span id="ltOutL"></span></label>
+</div>
+<div class="controls">
+  <label class="ctl">Max batch (max-num-seqs) <input type="range" id="ltSeqs" min="8" max="256" step="8" value="64"> <span id="ltSeqsL"></span></label>
+  <label class="ctl">Server speed <select id="ltSpeed"><option value="1">from the SLO explorer above</option><option value="0.5">2× slower GPU</option><option value="2">2× faster GPU</option></select></label>
+  <label class="ctl"><input type="checkbox" id="ltClosed"> closed-loop (fixed concurrency = max batch)</label>
+  <button class="btn secondary" id="ltRun">Re-run</button>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="ltTtft50">–</div><div class="l">TTFT p50</div></div>
+  <div class="box"><div class="v" id="ltTtft95">–</div><div class="l">TTFT p95</div></div>
+  <div class="box"><div class="v" id="ltTpot">–</div><div class="l">TPOT p95</div></div>
+  <div class="box"><div class="v" id="ltGood">–</div><div class="l">goodput (req/s meeting SLOs)</div></div>
+  <div class="box"><div class="v" id="ltQueue">–</div><div class="l">queue at end</div></div>
+</div>
+<canvas id="ltViz" class="viz" width="900" height="340"></canvas>
+<p class="caption">Left: a discrete-event simulation of 60 s of Poisson traffic through a continuous-batching server whose per-step cost comes from the SLO explorer (so change the GPU or precision above and re-run). Right: the full sweep — TTFT p95 (orange) and goodput (green) versus offered rate; the knee is where goodput stops tracking offered load and TTFT turns up. Push the rate past the knee and watch the queue (grey) grow without bound: that is an open-loop overload, the failure users experience as "it hangs". Tick closed-loop and the same server shows bounded latency at every setting — which is why closed-loop tests overstate capacity.</p>
+</div>
+
+<div class="card">
+<h3>Interactive: reading a latency distribution</h3>
+<div class="controls">
+  <label class="ctl">Tail heaviness <input type="range" id="hsTail" min="1" max="10" value="4"> <span id="hsTailL"></span></label>
+  <label class="ctl">Samples <input type="range" id="hsN" min="200" max="5000" step="200" value="2000"> <span id="hsNL"></span></label>
+  <label class="ctl">SLO (ms) <input type="number" id="hsSlo" value="800" step="50" style="width:80px"></label>
+  <button class="btn secondary" id="hsRun">Resample</button>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="hsMean">–</div><div class="l">mean</div></div>
+  <div class="box"><div class="v" id="hs50">–</div><div class="l">p50</div></div>
+  <div class="box"><div class="v" id="hs95">–</div><div class="l">p95</div></div>
+  <div class="box"><div class="v" id="hs99">–</div><div class="l">p99</div></div>
+  <div class="box"><div class="v" id="hsSloPct">–</div><div class="l">within SLO</div></div>
+</div>
+<canvas id="hsViz" class="viz" width="900" height="260"></canvas>
+<p class="caption">LLM latencies are long-tailed (long prompts, cache misses, preemptions, a straggler in the batch), so the mean sits well below the experience of a large minority of users. A product SLO is stated at p95 or p99 precisely because a 1-in-20 or 1-in-100 slow response is what people remember. Drag the tail slider and watch the mean barely move while p99 runs away.</p>
+</div>
+
+<h3>What to change when a target fails</h3>
+<table class="cmp">
+<tr><th>Symptom</th><th>Likely cause</th><th>Levers, in order of cheapness</th></tr>
+<tr><td>TTFT p95 too high, TPOT fine</td><td>Queueing at admission or long prefills stalling the batch</td><td>Enable prefix caching; lower <code>--max-num-batched-tokens</code> (smaller prefill chunks) if decode stalls are the cause, raise it if prefill itself is slow; add replicas (TTFT scales with replicas, not with TP); route long prompts to a separate pool (disaggregation)</td></tr>
+<tr><td>TPOT p95 too high</td><td>Batch too large for the bandwidth, or weights too big</td><td>Cap <code>--max-num-seqs</code>; quantize weights (W4A16/FP8); tensor parallelism across 2–4 GPUs (cuts per-token latency, costs an all-reduce per layer); speculative decoding for low-concurrency paths</td></tr>
+<tr><td>Both rise together, preemptions &gt; 0</td><td>KV cache exhausted → sequences recomputed</td><td>Lower <code>--max-model-len</code> to the real maximum; FP8 KV cache; more memory per replica; fewer sequences</td></tr>
+<tr><td>Goodput flat while GPU utilization is low</td><td>Client-side or network bottleneck, tokenizer on the hot path, small batches from the scheduler</td><td>Check the load generator's own CPU, raise concurrency limits on the gateway, look at <code>num_requests_waiting</code> vs <code>running</code></td></tr>
+<tr><td>Cost too high at the required goodput</td><td>Running far below the knee (over-provisioned) or far above it (retries)</td><td>Autoscale on queue depth; right-size the GPU (an L40S at the knee beats an idle H100); batch tolerant traffic separately</td></tr>
+</table>
+
+<h2 id="aws">4. ECS and EKS basics for ML engineers</h2>
+<p>Both services run containers on AWS; the choice is about how much of Kubernetes you want. Start with what is common: the model server is a <strong>container image</strong> (the official <code>vllm/vllm-openai</code> image or your own built on it), the host needs an NVIDIA driver compatible with the CUDA version the image was built against (use the AWS GPU-optimized AMIs or EKS's GPU AMI; mismatches are the number-one "it worked locally" failure), and model weights are either baked into the image (fast cold start, huge image), pulled from Hugging Face at start (slow, needs a token and egress), or — best for production — staged on <strong>S3</strong> and copied to local NVMe at startup or mounted via a shared volume.</p>
+<h3>ECS in one page</h3>
+<ul>
+<li><strong>Cluster</strong>: a logical group of capacity. <strong>Capacity providers</strong> decide where tasks run: <strong>Fargate</strong> (serverless, no GPUs — fine for the gateway, not for the model) or <strong>EC2</strong> instances you own (GPU instance families: g6/g6e for L4/L40S, g5 for A10G, p4d/p5 for A100/H100, trn2 for Trainium with the Neuron runtime).</li>
+<li><strong>Task definition</strong>: the pod equivalent — image, CPU/memory, <code>resourceRequirements: [{type: "GPU", value: "1"}]</code>, environment, log driver, health check. A <strong>task</strong> is one running copy.</li>
+<li><strong>Service</strong>: keeps N tasks running behind an <strong>Application Load Balancer</strong> target group, does rolling deployments, and scales on CloudWatch metrics (Application Auto Scaling). Service Connect/Cloud Map give service discovery.</li>
+</ul>
+<div class="formula">// ECS task definition fragment (illustrative)
+{
+  "family": "vllm-support-8b", "requiresCompatibilities": ["EC2"], "networkMode": "awsvpc",
+  "containerDefinitions": [{
+    "name": "vllm", "image": "vllm/vllm-openai:latest",
+    "command": ["--model","/models/support-8b-awq","--served-model-name","support-8b",
+                "--max-model-len","16384","--max-num-seqs","128","--enable-prefix-caching","--port","8000"],
+    "resourceRequirements": [{"type":"GPU","value":"1"}],
+    "memory": 32768, "portMappings": [{"containerPort": 8000}],
+    "mountPoints": [{"sourceVolume":"models","containerPath":"/models"}],
+    "healthCheck": {"command":["CMD-SHELL","curl -f http://localhost:8000/health || exit 1"],"interval":30,"startPeriod":300},
+    "logConfiguration": {"logDriver":"awslogs","options":{"awslogs-group":"/ecs/vllm","awslogs-region":"us-east-1","awslogs-stream-prefix":"vllm"}}
+  }],
+  "volumes": [{"name":"models","host":{"sourcePath":"/opt/models"}}]
+}</div>
+<p>Choose ECS when the team is small, the service is a handful of replicas, and nobody wants to operate Kubernetes. It is simpler, cheaper to run, and the ALB + auto-scaling story is enough for most single-model products.</p>
+<h3>EKS in one page</h3>
+<ul>
+<li><strong>Control plane</strong>: managed Kubernetes API, etcd, scheduler — AWS runs it. You own the <strong>data plane</strong>: <strong>node groups</strong> (managed groups of EC2 instances) or <strong>Karpenter</strong>, which provisions right-sized nodes on demand from pod requirements, including GPU instance types, and removes them when idle.</li>
+<li><strong>GPU nodes</strong> need the NVIDIA driver (GPU AMI) and the <strong>NVIDIA device plugin</strong> DaemonSet so pods can request <code>nvidia.com/gpu: 1</code>; the GPU Operator bundles driver, plugin, DCGM metrics, and MIG config.</li>
+<li><strong>Workload objects</strong>: a <strong>Pod</strong> runs containers; a <strong>Deployment</strong> keeps N replica pods and does rolling updates; a <strong>Service</strong> gives them one stable address; an <strong>Ingress</strong> (AWS Load Balancer Controller → ALB) exposes it; <strong>HPA</strong> scales replicas on metrics; <strong>KEDA</strong> scales on external/custom metrics such as queue depth or vLLM's own gauges; readiness/liveness <strong>probes</strong> gate traffic; a <strong>PVC</strong> (EFS/EBS/FSx for Lustre) or an init container syncing from S3 provides weights; <strong>Secrets</strong> hold the HF token.</li>
+</ul>
+<div class="formula"># vllm-deployment.yaml (illustrative)
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vllm-support-8b, labels: { app: vllm-support-8b } }
+spec:
+  replicas: 2
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 1, maxUnavailable: 0 } }   # never drop below N during a rollout
+  selector: { matchLabels: { app: vllm-support-8b } }
+  template:
+    metadata: { labels: { app: vllm-support-8b } }
+    spec:
+      nodeSelector: { karpenter.sh/nodepool: gpu-l40s }
+      tolerations: [{ key: nvidia.com/gpu, operator: Exists, effect: NoSchedule }]
+      initContainers:
+        - name: fetch-weights
+          image: amazon/aws-cli
+          command: ["sh","-c","aws s3 sync s3://my-models/support-8b-awq /models/support-8b-awq"]
+          volumeMounts: [{ name: models, mountPath: /models }]
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args: ["--model","/models/support-8b-awq","--served-model-name","support-8b",
+                 "--max-model-len","16384","--max-num-seqs","128","--enable-prefix-caching","--port","8000"]
+          ports: [{ containerPort: 8000 }]
+          env:
+            - { name: HUGGING_FACE_HUB_TOKEN, valueFrom: { secretKeyRef: { name: hf-token, key: token } } }
+          resources:
+            limits: { nvidia.com/gpu: 1, memory: 48Gi, cpu: "8" }
+          readinessProbe: { httpGet: { path: /health, port: 8000 }, initialDelaySeconds: 120, periodSeconds: 10, failureThreshold: 3 }
+          livenessProbe:  { httpGet: { path: /health, port: 8000 }, initialDelaySeconds: 600, periodSeconds: 30 }
+          volumeMounts: [{ name: models, mountPath: /models }, { name: shm, mountPath: /dev/shm }]
+      volumes:
+        - { name: models, emptyDir: {} }                      # or a PVC on FSx/EFS for shared, pre-staged weights
+        - { name: shm, emptyDir: { medium: Memory, sizeLimit: 8Gi } }   # NCCL/TP needs shared memory
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vllm-support-8b }
+spec: { selector: { app: vllm-support-8b }, ports: [{ port: 80, targetPort: 8000 }] }
+---
+# KEDA: scale replicas on vLLM's waiting-request gauge scraped by Prometheus (illustrative)
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: vllm-support-8b }
+spec:
+  scaleTargetRef: { name: vllm-support-8b }
+  minReplicaCount: 2
+  maxReplicaCount: 12
+  cooldownPeriod: 300
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.monitoring:9090
+        query: sum(vllm:num_requests_waiting{model_name="support-8b"})
+        threshold: "8"          # scale out when ~8 requests are queued per replica</div>
+<p><strong>Replicas versus tensor parallelism</strong>: replicas raise goodput and TTFT capacity linearly and are what autoscaling adds; TP lowers per-token latency for a model that fits one GPU only at the cost of inter-GPU bandwidth — use TP to meet a TPOT target or fit a model, replicas for everything else. Keep TP inside one node (NVLink); never let Kubernetes spread a TP group across nodes. Choose EKS when you run several models, need GPU sharing/MIG, want Karpenter's bin-packing, or the platform already lives on Kubernetes.</p>
+
+<div class="card">
+<h3>Animation: the service topology under load, a failed pod, and a scale-out</h3>
+<canvas id="tpViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <button class="btn" id="tpPlay">▶ Traffic</button>
+  <button class="btn secondary" id="tpFail">Fail a pod's readiness</button>
+  <button class="btn secondary" id="tpScale">Scale out (KEDA → Karpenter)</button>
+  <button class="btn secondary" id="tpReset">Reset</button>
+  <span class="dim" id="tpStatus"></span>
+</div>
+<p class="caption">Requests enter through the ALB, the Service spreads them across ready pods on GPU nodes, each pod batches them. Fail a pod: its readiness probe goes red, the Service stops routing to it, the Deployment replaces it, and the survivors absorb the load (watch their queues). Scale out: KEDA raises the replica count on queue depth, the pending pod has no GPU to land on, Karpenter provisions a new node (the slow part — minutes, plus weight download), and traffic rebalances once readiness passes. The lesson for capacity planning: autoscaling handles slow tides, not spikes; keep enough warm headroom for the spike your traces show.</p>
+</div>
+
+<h3>Alternatives, one paragraph each</h3>
+<p><strong>Amazon SageMaker endpoints</strong> host the same container with managed autoscaling, A/B variants, and CloudWatch integration — the least operational burden when you do not already run a cluster; the trade is less control over scheduler flags and a per-instance premium. <strong>Bedrock Custom Model Import</strong> takes your fine-tuned open weights (Llama/Mistral/Qwen families, subject to support) and serves them fully managed, billed per use — the right answer for bursty or low-volume traffic where a warm GPU would sit idle. <strong>Ray Serve, KServe, llm-d</strong> on EKS add multi-model routing, prefix-aware scheduling across replicas, and disaggregated prefill/decode (llm-d is purpose-built for the <a href="inference.html#metrics">disaggregation</a> pattern). <strong>NVIDIA Dynamo</strong> is the datacenter-scale disaggregated serving stack with its own KV transfer layer. <strong>Trainium nodes</strong> run vLLM through the Neuron plugin: static shapes and bucketed lengths, compiled artifacts baked into the image, and the parity gates from the <a href="hardware.html">hardware chapter's migration playbook</a> before any traffic shifts.</p>
+
+<h2 id="observe">5. Observability, canaries, and cost</h2>
+<p>vLLM exposes Prometheus metrics at <code>/metrics</code>; the ones a dashboard needs, by question:</p>
+<table class="cmp">
+<tr><th>Question</th><th>Metrics (names illustrative for recent vLLM)</th></tr>
+<tr><td>Are we meeting latency?</td><td><code>vllm:time_to_first_token_seconds</code>, <code>vllm:time_per_output_token_seconds</code>, <code>vllm:e2e_request_latency_seconds</code> (histograms → p95 in PromQL with <code>histogram_quantile</code>)</td></tr>
+<tr><td>Are we saturated?</td><td><code>vllm:num_requests_running</code>, <code>vllm:num_requests_waiting</code>, <code>vllm:kv_cache_usage_perc</code> (or gpu_cache_usage), <code>vllm:num_preemptions_total</code></td></tr>
+<tr><td>How much work?</td><td><code>vllm:prompt_tokens_total</code>, <code>vllm:generation_tokens_total</code>, request counts by finish reason</td></tr>
+<tr><td>Is the cache helping?</td><td>prefix-cache hit rate (queries vs hits), spec-decode acceptance rate when enabled</td></tr>
+<tr><td>Is the hardware healthy?</td><td>DCGM: GPU utilization, memory, temperature, XID errors; node-level network and disk</td></tr>
+</table>
+<p>A Grafana board with those four rows per model, plus request tracing (OpenTelemetry headers propagated from the gateway so a slow request can be followed into a replica), is enough to run on. <strong>Rollouts</strong>: ship a new checkpoint or quantization as a canary (one replica or a weighted ALB target group), compare its TTFT/TPOT and a sampled quality judge against the baseline for an hour of real traffic, then roll forward or back — the <code>maxUnavailable: 0</code> strategy above keeps capacity through the swap. <strong>Cost</strong>: attribute GPU-hours to tokens (and to tenants or features via request labels) so $/M tokens is a live number, not a quarterly estimate; it is the metric that tells you whether the next optimization is worth doing.</p>
+
+<h2 id="runbook">6. Runbook checklist and a one-week local plan</h2>
+<div class="card">
+<h3>Before traffic</h3>
+<ul>
+<li>Quality: task suite on the exact served artifact (quantized, merged) within CI of the BF16 reference; 50-sample format read.</li>
+<li>Capacity: open-loop sweep with the production length mix; knee rate and goodput recorded; fleet sized at ≤ 60–70% of knee at forecast peak.</li>
+<li>Config: <code>max-model-len</code> = real maximum; KV budget fits with zero preemptions at the knee; prefix caching on; thinking policy set.</li>
+<li>Platform: GPU AMI/driver ↔ CUDA image verified; weights staged on S3 and warmed; readiness probe delay covers model load; shared memory sized for TP.</li>
+<li>Ops: dashboards for the five numbers; alerts on p95 TTFT/TPOT, waiting requests, preemptions, error rate; canary path and rollback rehearsed.</li>
+</ul>
+</div>
+<p><strong>One week on the RTX 5080 before touching AWS</strong> (the plan's Week-10 exercise, extended): Day 1 — serve Qwen3-8B W4A16 locally with vLLM, hit the API, read <code>/metrics</code>. Day 2 — write the Locust file above against your own prompts, verify TTFT measurement against <code>vllm bench serve</code> on the same run. Day 3 — the rate sweep; plot TTFT p95 and goodput, find the knee, write the number down. Day 4 — change one thing at a time (prefix caching off/on, max-num-seqs 32/64/128, chunked-prefill size) and re-sweep; keep a table. Day 5 — swap FP8 vs W4A16 (the 5080 has FP8 tensor cores) and re-run the eval suite and the sweep. Day 6 — containerize it (vLLM image + your weights volume), run the same test against the container. Day 7 — write the runbook. You now have the capacity number, the config, the test harness, and the image; ECS or EKS is "the same, N times, behind a load balancer".</p>
+
+<h2 id="reading">7. Where to go deeper</h2>
+<ul>
+<li><a href="https://docs.vllm.ai/">vLLM docs</a> — serving (OpenAI server, engine args), quantization support matrix, metrics, benchmarking (<code>vllm bench</code>), the Qwen3 reasoning parser.</li>
+<li><a href="https://github.com/vllm-project/llm-compressor">llm-compressor</a> — AWQ, GPTQ, FP8 and compressed-tensors recipes that vLLM loads directly; <a href="https://github.com/casper-hansen/AutoAWQ">AutoAWQ</a>.</li>
+<li><a href="https://github.com/triton-inference-server/perf_analyzer/tree/main/genai-perf">NVIDIA GenAI-Perf</a>, <a href="https://docs.locust.io/">Locust</a>, <a href="https://k6.io/docs/">k6</a>, <a href="https://github.com/ray-project/llmperf">LLMPerf</a>.</li>
+<li><a href="https://docs.aws.amazon.com/eks/">Amazon EKS</a> and <a href="https://docs.aws.amazon.com/ecs/">Amazon ECS</a> documentation; the <a href="https://github.com/NVIDIA/k8s-device-plugin">NVIDIA device plugin</a> and GPU Operator; <a href="https://karpenter.sh/">Karpenter</a>; <a href="https://keda.sh/">KEDA</a>; the AWS Load Balancer Controller.</li>
+<li><a href="https://qwenlm.github.io/blog/qwen3/">Qwen3 blog</a> and model cards (thinking mode, recommended sampling, FP8 checkpoints).</li>
+<li>From the study plan: <a href="https://arxiv.org/html/2407.07000">Etalon</a> (goodput), <a href="https://github.com/HPMLL/BurstGPT">BurstGPT</a> (traces), <a href="https://github.com/llm-d/llm-d">llm-d</a> and <a href="https://docs.nvidia.com/dynamo/">Dynamo</a> (disaggregated serving), and the <a href="inference.html">Inference</a>, <a href="quantization.html">Quantization</a>, <a href="customization.html">Customization</a> and <a href="hardware.html">Hardware</a> chapters; the <em>Deployment</em> flashcard deck.</li>
+</ul>
+
+<div class="footer-nav"><a href="frameworks.html">← Frameworks</a><a href="framework-issues.html">Gotchas →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function watchTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+const $=id=>document.getElementById(id);
+const fmtB=b=>{const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<4){b/=1024;i++;}return b.toFixed(b>=100?0:b>=10?1:2)+' '+u[i];};
+const fmtMs=ms=>ms>=1000?(ms/1000).toFixed(2)+' s':ms.toFixed(ms<10?1:0)+' ms';
+
+// ---------- shared performance model ----------
+// Qwen3 shapes (approximate public configs): layers, KV heads, head dim, total & active params
+const MODELS={
+  q8b:{name:'Qwen3-8B',L:36,kv:8,d:128,total:8.2e9,active:8.2e9},
+  q30a3:{name:'Qwen3-30B-A3B',L:48,kv:4,d:128,total:30.5e9,active:3.3e9},
+  q32b:{name:'Qwen3-32B',L:64,kv:8,d:128,total:32.8e9,active:32.8e9}};
+// GPU: memory (GB), HBM bandwidth (GB/s), dense BF16 tensor FLOPs (TFLOPs) — approximate vendor figures
+const GPUS={
+  l4:{name:'L4',mem:24,bw:300,tf:121},a10g:{name:'A10G',mem:24,bw:600,tf:125},l40s:{name:'L40S',mem:48,bw:864,tf:362},
+  a100:{name:'A100',mem:80,bw:2039,tf:312},h100:{name:'H100',mem:80,bw:3350,tf:990},rtx5080:{name:'RTX 5080',mem:16,bw:960,tf:225}};
+function perf(cfg){
+  const m=MODELS[cfg.model],g=GPUS[cfg.gpu],tp=cfg.tp,bytes=cfg.bytes;
+  const weights=m.total*bytes; const wPerGpu=weights/tp;
+  const kvTok=2*m.L*m.kv*m.d*2; // KV in BF16
+  const usable=g.mem*1e9*0.92-1.5e9; // utilization minus CUDA graph/activation headroom
+  const kvHead=(usable-wPerGpu); const fits=kvHead>0;
+  const maxSeq=fits?Math.floor(kvHead*tp/(kvTok*cfg.ctx)):0;
+  const bw=g.bw*1e9*tp, flops=g.tf*1e12*tp*0.6; // ~60% of peak achievable on real shapes
+  const tpot=B=>{ // seconds per decode step at batch B
+    const act=m.active*bytes; // MoE: ~active experts touched at small batch; approaches total as B grows
+    const wRead=(m.total!==m.active? Math.min(weights, act*Math.min(B,8)+weights*Math.min(1,B/64)):weights);
+    const t=Math.max(wRead/bw, 2*m.active*B/flops)+B*kvTok*cfg.ctx*0.5/bw+(tp>1?m.L*25e-6:0);
+    return t;};
+  const ttft=P=>Math.max(weights/bw, 2*m.active*P/flops)+ (tp>1?m.L*40e-6:0); // prefill of P tokens
+  return {m,g,weights,wPerGpu,kvTok,kvHead,fits,maxSeq,tpot,ttft};
+}
+let currentPerf=null;
+
+// ---------- 1. SLO explorer ----------
+(function(){
+const cv=$('slViz'),ctx=cv.getContext('2d');
+function read(){return {model:$('slModel').value,bytes:parseFloat($('slPrec').value),gpu:$('slGpu').value,tp:parseInt($('slTp').value),ctx:Math.pow(2,parseInt($('slCtx').value)),prompt:Math.pow(2,parseInt($('slPrompt').value)),batch:Math.pow(2,parseInt($('slBatch').value))};}
+function upd(){
+  const c=read();$('slCtxL').textContent=c.ctx>=1024?(c.ctx/1024)+'K':c.ctx;$('slPromptL').textContent=c.prompt;$('slBatchL').textContent=c.batch;
+  const p=perf(c);currentPerf={cfg:c,p};
+  const tT=parseFloat($('slTtftT').value)/1000,pT=parseFloat($('slTpotT').value)/1000;
+  $('slW').textContent=fmtB(p.wPerGpu);
+  $('slKvHead').textContent=p.fits?fmtB(p.kvHead):'does not fit';
+  $('slMaxSeq').textContent=p.fits?p.maxSeq:'—';
+  const ttft=p.ttft(c.prompt),tpot=p.tpot(Math.min(c.batch,Math.max(1,p.maxSeq)));
+  $('slTtft').textContent=p.fits?fmtMs(ttft*1000):'—';$('slTpot').textContent=p.fits?fmtMs(tpot*1000):'—';
+  let verdict,color;
+  if(!p.fits){verdict='weights do not fit';color=css('--danger');}
+  else if(c.batch>p.maxSeq){verdict='batch exceeds KV budget';color=css('--danger');}
+  else if(ttft>tT||tpot>pT){verdict=(ttft>tT?'TTFT ':'')+(tpot>pT?'TPOT ':'')+'over target';color=css('--warn');}
+  else{verdict='meets both targets';color=css('--accent2');}
+  $('slVerdict').textContent=verdict;$('slVerdict').style.color=color;
+  draw(c,p,pT);
+}
+function draw(c,p,pT){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const x0=70,y0=H-50,pw=W-x0-30,ph=H-80;
+  ctx.font='11px sans-serif';ctx.fillStyle=dim;ctx.textAlign='left';
+  if(!p.fits){ctx.fillStyle=css('--danger');ctx.font='bold 14px sans-serif';ctx.fillText(p.m.name+' at this precision needs '+fmtB(p.wPerGpu)+' per GPU; '+p.g.name+' has '+p.g.mem+' GB. Increase TP, quantize, or pick a bigger GPU.',x0,H/2);return;}
+  const bs=[1,2,4,8,16,32,64,128,256];const ys=bs.map(b=>p.tpot(b)*1000);const maxY=Math.max(pT*1000*1.5,...ys.filter((_,i)=>bs[i]<=Math.max(p.maxSeq,1)));
+  const X=i=>x0+pw*i/(bs.length-1),Y=v=>y0-ph*Math.min(v,maxY)/maxY;
+  ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x0+pw,y0);ctx.moveTo(x0,y0);ctx.lineTo(x0,y0-ph);ctx.stroke();
+  bs.forEach((b,i)=>{ctx.fillStyle=dim;ctx.textAlign='center';ctx.fillText('B='+b,X(i),y0+16);});
+  ctx.textAlign='right';[0,0.5,1].forEach(f=>{ctx.fillStyle=dim;ctx.fillText((maxY*f).toFixed(0)+' ms',x0-6,Y(maxY*f)+4);});
+  // target line
+  ctx.setLineDash([6,4]);ctx.strokeStyle=css('--warn');ctx.beginPath();ctx.moveTo(x0,Y(pT*1000));ctx.lineTo(x0+pw,Y(pT*1000));ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=css('--warn');ctx.textAlign='left';ctx.fillText('TPOT target',x0+4,Y(pT*1000)-4);
+  // curve
+  ctx.strokeStyle=css('--accent');ctx.lineWidth=2.5;ctx.beginPath();
+  bs.forEach((b,i)=>{const x=X(i),y=Y(ys[i]);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();ctx.lineWidth=1;
+  bs.forEach((b,i)=>{const ok=b<=p.maxSeq;ctx.fillStyle=!ok?css('--danger'):(ys[i]<=pT*1000?css('--accent2'):css('--warn'));ctx.beginPath();ctx.arc(X(i),Y(ys[i]),5,0,7);ctx.fill();});
+  const sel=bs.indexOf(c.batch);if(sel>=0){ctx.strokeStyle=txt;ctx.beginPath();ctx.arc(X(sel),Y(ys[sel]),9,0,7);ctx.stroke();}
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('TPOT vs batch — '+p.m.name+' on '+c.tp+'×'+p.g.name+'; red dots exceed the KV budget ('+p.maxSeq+' seqs at this context)',x0,22);
+}
+['slModel','slPrec','slGpu','slTp','slCtx','slPrompt','slBatch','slTtftT','slTpotT'].forEach(id=>$(id).oninput=upd);
+upd();watchTheme(upd);
+})();
+
+// ---------- 2. load-test simulator ----------
+(function(){
+const cv=$('ltViz'),ctx=cv.getContext('2d');
+function expo(mean){return -Math.log(1-Math.random())*mean;}
+function sim(rate,promptMean,outMean,maxSeqs,speed,closed,horizon){
+  // continuous batching: at each step, admit from queue up to maxSeqs; step time from perf model at current batch
+  const P=currentPerf?currentPerf.p:null;const cfg=currentPerf?currentPerf.cfg:null;
+  const stepT=B=>(P?P.tpot(B):0.02)/speed, prefT=L=>(P?P.ttft(L):0.2)/speed;
+  let t=0,nextArr=expo(1/rate),queue=[],running=[],done=[],arrivals=0;
+  const ttftT=parseFloat($('slTtftT').value)/1000,tpotT=parseFloat($('slTpotT').value)/1000;
+  const newReq=(at)=>({at,prompt:Math.max(16,Math.round(expo(promptMean))),out:Math.max(4,Math.round(expo(outMean))),gen:0,start:null,ttft:null,tpots:[]});
+  if(closed){for(let i=0;i<maxSeqs;i++)queue.push(newReq(0));}
+  while(t<horizon&&done.length<6000){
+    if(!closed){while(nextArr<=t){queue.push(newReq(nextArr));arrivals++;nextArr+=expo(1/rate);}}
+    // admit
+    let prefillCost=0;
+    while(running.length<maxSeqs&&queue.length){const r=queue.shift();r.start=t;prefillCost+=prefT(r.prompt)*0.6;running.push(r);r.ttft=t+prefillCost-r.at;}
+    if(!running.length){t=closed?t+0.001:Math.min(nextArr,horizon);continue;}
+    const dt=stepT(running.length)+prefillCost;
+    t+=dt;
+    for(const r of running){r.gen++;r.tpots.push(dt);}
+    const fin=running.filter(r=>r.gen>=r.out);running=running.filter(r=>r.gen<r.out);
+    for(const r of fin){r.end=t;done.push(r);if(closed)queue.push(newReq(t));}
+  }
+  const q=arr=>{if(!arr.length)return 0;const s=[...arr].sort((a,b)=>a-b);return p=>s[Math.min(s.length-1,Math.floor(p*s.length))];};
+  const tt=q(done.map(r=>r.ttft)),tp=q(done.flatMap(r=>r.tpots.slice(1)));
+  const good=done.filter(r=>r.ttft<=ttftT&&(r.tpots.length<2||q(r.tpots.slice(1))(0.95)<=tpotT)).length/horizon;
+  return {ttft50:tt?tt(0.5):0,ttft95:tt?tt(0.95):0,tpot95:tp?tp(0.95):0,goodput:good,queue:queue.length,done:done.length,arrivals};
+}
+function run(){
+  const rate=parseInt($('ltRate').value),pm=parseInt($('ltPrompt').value),om=parseInt($('ltOut').value),ms=parseInt($('ltSeqs').value),sp=parseFloat($('ltSpeed').value),closed=$('ltClosed').checked;
+  $('ltRateL').textContent=rate;$('ltPromptL').textContent=pm;$('ltOutL').textContent=om;$('ltSeqsL').textContent=ms;
+  const r=sim(rate,pm,om,ms,sp,closed,60);
+  $('ltTtft50').textContent=fmtMs(r.ttft50*1000);$('ltTtft95').textContent=fmtMs(r.ttft95*1000);$('ltTpot').textContent=fmtMs(r.tpot95*1000);
+  $('ltGood').textContent=r.goodput.toFixed(1);$('ltQueue').textContent=closed?'n/a':r.queue;
+  // sweep
+  const rates=[];for(let x=1;x<=60;x+=Math.max(1,Math.round(x/4)))rates.push(x);
+  const sweep=rates.map(x=>({x,...sim(x,pm,om,ms,sp,closed,40)}));
+  draw(r,sweep,rate,closed);
+}
+function draw(r,sweep,rate,closed){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  ctx.font='11px sans-serif';
+  // left panel: bars of the current run
+  ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillText(closed?'Closed-loop run, concurrency '+$('ltSeqs').value:'Open-loop run at '+rate+' req/s for 60 s',20,22);
+  ctx.font='11px sans-serif';
+  const bars=[['TTFT p50',r.ttft50*1000,css('--accent')],['TTFT p95',r.ttft95*1000,css('--warn')],['TPOT p95',r.tpot95*1000,css('--accent2')]];
+  const bmax=Math.max(1,...bars.map(b=>b[1]));
+  bars.forEach((b,i)=>{const y=50+i*44;ctx.fillStyle=dim;ctx.fillText(b[0],20,y+14);ctx.fillStyle=b[2];const w=Math.max(2,220*b[1]/bmax);ctx.fillRect(90,y,w,22);ctx.fillStyle=txt;ctx.fillText(fmtMs(b[1]),94+w,y+15);});
+  ctx.fillStyle=dim;ctx.fillText('completed: '+r.done+(closed?'':'  arrivals: '+r.arrivals+'  still queued: '+r.queue),20,200);
+  // right panel: sweep
+  const x0=400,y0=H-40,pw=W-x0-30,ph=H-80;
+  ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x0+pw,y0);ctx.moveTo(x0,y0);ctx.lineTo(x0,y0-ph);ctx.stroke();
+  const maxR=60,X=x=>x0+pw*x/maxR;
+  const maxT=Math.max(0.5,...sweep.map(s=>Math.min(s.ttft95,10)));const maxG=Math.max(1,...sweep.map(s=>s.goodput));
+  ctx.fillStyle=dim;ctx.textAlign='center';[0,15,30,45,60].forEach(x=>ctx.fillText(x+' req/s',X(x),y0+16));
+  // goodput
+  ctx.strokeStyle=css('--accent2');ctx.lineWidth=2;ctx.beginPath();sweep.forEach((s,i)=>{const x=X(s.x),y=y0-ph*s.goodput/maxG;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();
+  // ttft p95
+  ctx.strokeStyle=css('--warn');ctx.beginPath();sweep.forEach((s,i)=>{const x=X(s.x),y=y0-ph*Math.min(s.ttft95,10)/maxT;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();ctx.lineWidth=1;
+  // knee: first rate where goodput < 0.85 offered
+  const knee=sweep.find(s=>s.goodput<0.85*s.x);
+  if(knee&&!closed){ctx.setLineDash([4,4]);ctx.strokeStyle=css('--danger');ctx.beginPath();ctx.moveTo(X(knee.x),y0);ctx.lineTo(X(knee.x),y0-ph);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=css('--danger');ctx.textAlign='left';ctx.fillText('knee ≈ '+knee.x+' req/s',X(knee.x)+4,y0-ph+12);}
+  // current
+  ctx.strokeStyle=txt;ctx.beginPath();ctx.moveTo(X(rate),y0);ctx.lineTo(X(rate),y0-ph);ctx.stroke();
+  ctx.fillStyle=css('--accent2');ctx.textAlign='left';ctx.fillText('goodput (req/s, left scale to '+maxG.toFixed(0)+')',x0+6,y0-ph-4);
+  ctx.fillStyle=css('--warn');ctx.textAlign='right';ctx.fillText('TTFT p95 (to '+fmtMs(maxT*1000)+')',x0+pw,y0-ph-4);
+}
+['ltRate','ltPrompt','ltOut','ltSeqs','ltSpeed','ltClosed'].forEach(id=>$(id).oninput=run);$('ltRun').onclick=run;
+['slModel','slPrec','slGpu','slTp','slCtx','slPrompt','slBatch'].forEach(id=>$(id).addEventListener('input',run));
+run();watchTheme(run);
+})();
+
+// ---------- 3. latency histogram ----------
+(function(){
+const cv=$('hsViz'),ctx=cv.getContext('2d');
+function gauss(){let u=0,v=0;while(!u)u=Math.random();while(!v)v=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+function run(){
+  const tail=parseInt($('hsTail').value)/10,n=parseInt($('hsN').value),slo=parseFloat($('hsSlo').value);
+  $('hsTailL').textContent=tail.toFixed(1);$('hsNL').textContent=n;
+  const s=[];for(let i=0;i<n;i++){s.push(Math.exp(Math.log(300)+tail*gauss()));}
+  s.sort((a,b)=>a-b);const q=p=>s[Math.min(n-1,Math.floor(p*n))];const mean=s.reduce((a,b)=>a+b,0)/n;
+  $('hsMean').textContent=fmtMs(mean);$('hs50').textContent=fmtMs(q(0.5));$('hs95').textContent=fmtMs(q(0.95));$('hs99').textContent=fmtMs(q(0.99));
+  $('hsSloPct').textContent=(100*s.filter(x=>x<=slo).length/n).toFixed(1)+'%';
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),bd=css('--border');
+  const x0=40,y0=H-30,pw=W-70,ph=H-60;const maxX=Math.min(q(0.995),slo*4);const bins=60,counts=new Array(bins).fill(0);
+  for(const x of s){const b=Math.min(bins-1,Math.floor(x/maxX*bins));counts[b]++;}
+  const mc=Math.max(...counts);
+  counts.forEach((c,i)=>{ctx.fillStyle=css('--accent');ctx.globalAlpha=0.8;ctx.fillRect(x0+pw*i/bins,y0-ph*c/mc,pw/bins-1,ph*c/mc);ctx.globalAlpha=1;});
+  const mark=(v,label,color)=>{const x=x0+pw*Math.min(v,maxX)/maxX;ctx.strokeStyle=color;ctx.setLineDash([4,3]);ctx.beginPath();ctx.moveTo(x,y0);ctx.lineTo(x,y0-ph);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=color;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText(label,x+3,y0-ph+12+(label.startsWith('p9')?14:0));};
+  mark(mean,'mean',dim);mark(q(0.5),'p50',css('--accent2'));mark(q(0.95),'p95',css('--warn'));mark(q(0.99),'p99',css('--danger'));mark(slo,'SLO',css('--text'));
+  ctx.fillStyle=dim;ctx.textAlign='center';ctx.font='11px sans-serif';[0,0.25,0.5,0.75,1].forEach(f=>ctx.fillText(fmtMs(maxX*f),x0+pw*f,y0+16));
+}
+['hsTail','hsN','hsSlo'].forEach(id=>$(id).oninput=run);$('hsRun').onclick=run;run();watchTheme(run);
+})();
+
+// ---------- 4. topology animation ----------
+(function(){
+const cv=$('tpViz'),ctx=cv.getContext('2d');
+let nodes,pods,dots,timer=null,t=0,replicasWanted=3,pending=null,provisioning=null;
+function init(){nodes=[{id:0,x:430,y:120},{id:1,x:430,y:230}];pods=[{id:0,node:0,ready:true,q:0,ox:0},{id:1,node:0,ready:true,q:0,ox:90},{id:2,node:1,ready:true,q:0,ox:0}];dots=[];t=0;replicasWanted=3;pending=null;provisioning=null;$('tpStatus').textContent='';}
+function podPos(p){const n=nodes[p.node];return {x:n.x+30+p.ox,y:n.y+22};}
+function tick(){
+  t++;
+  if(t%6===0){dots.push({x:40,y:180,stage:0,target:null,age:0});}
+  // route dots
+  for(const d of dots){d.age++;
+    if(d.stage===0){d.x+=6;if(d.x>=150){d.stage=1;}}
+    else if(d.stage===1){d.x+=6;if(d.x>=270){const ready=pods.filter(p=>p.ready);if(!ready.length){d.stage=9;continue;}const p=ready.reduce((a,b)=>a.q<=b.q?a:b);d.target=p.id;p.q++;d.stage=2;}}
+    else if(d.stage===2){const p=pods.find(q=>q.id===d.target);const pp=podPos(p);d.x+=(pp.x-d.x)*0.2;d.y+=(pp.y-d.y)*0.2;if(Math.abs(pp.x-d.x)<2){d.stage=3;d.hold=14+p.q*2;}}
+    else if(d.stage===3){d.hold--;if(d.hold<=0){const p=pods.find(q=>q.id===d.target);p.q=Math.max(0,p.q-1);d.stage=9;}}
+  }
+  dots=dots.filter(d=>d.stage!==9);
+  // pod replacement
+  for(const p of pods){if(!p.ready&&p.replaceAt&&t>=p.replaceAt){p.ready=true;p.replaceAt=null;p.q=0;$('tpStatus').textContent='pod '+p.id+' replaced and ready; traffic rebalanced';}}
+  // provisioning
+  if(provisioning&&t>=provisioning.at){nodes.push({id:nodes.length,x:430,y:120+110*nodes.length});const np={id:pods.length,node:nodes.length-1,ready:false,q:0,ox:0,replaceAt:t+40};pods.push(np);provisioning=null;pending=null;$('tpStatus').textContent='Karpenter node ready; pod scheduled, pulling weights (readiness pending)…';}
+  draw();
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),dng=css('--danger');
+  ctx.font='12px sans-serif';ctx.textAlign='center';
+  const box=(x,y,w,h,label,color)=>{ctx.strokeStyle=color||bd;ctx.lineWidth=1.5;ctx.strokeRect(x,y,w,h);ctx.fillStyle=txt;ctx.fillText(label,x+w/2,y+h/2+4);};
+  box(20,160,110,40,'users',bd);box(150,150,110,60,'ALB / Ingress',acc);box(270,165,120,30,'Service',acc);
+  ctx.fillStyle=dim;ctx.fillText('EKS data plane (GPU nodes)',640,40);
+  for(const n of nodes){ctx.strokeStyle=bd;ctx.setLineDash([3,3]);ctx.strokeRect(n.x,n.y,440,80);ctx.setLineDash([]);ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('node '+n.id+' (g6e.xlarge, 1×L40S each pod)',n.x+6,n.y+14);ctx.textAlign='center';}
+  for(const p of pods){const pp=podPos(p);ctx.fillStyle=p.ready?acc2:dng;ctx.globalAlpha=0.85;ctx.fillRect(pp.x-30,pp.y-8,60,36);ctx.globalAlpha=1;ctx.fillStyle='#fff';ctx.fillText('pod '+p.id,pp.x,pp.y+6);ctx.fillText(p.ready?'q='+p.q:'not ready',pp.x,pp.y+20);}
+  if(pending){ctx.strokeStyle=css('--warn');ctx.setLineDash([3,3]);ctx.strokeRect(700,120,60,36);ctx.setLineDash([]);ctx.fillStyle=css('--warn');ctx.fillText('pending pod',730,142);ctx.fillText('(no GPU free)',730,170);}
+  ctx.fillStyle=acc;for(const d of dots){ctx.beginPath();ctx.arc(d.x,d.y,4,0,7);ctx.fill();}
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText('replicas wanted: '+replicasWanted+'   ready: '+pods.filter(p=>p.ready).length+'   in flight: '+dots.length,20,H-14);
+}
+function stop(){if(timer){clearInterval(timer);timer=null;$('tpPlay').textContent='▶ Traffic';}}
+$('tpPlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(tick,60);};
+$('tpFail').onclick=()=>{const p=pods.find(x=>x.ready);if(!p)return;p.ready=false;p.replaceAt=t+120;p.q=0;$('tpStatus').textContent='pod '+p.id+' failed readiness → removed from Service endpoints; Deployment replacing it…';draw();};
+$('tpScale').onclick=()=>{if(pending)return;replicasWanted++;pending=true;provisioning={at:t+150};$('tpStatus').textContent='KEDA raised replicas → pod pending (no GPU) → Karpenter provisioning a node (~2–4 min in reality)…';draw();};
+$('tpReset').onclick=()=>{stop();init();draw();};
+init();draw();watchTheme(draw);
+})();
+</script>
+</body>
+</html>

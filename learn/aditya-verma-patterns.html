@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Aditya Verma Patterns Map</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+.pl { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+.pl button { background: var(--bg-inset); color: var(--text); border:1px solid var(--border); border-radius:999px; padding:3px 11px; cursor:pointer; font-size:.8rem; }
+.pl button.on { border-color: var(--accent); color: var(--accent); font-weight:700; }
+.vid { border-top:1px solid var(--border); padding:8px 0; }
+.vid summary { cursor:pointer; font-size:.92rem; }
+.vid .tx { white-space:pre-wrap; font-size:.82rem; color:var(--text-dim); max-height:320px; overflow:auto; background:var(--bg-inset); border:1px solid var(--border); border-radius:8px; padding:10px; margin-top:6px; }
+.tag { display:inline-block; padding:1px 8px; border-radius:999px; font-size:.72rem; font-weight:700; color:#fff; margin-right:4px; white-space:nowrap; }
+.direct { outline:2px solid var(--accent2); outline-offset:1px; }
+table.cmp tr.hl td { background: rgba(91,140,255,.10); }
+.small { font-size:.82rem; color:var(--text-dim); }
+#filterBox { background: var(--bg-inset); color: var(--text); border:1px solid var(--border); border-radius:8px; padding:6px 10px; min-width:240px; }
+</style>
+</head>
+<body>
+<nav class="topnav"><a class="home" href="index.html">Learn</a><div class="links">
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html" class="here">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
+  </div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav>
+<main>
+<h1>Aditya Verma's Patterns → Blind 75 and NeetCode 150</h1>
+<p class="dim">The study plan sends you to <a href="https://www.youtube.com/@theadityaverma">Aditya Verma's channel</a> whenever a problem beats the 45-minute cap. His playlists are in Hindi/Hinglish and teach <em>patterns</em>, not problems: each starts with "how do I identify this?", then a parent problem, then every variation as a small edit of the parent. This page reconstructs that taxonomy from his playlists, maps every Blind 75 and NeetCode 150 problem onto it, and gives each video a slot for its transcript.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (13:19)</h3><audio controls preload="none" src="audio/aditya-verma-patterns.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/aditya-verma-patterns.txt">Read the transcript</a>.</p></div>
+<div class="card">
+<h3>Status of this page</h3>
+<p class="small">The playlist structure, video order, identification cues, and templates below are reconstructed from the public playlists (video titles and their well-known content), not from fetched transcripts — YouTube was not reachable when the page was written. Transcripts are attached automatically once you run <code>python3 scripts/fetch_transcripts.py</code> on your own machine (it downloads the videos' own captions with yt-dlp into <code>learn/transcripts/</code>; see <a href="transcripts/README.md">transcripts/README.md</a>). The page loads them when served over HTTP (<code>python3 -m http.server</code>); from a <code>file://</code> URL it shows the slots without content.</p>
+<div class="kpi"><div class="box"><div class="v" id="kTx">–</div><div class="l">transcripts attached</div></div><div class="box"><div class="v" id="kB">–</div><div class="l">Blind 75 covered (direct / indirect)</div></div><div class="box"><div class="v" id="kN">–</div><div class="l">NeetCode 150 covered (direct / indirect)</div></div></div>
+</div>
+
+<h2 id="method">1. How he teaches, and how to use the videos</h2>
+<p>Every playlist follows the same arc. First, <strong>identification</strong>: what in the problem statement tells you this is a sliding-window problem, a knapsack problem, a monotonic-stack problem? He states the cue explicitly ("subarray or substring + a condition or a window size" → sliding window; "choice at every element + optimize or count" → knapsack DP; "nearest greater/smaller element to the left or right" → stack). Second, a <strong>parent problem</strong> solved from first principles: the brute-force recursion written out with its choice diagram, then memoization added as a two-line change, then the bottom-up table derived by reading the memoized code. Third, <strong>variations</strong>: a dozen problems that are each the parent with one line changed, so that by the end you recognize the family rather than memorizing solutions.</p>
+<p>Use the videos the way the plan intends: hit the 45-minute cap, watch the <em>identification</em> and <em>parent</em> videos for the pattern (not the exact problem), close the video, and re-solve with AI assistance off — the muscle-memory rule from Alisa Liu's notes in the <a href="interview-journey.html">Interview Journey</a> chapter applies to LeetCode exactly as it does to ML coding. The templates below are his approaches written in idiomatic Python; the <a href="coding-patterns.html">Coding Patterns</a> chapter has full solutions for all 75 problems and the <em>Coding Patterns</em> flashcard deck drills the moves.</p>
+
+<div id="playlists"></div>
+
+<h2 id="reverse">3. Reverse index: every problem → his pattern and video</h2>
+<p>All 75 Blind problems (plan numbering) and all 150 NeetCode problems. <strong>Direct</strong> means a specific video solves this problem or an isomorphic one; <strong>indirect</strong> means the playlist teaches the move and you apply it; <strong>other</strong> means the problem is a technique his playlists do not cover (hash maps, two pointers, linked lists, intervals, bits, tries) — the Coding Patterns chapter covers those.</p>
+<div class="controls"><input type="text" id="filterBox" placeholder="filter by problem, pattern, or video…"><label class="ctl"><input type="checkbox" id="onlyDirect"> direct only</label></div>
+<div class="pl" id="patBtns"></div>
+<h3>Blind 75</h3>
+<table class="cmp"><thead><tr><th>#</th><th>Problem</th><th>His pattern</th><th>Video that teaches the move</th><th>Coverage</th></tr></thead><tbody id="blindBody"></tbody></table>
+<h3>NeetCode 150</h3>
+<table class="cmp"><thead><tr><th>Category</th><th>Problem</th><th>His pattern</th><th>Video that teaches the move</th><th>Coverage</th></tr></thead><tbody id="ncBody"></tbody></table>
+
+<h2 id="order">4. Which playlist first — aligned to the plan's 13 weeks</h2>
+<table class="cmp">
+<tr><th>Plan weeks</th><th>Blind 75 topics scheduled</th><th>Watch first</th><th>Why</th></tr>
+<tr><td>1–2</td><td>Array, Binary, Linked List</td><td><span class="tag" style="background:#4cc3e5">Sliding Window</span> (fixed, then variable), Binary Search intro</td><td>Shortest playlists with the clearest identification cues; sliding window pays off immediately on #50–52 later and on "subarray" questions everywhere.</td></tr>
+<tr><td>3–4</td><td>String, Linked List, Binary</td><td><span class="tag" style="background:#5b8cff">Binary Search</span> (order-agnostic → rotated → BS on answer)</td><td>#7 and #8 are his exact videos; "BS on answer" (allocate pages) is the move behind Koko Eating Bananas and Split Array.</td></tr>
+<tr><td>5–6</td><td>String, Tree, Interval</td><td><span class="tag" style="background:#e5604c">Stack</span> + <span class="tag" style="background:#b07cff">Recursion</span></td><td>Nearest-greater/smaller unlocks histogram, rain water, daily temperatures; the recursion playlist's "height of tree / subsets / balanced parentheses" is the base of every tree and backtracking problem in weeks 5–9.</td></tr>
+<tr><td>7–9</td><td>Matrix, Tree, Heap, Graph</td><td><span class="tag" style="background:#f2a65a">Heap</span>, then <span class="tag" style="background:#9ad24c">Graph</span></td><td>"k + smallest/largest" identification covers #74, #75, #43, #39 and six NeetCode heap problems; the graph playlist gives BFS/DFS/topological sort for #27–34.</td></tr>
+<tr><td>10–13</td><td>Graph, DP (#16–26), interview mode</td><td><span class="tag" style="background:#38c6a0">Dynamic Programming</span>: 0/1 knapsack → unbounded → LCS → MCM → DP on trees</td><td>The DP playlist is long (50 videos); the knapsack family alone explains Coin Change, Target Sum, Partition Equal Subset Sum, House Robber's include/exclude choice; LCS explains #19 and the palindrome family; MCM explains Word Break and Palindrome Partitioning.</td></tr>
+</table>
+<p class="small">Tie-in: the plan's <a href="https://github.com/kedardg/Programming_Interview_Study_Plan#3-month-schedule">3-month schedule</a> rule — "stuck on LeetCode: keep the 45-minute cap, then watch the matching tutorial on Aditya Verma's channel before you re-try" — is exactly the identification-video-first loop above.</p>
+
+<h2 id="reading">5. Where to go deeper</h2>
+<ul>
+<li><a href="https://www.youtube.com/@theadityaverma/playlists">All playlists</a> on his channel: Dynamic Programming, Sliding Window, Stack, Binary Search, Recursion, Backtracking, Heap, Graph. Watch in Hindi/Hinglish with captions, or use the fetched transcripts below each video.</li>
+<li><a href="https://neetcode.io/practice/practice/blind75">NeetCode Blind 75</a> and the <a href="https://neetcode.io/practice">NeetCode 150</a> lists (interactive; sign in to track).</li>
+<li><a href="coding-patterns.html">Coding Interview Patterns</a> — full Python solutions, animations, and the problem → pattern map; the <a href="flashcards.html">Coding Patterns</a> deck.</li>
+<li>The plan's Step 4 "How to Solve problems" protocol and the interview-mode weeks 12–13.</li>
+</ul>
+<div class="footer-nav"><a href="coding-patterns.html">← Coding Patterns</a><a href="interview-journey.html">Interview Journey →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+
+// ---------------- pattern taxonomy (reconstructed from the playlists) ----------------
+const PATTERNS = {
+ sw:{name:'Sliding Window',color:'#4cc3e5',url:'https://www.youtube.com/@theadityaverma/playlists',
+  cue:'The problem says <em>subarray</em> or <em>substring</em>, and gives either a window size k (fixed window) or a condition to satisfy (variable window: "longest/smallest subarray such that…"). Brute force would be O(n²) over all windows; the window turns it into one pass.',
+  template:`# Fixed window of size k: slide, add the new right element, drop the old left one
+def fixed_window(a, k):
+    best, cur = float('-inf'), 0
+    for j in range(len(a)):
+        cur += a[j]                 # expand
+        if j - 0 + 1 < k: continue  # window not yet full
+        best = max(best, cur)       # window [j-k+1, j] is valid: answer
+        cur -= a[j - k + 1]         # slide: drop the leftmost element
+
+# Variable window: expand right, shrink left while the condition is violated
+def longest_with_at_most_k_distinct(s, k):
+    cnt, i, best = {}, 0, 0
+    for j, ch in enumerate(s):
+        cnt[ch] = cnt.get(ch, 0) + 1            # expand
+        while len(cnt) > k:                     # condition broken → shrink
+            cnt[s[i]] -= 1
+            if cnt[s[i]] == 0: del cnt[s[i]]
+            i += 1
+        best = max(best, j - i + 1)             # condition holds → answer
+    return best`,
+  videos:['Sliding Window Introduction (identification: subarray/substring + window size or condition)','Maximum Sum Subarray of Size K','First Negative Number in Every Window of Size K','Count Occurrences of Anagrams','Maximum of All Subarrays of Size K','Variable Size Sliding Window — introduction','Largest Subarray of Sum K','Longest Substring With K Unique Characters','Longest Substring Without Repeating Characters','Pick Toys (longest subarray with 2 distinct)','Minimum Window Substring']},
+ bs:{name:'Binary Search',color:'#5b8cff',url:'https://www.youtube.com/@theadityaverma/playlists',
+  cue:'The input is sorted, rotated-sorted, bitonic, or <em>monotonic in the answer</em> ("minimum capacity such that…", "minimum pages such that…"). Any time a yes/no predicate flips exactly once as a value grows, you can binary-search the value — his "binary search on answer".',
+  template:`def first_occurrence(a, x):          # template: shrink toward the answer side
+    lo, hi, ans = 0, len(a) - 1, -1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if a[mid] == x: ans = mid; hi = mid - 1   # record, keep looking left
+        elif a[mid] < x: lo = mid + 1
+        else: hi = mid - 1
+    return ans
+
+def rotations(a):                    # index of the minimum = number of rotations
+    lo, hi, n = 0, len(a) - 1, len(a)
+    while lo <= hi:
+        if a[lo] <= a[hi]: return lo           # already sorted segment
+        mid = (lo + hi) // 2
+        if a[mid] <= a[(mid - 1) % n] and a[mid] <= a[(mid + 1) % n]: return mid
+        if a[lo] <= a[mid]: lo = mid + 1       # left half sorted → min is right
+        else: hi = mid - 1
+
+def min_pages(books, students):      # binary search on the answer
+    lo, hi, ans = max(books), sum(books), -1
+    def feasible(cap):
+        used, s = 1, 0
+        for b in books:
+            if s + b > cap: used += 1; s = 0
+            s += b
+        return used <= students
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if feasible(mid): ans = mid; hi = mid - 1
+        else: lo = mid + 1
+    return ans`,
+  videos:['Binary Search Introduction','Binary Search on Reverse Sorted Array','Order Agnostic Binary Search','First and Last Occurrence of an Element','Count of an Element in a Sorted Array','Number of Times a Sorted Array is Rotated','Find an Element in a Rotated Sorted Array','Searching in a Nearly Sorted Array','Floor of an Element in a Sorted Array','Ceil of an Element in a Sorted Array','Next Alphabetical Element','Find Position of an Element in an Infinite Sorted Array','Index of First 1 in an Infinite Binary Sorted Array','Minimum Difference Element in a Sorted Array','Peak Element','Maximum Element in a Bitonic Array','Search in a Bitonic Array','Search in Row-wise and Column-wise Sorted Matrix','Allocate Minimum Number of Pages (binary search on answer)']},
+ stack:{name:'Stack',color:'#e5604c',url:'https://www.youtube.com/@theadityaverma/playlists',
+  cue:'The brute force is a nested loop where the inner loop scans left or right from <em>i</em> looking for the <em>nearest</em> element satisfying a comparison ("nearest greater to the left"). That dependence on the nearest element is the monotonic-stack signature; four base problems (NGL, NGR, NSL, NSR) generate the rest.',
+  template:`def nearest_greater_left(a):          # one of the four base problems
+    st, out = [], []                      # stack holds candidates in decreasing order
+    for x in a:
+        while st and st[-1] <= x: st.pop()
+        out.append(st[-1] if st else -1)
+        st.append(x)
+    return out
+
+def max_area_histogram(h):            # NSL + NSR give each bar's width
+    n = len(h)
+    left = [0]*n; right = [n-1]*n; st = []
+    for i in range(n):                    # nearest smaller to the left (index)
+        while st and h[st[-1]] >= h[i]: st.pop()
+        left[i] = st[-1] + 1 if st else 0
+        st.append(i)
+    st = []
+    for i in range(n-1, -1, -1):          # nearest smaller to the right (index)
+        while st and h[st[-1]] >= h[i]: st.pop()
+        right[i] = st[-1] - 1 if st else n - 1
+        st.append(i)
+    return max(h[i] * (right[i] - left[i] + 1) for i in range(n))`,
+  videos:['Stack Introduction (identification)','Nearest Greater to Left','Nearest Greater to Right (Next Largest Element)','Nearest Smaller to Left','Nearest Smaller to Right','Stock Span Problem','Maximum Area Histogram','Maximum Area Rectangle in Binary Matrix','Rain Water Trapping','Implement Min Stack (with and without extra space)','Implement Stack using Heap','The Celebrity Problem','Iterative Tower of Hanoi']},
+ rec:{name:'Recursion & Backtracking',color:'#b07cff',url:'https://www.youtube.com/@theadityaverma/playlists',
+  cue:'Decide the <em>input/output</em> of the recursive call, make the input smaller by one decision, and draw the recursion tree ("IBH": induction, base, hypothesis). Backtracking is the same tree with a choice taken and undone at each node; "print all" or "count all" problems live here.',
+  template:`def subsets(s):                        # input/output method: choose or skip each char
+    out = []
+    def go(i, cur):
+        if i == len(s): out.append(cur); return
+        go(i + 1, cur + s[i])            # take
+        go(i + 1, cur)                   # skip
+    go(0, "")
+    return out
+
+def balanced_parens(n):               # choices constrained by counts
+    out = []
+    def go(opn, close, cur):
+        if opn == 0 and close == 0: out.append(cur); return
+        if opn > 0: go(opn - 1, close, cur + "(")
+        if close > opn: go(opn, close - 1, cur + ")")
+    go(n, n, "")
+    return out
+
+def height(root):                     # hypothesis: height(child) is known
+    if not root: return 0
+    return 1 + max(height(root.left), height(root.right))`,
+  videos:['Recursion Introduction (identification, IBH method)','Height of a Binary Tree','Sort an Array using Recursion','Sort a Stack using Recursion','Delete Middle Element of a Stack','Reverse a Stack using Recursion','Kth Symbol in Grammar','Tower of Hanoi','Print Subsets / Power Set','Print Unique Subsets','Permutation with Spaces','Permutation with Case Change','Letter Case Permutation','Generate All Balanced Parentheses','Print N-bit Binary Numbers Having More 1s than 0s','Josephus Problem']},
+ heap:{name:'Heap',color:'#f2a65a',url:'https://www.youtube.com/@theadityaverma/playlists',
+  cue:'The statement contains a <em>k</em> and the words smallest/largest/closest/frequent/top. Sorting would be O(n log n); keeping a heap of size k makes it O(n log k). "k largest" → min-heap of size k; "k smallest" → max-heap of size k; "closest" → heap on the distance.',
+  template:`import heapq
+def kth_largest(a, k):                # min-heap of size k: top is the answer
+    h = []
+    for x in a:
+        heapq.heappush(h, x)
+        if len(h) > k: heapq.heappop(h)
+    return h[0]
+
+def k_closest(a, x, k):               # max-heap on distance via negation
+    h = []
+    for v in a:
+        heapq.heappush(h, (-abs(v - x), v))
+        if len(h) > k: heapq.heappop(h)
+    return [v for _, v in h]
+
+def top_k_frequent(a, k):
+    from collections import Counter
+    return [v for v, _ in heapq.nlargest(k, Counter(a).items(), key=lambda t: t[1])]`,
+  videos:['Heap Introduction (identification: k + smallest/largest)','Kth Smallest Element','Kth Largest Element','Sort a K-Sorted (Nearly Sorted) Array','K Closest Numbers','Top K Frequent Numbers','Frequency Sort','K Closest Points to Origin','Connect Ropes to Minimize Cost','Sum of Elements Between K1 Smallest and K2 Smallest']},
+ dp:{name:'Dynamic Programming',color:'#38c6a0',url:'https://www.youtube.com/@theadityaverma/playlists',
+  cue:'There is a <em>choice</em> at every element (take it or not, cut here or not, match or skip) and the question asks for an <em>optimum</em> or a <em>count</em>. Write the recursion with its choice diagram, memoize on the changing parameters, then tabulate. He groups the playlist into families: 0/1 knapsack, unbounded knapsack, LCS, matrix chain multiplication (partition DP), DP on trees (plus the Fibonacci, LIS, Kadane and grid families he names in the introduction).',
+  template:`# 0/1 knapsack parent: capacity W, items (wt, val); choice = include or exclude
+def knapsack(wt, val, W):
+    n = len(wt)
+    dp = [[0] * (W + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        for w in range(W + 1):
+            dp[i][w] = dp[i-1][w]                               # exclude
+            if wt[i-1] <= w:
+                dp[i][w] = max(dp[i][w], val[i-1] + dp[i-1][w - wt[i-1]])  # include
+    return dp[n][W]
+# subset sum / equal partition / count subsets / min difference / target sum are this table with
+# booleans or counts instead of max; unbounded knapsack reuses row i (dp[i][w - wt]) → coin change.
+
+# LCS parent: match → 1 + diagonal, else max of up/left
+def lcs(a, b):
+    m, n = len(a), len(b)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            dp[i][j] = dp[i-1][j-1] + 1 if a[i-1] == b[j-1] else max(dp[i-1][j], dp[i][j-1])
+    return dp[m][n]
+# longest palindromic subsequence = lcs(s, s[::-1]); min insertions/deletions = n - lps, etc.
+
+# MCM / partition parent: try every split k in [i, j), combine the two halves
+from functools import lru_cache
+def mcm(dims):
+    @lru_cache(None)
+    def solve(i, j):
+        if i >= j: return 0
+        return min(solve(i, k) + solve(k + 1, j) + dims[i-1] * dims[k] * dims[j] for k in range(i, j))
+    return solve(1, len(dims) - 1)
+# palindrome partitioning, boolean parenthesization, scrambled strings, egg dropping: same shape.`,
+  videos:['Dynamic Programming Introduction (identification: choice + optimal/count; the six families)','0/1 Knapsack — Recursive','0/1 Knapsack — Memoization','0/1 Knapsack — Top-down vs Bottom-up','Subset Sum Problem','Equal Sum Partition','Count of Subsets with a Given Sum','Minimum Subset Sum Difference','Count of Subsets with a Given Difference','Target Sum','Unbounded Knapsack','Rod Cutting Problem','Coin Change — Maximum Number of Ways','Coin Change — Minimum Number of Coins','Maximum Ribbon Cut','Longest Common Subsequence — Recursive / Memoized / Top-down','Longest Common Substring','Print Longest Common Subsequence','Shortest Common Supersequence','Minimum Insertions and Deletions to Convert A to B','Longest Palindromic Subsequence','Minimum Deletions to Make a String Palindrome','Print Shortest Common Supersequence','Longest Repeating Subsequence','Sequence Pattern Matching','Minimum Insertions to Make a String Palindrome','Matrix Chain Multiplication — Recursive / Memoized','Palindrome Partitioning','Evaluate Expression to True (Boolean Parenthesization)','Scrambled Strings','Egg Dropping Problem','Diameter of a Binary Tree (DP on trees)','Maximum Path Sum from Any Node to Any Node','Maximum Path Sum from Leaf to Leaf']},
+ graph:{name:'Graph',color:'#9ad24c',url:'https://www.youtube.com/@theadityaverma/playlists',
+  cue:'Entities with relationships (cities and roads, courses and prerequisites, grid cells and neighbours). Ask: traversal (BFS/DFS), ordering (topological sort), cycles, connectivity, or shortest path — each is a template; grids are graphs whose edges are the four directions.',
+  template:`from collections import deque, defaultdict
+def bfs(adj, s):
+    seen, q, order = {s}, deque([s]), []
+    while q:
+        u = q.popleft(); order.append(u)
+        for v in adj[u]:
+            if v not in seen: seen.add(v); q.append(v)
+    return order
+
+def topo_sort(n, edges):              # Kahn: indegree queue; leftover nodes = cycle
+    adj, indeg = defaultdict(list), [0] * n
+    for a, b in edges: adj[a].append(b); indeg[b] += 1
+    q, out = deque(i for i in range(n) if indeg[i] == 0), []
+    while q:
+        u = q.popleft(); out.append(u)
+        for v in adj[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0: q.append(v)
+    return out if len(out) == n else None`,
+  videos:['Graph Introduction and Representation','Breadth-First Search','Depth-First Search','Cycle Detection (undirected, directed)','Topological Sort (DFS and Kahn\'s algorithm)','Connected Components / Islands','Shortest Path (BFS on unweighted; Dijkstra on weighted)']},
+ other:{name:'Not an AV playlist topic',color:'#8a93a6',url:'coding-patterns.html',cue:'',template:'',videos:[]}
+};
+
+// ---------------- problem → pattern maps ----------------
+// [number, name, pattern, video, coverage]
+const BLIND = [
+[1,'Two Sum','other','hash map',''],[2,'Best Time to Buy and Sell Stock','sw','Variable window / running minimum','indirect'],[3,'Contains Duplicate','other','hash set',''],[4,'Product of Array Except Self','other','prefix/suffix',''],[5,'Maximum Subarray','dp','Kadane family named in the DP introduction','indirect'],[6,'Maximum Product Subarray','dp','Kadane family (track max and min)','indirect'],[7,'Find Minimum in Rotated Sorted Array','bs','Number of Times a Sorted Array is Rotated','direct'],[8,'Search in Rotated Sorted Array','bs','Find an Element in a Rotated Sorted Array','direct'],[9,'3Sum','other','sort + two pointers',''],[10,'Container With Most Water','other','two pointers',''],[11,'Sum of Two Integers','other','bits',''],[12,'Number of 1 Bits','other','bits',''],[13,'Counting Bits','other','bits + DP',''],[14,'Missing Number','other','bits / sum',''],[15,'Reverse Bits','other','bits',''],[16,'Climbing Stairs','dp','Fibonacci family named in the DP introduction','indirect'],[17,'Coin Change','dp','Coin Change — Minimum Number of Coins','direct'],[18,'Longest Increasing Subsequence','dp','LIS family named in the DP introduction','indirect'],[19,'Longest Common Subsequence','dp','Longest Common Subsequence','direct'],[20,'Word Break','dp','Partition DP (MCM family) / recursion with memo','indirect'],[21,'Combination Sum IV','dp','Coin Change — Maximum Number of Ways (ordered variant)','indirect'],[22,'House Robber','dp','0/1 knapsack include/exclude choice','indirect'],[23,'House Robber II','dp','0/1 knapsack include/exclude, run twice','indirect'],[24,'Decode Ways','dp','1-D choice DP (knapsack-style recursion → memo)','indirect'],[25,'Unique Paths','dp','Grid DP family named in the DP introduction','indirect'],[26,'Jump Game','other','greedy',''],[27,'Clone Graph','graph','Depth-First Search','direct'],[28,'Course Schedule','graph','Topological Sort / Cycle Detection','direct'],[29,'Pacific Atlantic Water Flow','graph','DFS from the borders (multi-source)','indirect'],[30,'Number of Islands','graph','Connected Components / Islands','direct'],[31,'Longest Consecutive Sequence','other','hash set',''],[32,'Alien Dictionary (Premium)','graph','Topological Sort','direct'],[33,'Graph Valid Tree (Premium)','graph','Cycle Detection (undirected)','indirect'],[34,'Connected Components (Premium)','graph','Connected Components','direct'],[35,'Insert Interval','other','sweep',''],[36,'Merge Intervals','other','sort + sweep',''],[37,'Non-overlapping Intervals','other','greedy',''],[38,'Meeting Rooms (Premium)','other','sort + sweep',''],[39,'Meeting Rooms II (Premium)','heap','Heap introduction (min-heap of end times)','indirect'],[40,'Reverse Linked List','other','pointers',''],[41,'Linked List Cycle','other','fast/slow',''],[42,'Merge Two Sorted Lists','other','dummy head',''],[43,'Merge K Sorted Lists','heap','Sort a K-Sorted Array (heap of heads)','indirect'],[44,'Remove Nth Node From End','other','two pointers',''],[45,'Reorder List','other','fast/slow + reverse',''],[46,'Set Matrix Zeroes','other','in-place markers',''],[47,'Spiral Matrix','other','bounds',''],[48,'Rotate Image','other','transpose + reverse',''],[49,'Word Search','rec','Backtracking (take / undo on the grid)','indirect'],[50,'Longest Substring Without Repeating','sw','Longest Substring Without Repeating Characters','direct'],[51,'Longest Repeating Character Replacement','sw','Variable window (longest with k unique → window validity)','indirect'],[52,'Minimum Window Substring','sw','Minimum Window Substring','direct'],[53,'Valid Anagram','other','counting',''],[54,'Group Anagrams','other','hash by signature',''],[55,'Valid Parentheses','stack','Stack introduction (matching with a stack)','indirect'],[56,'Valid Palindrome','other','two pointers',''],[57,'Longest Palindromic Substring','dp','Longest Common Substring (palindrome family)','indirect'],[58,'Palindromic Substrings','dp','Palindrome family (LCS playlist) / expand around centre','indirect'],[59,'Encode and Decode Strings (Premium)','other','length prefix',''],[60,'Maximum Depth of Binary Tree','rec','Height of a Binary Tree','direct'],[61,'Same Tree','rec','Recursion on trees (hypothesis on children)','indirect'],[62,'Invert Binary Tree','rec','Recursion on trees','indirect'],[63,'Binary Tree Maximum Path Sum','dp','Maximum Path Sum from Any Node to Any Node','direct'],[64,'Binary Tree Level Order Traversal','graph','Breadth-First Search','indirect'],[65,'Serialize and Deserialize Binary Tree','rec','Recursion on trees','indirect'],[66,'Subtree of Another Tree','rec','Recursion on trees','indirect'],[67,'Construct from Preorder and Inorder','rec','Recursion (induction on subarrays)','indirect'],[68,'Validate Binary Search Tree','rec','Recursion on trees with bounds','indirect'],[69,'Kth Smallest Element in a BST','heap','Kth Smallest Element (heap) / in-order','indirect'],[70,'Lowest Common Ancestor of a BST','rec','Recursion on trees','indirect'],[71,'Implement Trie','other','trie',''],[72,'Design Add and Search Words','other','trie + DFS',''],[73,'Word Search II','rec','Backtracking on the grid (+ trie)','indirect'],[74,'Top K Frequent Elements','heap','Top K Frequent Numbers','direct'],[75,'Find Median from Data Stream','heap','Heap introduction (two heaps)','indirect']];
+
+// [category, name, pattern, video, coverage]
+const NC = [
+['Arrays & Hashing','Contains Duplicate','other','hash set',''],['Arrays & Hashing','Valid Anagram','other','counting',''],['Arrays & Hashing','Two Sum','other','hash map',''],['Arrays & Hashing','Group Anagrams','other','hash by signature',''],['Arrays & Hashing','Top K Frequent Elements','heap','Top K Frequent Numbers','direct'],['Arrays & Hashing','Encode and Decode Strings','other','length prefix',''],['Arrays & Hashing','Product of Array Except Self','other','prefix/suffix',''],['Arrays & Hashing','Valid Sudoku','other','hash sets per row/col/box',''],['Arrays & Hashing','Longest Consecutive Sequence','other','hash set',''],
+['Two Pointers','Valid Palindrome','other','two pointers',''],['Two Pointers','Two Sum II','other','two pointers',''],['Two Pointers','3Sum','other','sort + two pointers',''],['Two Pointers','Container With Most Water','other','two pointers',''],['Two Pointers','Trapping Rain Water','stack','Rain Water Trapping','direct'],
+['Sliding Window','Best Time to Buy and Sell Stock','sw','Variable window / running minimum','indirect'],['Sliding Window','Longest Substring Without Repeating Characters','sw','Longest Substring Without Repeating Characters','direct'],['Sliding Window','Longest Repeating Character Replacement','sw','Variable window','indirect'],['Sliding Window','Permutation in String','sw','Count Occurrences of Anagrams','direct'],['Sliding Window','Minimum Window Substring','sw','Minimum Window Substring','direct'],['Sliding Window','Sliding Window Maximum','sw','Maximum of All Subarrays of Size K','direct'],
+['Stack','Valid Parentheses','stack','Stack introduction','indirect'],['Stack','Min Stack','stack','Implement Min Stack','direct'],['Stack','Evaluate Reverse Polish Notation','stack','Stack introduction','indirect'],['Stack','Generate Parentheses','rec','Generate All Balanced Parentheses','direct'],['Stack','Daily Temperatures','stack','Nearest Greater to Right','direct'],['Stack','Car Fleet','stack','Monotonic stack (NGR on arrival times)','indirect'],['Stack','Largest Rectangle in Histogram','stack','Maximum Area Histogram','direct'],
+['Binary Search','Binary Search','bs','Binary Search Introduction','direct'],['Binary Search','Search a 2D Matrix','bs','Search in Row-wise and Column-wise Sorted Matrix','direct'],['Binary Search','Koko Eating Bananas','bs','Allocate Minimum Number of Pages (binary search on answer)','direct'],['Binary Search','Find Minimum in Rotated Sorted Array','bs','Number of Times a Sorted Array is Rotated','direct'],['Binary Search','Search in Rotated Sorted Array','bs','Find an Element in a Rotated Sorted Array','direct'],['Binary Search','Time Based Key-Value Store','bs','Floor of an Element in a Sorted Array','direct'],['Binary Search','Median of Two Sorted Arrays','bs','Binary search on the partition','indirect'],
+['Linked List','Reverse Linked List','other','pointers',''],['Linked List','Merge Two Sorted Lists','other','dummy head',''],['Linked List','Reorder List','other','fast/slow + reverse',''],['Linked List','Remove Nth Node From End of List','other','two pointers',''],['Linked List','Copy List with Random Pointer','other','hash map',''],['Linked List','Add Two Numbers','other','carry',''],['Linked List','Linked List Cycle','other','fast/slow',''],['Linked List','Find the Duplicate Number','other','Floyd cycle',''],['Linked List','LRU Cache','other','hash map + doubly linked list',''],['Linked List','Merge K Sorted Lists','heap','Sort a K-Sorted Array (heap of heads)','indirect'],['Linked List','Reverse Nodes in K-Group','other','pointers',''],
+['Trees','Invert Binary Tree','rec','Recursion on trees','indirect'],['Trees','Maximum Depth of Binary Tree','rec','Height of a Binary Tree','direct'],['Trees','Diameter of Binary Tree','dp','Diameter of a Binary Tree (DP on trees)','direct'],['Trees','Balanced Binary Tree','rec','Height of a Binary Tree (with a flag)','direct'],['Trees','Same Tree','rec','Recursion on trees','indirect'],['Trees','Subtree of Another Tree','rec','Recursion on trees','indirect'],['Trees','Lowest Common Ancestor of a BST','rec','Recursion on trees','indirect'],['Trees','Binary Tree Level Order Traversal','graph','Breadth-First Search','indirect'],['Trees','Binary Tree Right Side View','graph','Breadth-First Search (last per level)','indirect'],['Trees','Count Good Nodes in Binary Tree','rec','Recursion on trees (carry the max)','indirect'],['Trees','Validate Binary Search Tree','rec','Recursion with bounds','indirect'],['Trees','Kth Smallest Element in a BST','heap','Kth Smallest Element / in-order','indirect'],['Trees','Construct Binary Tree from Preorder and Inorder','rec','Recursion on subarrays','indirect'],['Trees','Binary Tree Maximum Path Sum','dp','Maximum Path Sum from Any Node to Any Node','direct'],['Trees','Serialize and Deserialize Binary Tree','rec','Recursion on trees','indirect'],
+['Tries','Implement Trie','other','trie',''],['Tries','Design Add and Search Words','other','trie + DFS',''],['Tries','Word Search II','rec','Backtracking on the grid (+ trie)','indirect'],
+['Heap / Priority Queue','Kth Largest Element in a Stream','heap','Kth Largest Element','direct'],['Heap / Priority Queue','Last Stone Weight','heap','Heap introduction (max-heap)','indirect'],['Heap / Priority Queue','K Closest Points to Origin','heap','K Closest Points to Origin','direct'],['Heap / Priority Queue','Kth Largest Element in an Array','heap','Kth Largest Element','direct'],['Heap / Priority Queue','Task Scheduler','heap','Frequency Sort (max-heap of counts)','indirect'],['Heap / Priority Queue','Design Twitter','heap','Heap of heads (merge k)','indirect'],['Heap / Priority Queue','Find Median from Data Stream','heap','Heap introduction (two heaps)','indirect'],
+['Backtracking','Subsets','rec','Print Subsets / Power Set','direct'],['Backtracking','Combination Sum','rec','Recursion with reuse (unbounded choice)','indirect'],['Backtracking','Permutations','rec','Permutation with Spaces / Case Change','indirect'],['Backtracking','Subsets II','rec','Print Unique Subsets','direct'],['Backtracking','Combination Sum II','rec','Unique subsets with a sum (sort + skip duplicates)','indirect'],['Backtracking','Word Search','rec','Backtracking on the grid','indirect'],['Backtracking','Palindrome Partitioning','dp','Palindrome Partitioning (MCM family)','direct'],['Backtracking','Letter Combinations of a Phone Number','rec','Permutation with Case Change (choice per position)','indirect'],['Backtracking','N-Queens','rec','Backtracking (place / undo)','indirect'],
+['Graphs','Number of Islands','graph','Connected Components / Islands','direct'],['Graphs','Clone Graph','graph','Depth-First Search','direct'],['Graphs','Max Area of Island','graph','Connected Components / Islands','direct'],['Graphs','Pacific Atlantic Water Flow','graph','DFS from the borders','indirect'],['Graphs','Surrounded Regions','graph','DFS from the borders','indirect'],['Graphs','Rotting Oranges','graph','Breadth-First Search (multi-source)','indirect'],['Graphs','Walls and Gates','graph','Breadth-First Search (multi-source)','indirect'],['Graphs','Course Schedule','graph','Topological Sort / Cycle Detection','direct'],['Graphs','Course Schedule II','graph','Topological Sort','direct'],['Graphs','Redundant Connection','graph','Cycle Detection (undirected) / union-find','indirect'],['Graphs','Number of Connected Components','graph','Connected Components','direct'],['Graphs','Graph Valid Tree','graph','Cycle Detection (undirected)','indirect'],['Graphs','Word Ladder','graph','Breadth-First Search (shortest path, unweighted)','indirect'],
+['Advanced Graphs','Reconstruct Itinerary','graph','DFS (Eulerian path)','indirect'],['Advanced Graphs','Min Cost to Connect All Points','graph','Shortest path family (Prim/Kruskal)','indirect'],['Advanced Graphs','Network Delay Time','graph','Shortest Path (Dijkstra)','direct'],['Advanced Graphs','Swim in Rising Water','bs','Binary search on answer + BFS','indirect'],['Advanced Graphs','Alien Dictionary','graph','Topological Sort','direct'],['Advanced Graphs','Cheapest Flights Within K Stops','graph','Shortest path family (Bellman-Ford / BFS with k)','indirect'],
+['1-D DP','Climbing Stairs','dp','Fibonacci family (DP introduction)','indirect'],['1-D DP','Min Cost Climbing Stairs','dp','Fibonacci family','indirect'],['1-D DP','House Robber','dp','0/1 knapsack include/exclude','indirect'],['1-D DP','House Robber II','dp','0/1 knapsack include/exclude, twice','indirect'],['1-D DP','Longest Palindromic Substring','dp','Longest Common Substring (palindrome family)','indirect'],['1-D DP','Palindromic Substrings','dp','Palindrome family','indirect'],['1-D DP','Decode Ways','dp','1-D choice DP','indirect'],['1-D DP','Coin Change','dp','Coin Change — Minimum Number of Coins','direct'],['1-D DP','Maximum Product Subarray','dp','Kadane family','indirect'],['1-D DP','Word Break','dp','Partition DP (MCM family)','indirect'],['1-D DP','Longest Increasing Subsequence','dp','LIS family (DP introduction)','indirect'],['1-D DP','Partition Equal Subset Sum','dp','Equal Sum Partition','direct'],
+['2-D DP','Unique Paths','dp','Grid DP family','indirect'],['2-D DP','Longest Common Subsequence','dp','Longest Common Subsequence','direct'],['2-D DP','Best Time to Buy and Sell Stock with Cooldown','dp','State-machine DP (choice per day)','indirect'],['2-D DP','Coin Change II','dp','Coin Change — Maximum Number of Ways','direct'],['2-D DP','Target Sum','dp','Target Sum','direct'],['2-D DP','Interleaving String','dp','LCS-style two-pointer table','indirect'],['2-D DP','Longest Increasing Path in a Matrix','dp','Grid DP with memoized DFS','indirect'],['2-D DP','Distinct Subsequences','dp','Sequence Pattern Matching (LCS family, counting)','direct'],['2-D DP','Edit Distance','dp','Minimum Insertions and Deletions (LCS family)','indirect'],['2-D DP','Burst Balloons','dp','Matrix Chain Multiplication (partition DP)','direct'],['2-D DP','Regular Expression Matching','dp','LCS-style table with wildcard cases','indirect'],
+['Greedy','Maximum Subarray','dp','Kadane family','indirect'],['Greedy','Jump Game','other','greedy',''],['Greedy','Jump Game II','other','greedy',''],['Greedy','Gas Station','other','greedy',''],['Greedy','Hand of Straights','heap','Min-heap of counts (greedy)','indirect'],['Greedy','Merge Triplets to Form Target Triplet','other','greedy',''],['Greedy','Partition Labels','other','greedy',''],['Greedy','Valid Parenthesis String','stack','Stack / counts of open brackets','indirect'],
+['Intervals','Insert Interval','other','sweep',''],['Intervals','Merge Intervals','other','sort + sweep',''],['Intervals','Non-overlapping Intervals','other','greedy',''],['Intervals','Meeting Rooms','other','sort + sweep',''],['Intervals','Meeting Rooms II','heap','Min-heap of end times','indirect'],['Intervals','Minimum Interval to Include Each Query','heap','Heap over sorted intervals','indirect'],
+['Math & Geometry','Rotate Image','other','transpose + reverse',''],['Math & Geometry','Spiral Matrix','other','bounds',''],['Math & Geometry','Set Matrix Zeroes','other','in-place markers',''],['Math & Geometry','Happy Number','other','cycle detection on digits',''],['Math & Geometry','Plus One','other','carry',''],['Math & Geometry','Pow(x, n)','rec','Recursion (halving)','indirect'],['Math & Geometry','Multiply Strings','other','digit arithmetic',''],['Math & Geometry','Detect Squares','other','hash counts',''],
+['Bit Manipulation','Single Number','other','xor',''],['Bit Manipulation','Number of 1 Bits','other','bits',''],['Bit Manipulation','Counting Bits','other','bits + DP',''],['Bit Manipulation','Reverse Bits','other','bits',''],['Bit Manipulation','Missing Number','other','xor / sum',''],['Bit Manipulation','Sum of Two Integers','other','bits',''],['Bit Manipulation','Reverse Integer','other','digit arithmetic','']];
+
+// ---------------- rendering ----------------
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function tag(p){const P=PATTERNS[p];return '<span class="tag" style="background:'+P.color+'">'+esc(P.name)+'</span>';}
+function cov(c){return c==='direct'?'<span class="pill g">direct</span>':c==='indirect'?'<span class="pill a">indirect</span>':'<span class="pill w">other</span>';}
+let TX = {}; // video-id or normalized-title -> text
+const norm=s=>s.toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+function renderPlaylists(){
+  const host=document.getElementById('playlists');let n=2,html='';
+  for(const [key,P] of Object.entries(PATTERNS)){
+    if(key==='other')continue;
+    const probs=[...BLIND.filter(r=>r[2]===key).map(r=>['#'+r[0]+' '+r[1],r[3],r[4]]),...NC.filter(r=>r[2]===key).map(r=>[r[0]+' · '+r[1],r[3],r[4]])];
+    html+=`<h2 id="${key}">${n}. ${esc(P.name)} playlist ${tag(key)}</h2>
+<div class="card"><h3>How he identifies it</h3><p>${P.cue}</p>
+<h3>Template (his approach, in Python)</h3><pre class="formula">${esc(P.template)}</pre></div>
+<div class="card"><h3>Videos in playlist order</h3><p class="small">Titles reconstructed from the playlist; each slot shows the transcript when <code>learn/transcripts/</code> has it.</p>
+${P.videos.map((v,i)=>`<details class="vid" data-title="${esc(v)}"><summary>${i+1}. ${esc(v)} <span class="small txstate">— transcript not fetched yet</span></summary><div class="tx">Run <code>python3 scripts/fetch_transcripts.py</code> on your machine, then serve the repo over HTTP to see this video's captions here.</div></details>`).join('')}
+</div>
+<div class="card"><h3>Blind 75 and NeetCode 150 problems that use this pattern (${probs.length})</h3>
+<table class="cmp"><tr><th>Problem</th><th>Video that teaches the move</th><th>Coverage</th></tr>${probs.map(p=>`<tr class="${p[2]==='direct'?'hl':''}"><td>${esc(p[0])}</td><td>${esc(p[1])}</td><td>${cov(p[2])}</td></tr>`).join('')}</table></div>`;
+    n++;
+  }
+  host.innerHTML=html;
+}
+let activePat=null;
+function renderIndex(){
+  const q=norm(document.getElementById('filterBox').value),onlyD=document.getElementById('onlyDirect').checked;
+  const keep=(pat,c,text)=>(!activePat||pat===activePat)&&(!onlyD||c==='direct')&&(!q||norm(text).includes(q));
+  document.getElementById('blindBody').innerHTML=BLIND.filter(r=>keep(r[2],r[4],r.join(' ')+' '+PATTERNS[r[2]].name)).map(r=>`<tr class="${r[4]==='direct'?'hl':''}"><td>#${r[0]}</td><td>${esc(r[1])}</td><td>${tag(r[2])}</td><td>${esc(r[3])}</td><td>${cov(r[4])}</td></tr>`).join('')||'<tr><td colspan="5" class="small">no match</td></tr>';
+  document.getElementById('ncBody').innerHTML=NC.filter(r=>keep(r[2],r[4],r.join(' ')+' '+PATTERNS[r[2]].name)).map(r=>`<tr class="${r[4]==='direct'?'hl':''}"><td class="small">${esc(r[0])}</td><td>${esc(r[1])}</td><td>${tag(r[2])}</td><td>${esc(r[3])}</td><td>${cov(r[4])}</td></tr>`).join('')||'<tr><td colspan="5" class="small">no match</td></tr>';
+}
+function renderButtons(){
+  const host=document.getElementById('patBtns');
+  host.innerHTML='<button class="on" data-p="">all patterns</button>'+Object.entries(PATTERNS).map(([k,P])=>`<button data-p="${k}" style="border-color:${P.color}">${esc(P.name)}</button>`).join('');
+  host.querySelectorAll('button').forEach(b=>b.onclick=()=>{activePat=b.dataset.p||null;host.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));renderIndex();});
+}
+function kpis(){
+  const d=BLIND.filter(r=>r[4]==='direct').length,i=BLIND.filter(r=>r[4]==='indirect').length;
+  const d2=NC.filter(r=>r[4]==='direct').length,i2=NC.filter(r=>r[4]==='indirect').length;
+  document.getElementById('kB').textContent=d+' / '+i+' of 75';document.getElementById('kN').textContent=d2+' / '+i2+' of 150';
+}
+async function loadTranscripts(){
+  const slots=[...document.querySelectorAll('details.vid')];
+  if(location.protocol==='file:'){document.getElementById('kTx').textContent='0 (open over HTTP)';return;}
+  let index=[];try{const r=await fetch('transcripts/index.json');if(r.ok)index=await r.json();}catch(e){}
+  let attached=0;
+  for(const s of slots){
+    const t=norm(s.dataset.title);
+    const hit=index.find(e=>e.id&&s.dataset.id===e.id)||index.find(e=>norm(e.title)===t)||index.find(e=>{const a=norm(e.title);return a.includes(t)||t.includes(a)||overlap(a,t)>=0.6;});
+    if(!hit)continue;
+    try{const r=await fetch('transcripts/'+hit.id+'.txt');if(!r.ok)continue;const txt=await r.text();
+      s.querySelector('.tx').textContent=txt;s.querySelector('.txstate').textContent='— transcript ('+(hit.lang||'auto')+'): '+esc(hit.title);attached++;}catch(e){}
+  }
+  document.getElementById('kTx').textContent=attached+' / '+slots.length;
+}
+function overlap(a,b){const A=new Set(a.split(' ').filter(w=>w.length>2)),B=new Set(b.split(' ').filter(w=>w.length>2));let c=0;for(const w of A)if(B.has(w))c++;return c/Math.max(1,Math.min(A.size,B.size));}
+renderPlaylists();renderButtons();renderIndex();kpis();loadTranscripts();
+document.getElementById('filterBox').oninput=renderIndex;document.getElementById('onlyDirect').onchange=renderIndex;
+</script>
+</body>
+</html>

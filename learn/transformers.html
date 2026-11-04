@@ -10,7 +10,7 @@
 <nav class="topnav">
   <a class="home" href="index.html">Learn</a>
   <div class="links">
-    <a href="math.html">Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html" class="here">Transformers</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html" class="here">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
   </div>
   <div class="spacer"></div>
   <button class="theme-btn" id="themeBtn">◐ theme</button>
@@ -19,7 +19,7 @@
 <h1>Transformers &amp; LLMs</h1>
 <p class="dim">From raw text to next-token prediction: tokenization, embeddings, the transformer block stage by stage, why deep stacks train at all, the objective, sampling, and how architectures evolved from GPT-2 to DeepSeek-V3. This is the model-side companion to the <a href="attention.html">Attention</a> and <a href="inference.html">Inference</a> chapters.</p>
 
-<div class="card audio-card"><h3>🎧 Listen to this chapter (13:00)</h3><audio controls preload="none" src="audio/transformers.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/transformers.txt">Read the transcript</a>.</p></div>
+<div class="card audio-card"><h3>🎧 Listen to this chapter (17:00)</h3><audio controls preload="none" src="audio/transformers.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/transformers.txt">Read the transcript</a>.</p></div>
 <h2 id="tokenization">1. Tokenization: text becomes integers</h2>
 <p>A language model never sees letters. It sees a sequence of integers, each naming an entry in a fixed <em>vocabulary</em> of strings called tokens. The dominant algorithm, <strong>byte-pair encoding (BPE)</strong>, builds that vocabulary by brute statistics: start with single bytes, find the most frequent adjacent pair in a training corpus, merge it into a new token, repeat tens of thousands of times. Frequent words ("the", "ing", " and") end up as single tokens; rare words split into familiar pieces. The learned <em>merge list</em> is the tokenizer: to encode new text, apply the merges greedily in the order they were learned.</p>
 <p>The design trade-off is vocabulary size. A bigger vocabulary (Llama-3 uses 128K tokens, GPT-2 used 50K) means fewer tokens per sentence — which means less compute and less KV cache per request, since every cost in the <a href="inference.html">inference chapter</a> scales with token count — but a bigger embedding table and a bigger final projection. English averages roughly 3.5–4.5 characters per token with modern tokenizers.</p>
@@ -59,6 +59,32 @@
   <button class="btn secondary" id="blockReset">Reset</button>
 </div>
 <p class="caption">Five tokens flow through one block. Watch the attention stage build the 5×5 score matrix — the greyed upper triangle is the <strong>causal mask</strong>: position i may only attend to positions ≤ i, which is what makes the model autoregressive (and what makes the KV cache possible). Softmax turns each surviving row into weights; the weighted sum of value vectors is what each token "learns" from its past.</p>
+</div>
+
+<div class="card">
+<h3>Interactive: the block as a shape-annotated dataflow (with GQA)</h3>
+<p class="dim">Every tensor in one pre-norm decoder block, written the way engineers actually reason about it: by its index letters. <span class="pill a">blue</span> letters are batch-like dims that ride along (B, T, S); <span class="pill w">red</span> letters are the dims a contraction sums away (the einsum "shared" index). G = N / K is how many query heads share one KV head — K = N is MHA, K = 1 is MQA, anything between is GQA. <em>After figure 4 in Alisa Liu's Book of LLMs (the einsum dataflow of a decoder block).</em></p>
+<div class="controls">
+  <button class="btn secondary" id="dfGpt2">GPT-2 small</button>
+  <button class="btn secondary" id="dfLlama">Llama-3-8B</button>
+  <label class="ctl">B <input type="number" id="dfB" value="1" min="1" style="width:60px"></label>
+  <label class="ctl">T <input type="number" id="dfT" value="4096" min="1" style="width:76px"></label>
+  <label class="ctl">S <input type="number" id="dfS" value="4096" min="1" style="width:76px"></label>
+  <label class="ctl">D <input type="number" id="dfD" value="4096" min="1" style="width:76px"></label>
+  <label class="ctl">N <input type="number" id="dfN" value="32" min="1" style="width:60px"></label>
+  <label class="ctl">K <input type="number" id="dfK" value="8" min="1" style="width:60px"></label>
+  <label class="ctl">H <input type="number" id="dfH" value="128" min="1" style="width:60px"></label>
+  <label class="ctl">F <input type="number" id="dfF" value="14336" min="1" style="width:80px"></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="dfG">4</div><div class="l">G = N / K (queries per KV head)</div></div>
+  <div class="box"><div class="v" id="dfAttn">–</div><div class="l">attention FLOPs / block</div></div>
+  <div class="box"><div class="v" id="dfMlp">–</div><div class="l">MLP FLOPs / block</div></div>
+  <div class="box"><div class="v" id="dfKV">–</div><div class="l">KV cache / token / layer (BF16)</div></div>
+</div>
+<canvas id="dfViz" class="viz" width="900" height="980"></canvas>
+<p class="caption" id="dfInfo">Hover or click any box to see its einsum, element count and BF16 bytes.</p>
+<p class="caption">Reading it top to bottom: X is projected three times; Q gets N heads but K and V get only K heads, and the reshape that splits Q's N into K×G is the entire GQA trick — the score contraction then runs per KV head over its G queries. The mask is added to the raw scores before softmax over S. Both residual adds happen <em>after</em> each sublayer; both norms sit <em>before</em> the next one (pre-norm). The two MLP input projections produce the gate and the value of a gated MLP; the gelu'd gate multiplies the value elementwise, then W<sub>out</sub> contracts F away. Attention FLOPs scale with T·S (the score and value contractions); MLP FLOPs scale with T·D·F — set T = 128K and watch which one wins. The KV cache per token is 2·K·H values per layer, which is why K matters for serving (<a href="inference.html#kv-cache">Inference</a>) and why the <a href="#accounting">accounting section</a> counts K separately.</p>
 </div>
 
 <p>Reading the stages precisely, with x ∈ ℝ<sup>n×d</sup> the block input:</p>
@@ -111,7 +137,83 @@
 <h2 id="context">8. What a context window costs</h2>
 <p>"128K context" is a systems claim, not just a model claim. Attention FLOPs grow quadratically with context during prefill; the KV cache grows linearly and must survive for the whole generation — at 128K tokens, a Llama-3-70B conversation holds <em>gigabytes</em> of cache per user (compute it with the <a href="inference.html#kv-cache">KV calculator</a>). Everything in the serving stack — GQA/MLA above, paged allocation, cache quantization, prefix sharing — exists to pay this bill. When you read a model card, translate the context window into bytes-per-user before believing the concurrency numbers.</p>
 
-<h2 id="reading">9. Where to go deeper</h2>
+
+<h2 id="accounting">9. LLM accounting: parameters, activations, FLOPs and memory</h2>
+<p>Rapid-fire interviews love this material because it has exact answers. Alisa Liu's <a href="https://alisawuffles.notion.site/alisa-s-book-of-llms">Book of LLMs</a> keeps a running "accounting" page for it; this section is that page made interactive. Notation: <code>V</code> vocabulary, <code>D</code> model width, <code>L</code> layers, <code>N</code> query heads, <code>K</code> KV heads, <code>H</code> head dimension (<code>D = N·H</code>), <code>F</code> FFN width, <code>B</code> batch, <code>S</code> sequence length.</p>
+
+<h3>Parameters</h3>
+<p>Per decoder block: attention is <code>Q: D×D</code>, <code>K: D×KH</code>, <code>V: D×KH</code>, <code>O: D×D</code>, i.e. <code>2D² + 2·D·K·H</code>, which is <code>4D²</code> for full MHA (<code>K = N</code>) and noticeably less under GQA. A SwiGLU FFN has three matrices (gate, up, down) of <code>D×F</code>, so <code>3DF</code>; with the Llama convention <code>F ≈ 8D/3</code> that is <code>8D²</code>. Two RMSNorms contribute <code>2D</code>. Embeddings are <code>V×D</code>, and so is the unembedding unless the two are <strong>tied</strong> (GPT-2 ties them; Llama does not). Total:</p>
+<div class="formula">params ≈ 2·V·D (untied; V·D if tied) + L·(4D² + 3DF + 2D) + D (final norm)  ≈ 2VD + 12·L·D²   for F = 8D/3, K = N</div>
+<p>Worked check — Llama-3-8B (V=128,256, D=4,096, L=32, N=32, K=8, H=128, F=14,336): attention 16.78M·2 + 4.19M·2 = 41.9M; FFN 3·4096·14336 = 176.2M; norms 8K → 218.1M per block; ×32 = 6.98B; plus 2·128256·4096 = 1.05B of embeddings and the final norm gives <strong>8.03B</strong>, matching the published count. Notice embeddings are 13% of the model and the FFN is 80% of each block — the first thing to know when someone asks "where are the parameters?"</p>
+
+<h3>Activations (what training has to remember for backward)</h3>
+<p>Per layer, in tokens: the attention path stores the norm input and output (2BSD), Q, K, V (3BSD with MHA), the score matrix (<code>B·N·S²</code> — unless FlashAttention recomputes it), and the output (BSD); the FFN path stores its norm input (BSD), the gate and up outputs (2BSF ≈ 5.3BSD) and the down output (BSD). The Book's total is</p>
+<div class="formula">activations per layer ≈ 14·B·S·D + B·N·S²   (without FlashAttention; the S² term becomes B·N·S with it)</div>
+<p>This is usually the dominant training-memory term, it scales with total tokens <code>B·S</code>, and <strong>gradient checkpointing</strong> trades it for recompute: keep only each layer's input and rebuild the rest during backward, roughly <code>L·B·S·D</code> instead of <code>14·L·B·S·D</code> at ~33% extra compute (see <a href="training.html#memory">the training-memory calculator</a>).</p>
+
+<h3>FLOPs</h3>
+<p>Each matmul of an <code>(m×k)</code> by <code>(k×n)</code> costs <code>2mnk</code>. Per layer in prefill: the four projections cost <code>8BSD²</code> (MHA), <code>QKᵀ</code> and <code>AV</code> cost <code>2BS²D</code> each, and the FFN <code>6BSDF ≈ 16BSD²</code>; the unembedding adds <code>2BSDV</code> once.</p>
+<div class="formula">forward ≈ 2·B·S·D·(12·L·D + 2·L·S + V)  → per token ≈ 2·(non-embedding params) + 2·D·V + 4·L·S·D (attention over S context)<br>backward ≈ 2 × forward (gradient w.r.t. inputs and w.r.t. weights, one matmul each)  → training ≈ 6·N·D_tokens, the "6ND rule"</div>
+<p>The attention term <code>4LSD</code> per token is why long contexts become compute-bound in prefill even though the weight term dominates at short S; decode, by contrast, is bandwidth-bound (<a href="inference.html#two-phases">Ch. 11</a>).</p>
+
+<h3>Memory</h3>
+<p><strong>Inference</strong> = weights + KV cache + peak activations of one layer. Weights are <code>params × bytes</code>; the KV cache is <code>2·L·K·H·S·B·bytes</code> (<a href="inference.html#kv-cache">the calculator</a>); peak activations are <code>O(B·N·S² + B·S·F)</code> in prefill without FlashAttention and <code>O(B·N·S + B·F)</code> in decode. <strong>Training</strong> in mixed precision, per parameter: 4 bytes FP32 master weights + 2 bytes BF16 working copy + 8 bytes Adam moments + 4 bytes FP32 gradient accumulation = <strong>18 bytes/param</strong> (16 if you drop the transient BF16 copy, the figure most people quote), plus activations. A 7B model is therefore ~126 GB before a single activation — the arithmetic behind LoRA and ZeRO (<a href="training.html#memory">Ch. 13</a>).</p>
+
+<div class="card">
+<h3>Interactive: the accounting calculator</h3>
+<div class="controls">
+  <label class="ctl">D <input type="number" id="acD" value="4096" step="128" style="width:90px"></label>
+  <label class="ctl">L <input type="number" id="acL" value="32" style="width:70px"></label>
+  <label class="ctl">heads N <input type="number" id="acN" value="32" style="width:70px"></label>
+  <label class="ctl">KV heads K <input type="number" id="acK" value="8" style="width:70px"></label>
+  <label class="ctl">F <input type="number" id="acF" value="14336" step="256" style="width:90px"></label>
+  <label class="ctl">V <input type="number" id="acV" value="128256" step="1024" style="width:100px"></label>
+  <label class="ctl">FFN <select id="acFFN"><option value="3" selected>SwiGLU (3 matrices)</option><option value="2">GeLU (2 matrices)</option></select></label>
+</div>
+<div class="controls">
+  <label class="ctl">S <input type="number" id="acS" value="8192" step="1024" style="width:90px"></label>
+  <label class="ctl">B <input type="number" id="acB" value="8" style="width:70px"></label>
+  <label class="ctl"><input type="checkbox" id="acTied"> tied embeddings</label>
+  <label class="ctl"><input type="checkbox" id="acFlash" checked> FlashAttention</label>
+  <label class="ctl"><input type="checkbox" id="acCkpt"> gradient checkpointing</label>
+  <button class="btn secondary" id="acLlama">Llama-3-8B</button>
+  <button class="btn secondary" id="acGpt2">GPT-2 small</button>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="acParams">–</div><div class="l">parameters</div></div>
+  <div class="box"><div class="v" id="acNonEmb">–</div><div class="l">non-embedding</div></div>
+  <div class="box"><div class="v" id="acFwd">–</div><div class="l">forward FLOPs / token</div></div>
+  <div class="box"><div class="v" id="acTrain">–</div><div class="l">train FLOPs / token (≈6N)</div></div>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="acKV">–</div><div class="l">KV cache / token (BF16)</div></div>
+  <div class="box"><div class="v" id="acInf">–</div><div class="l">inference memory (weights + KV, B×S)</div></div>
+  <div class="box"><div class="v" id="acAct">–</div><div class="l">activations, all layers (B×S)</div></div>
+  <div class="box"><div class="v" id="acTrainMem">–</div><div class="l">training memory (18 B/param + activations)</div></div>
+</div>
+<p class="caption">Defaults are Llama-3-8B; the parameter box should read 8.03B. Try GPT-2 small (D=768, L=12, N=K=12, F=3072, V=50257, tied, two-matrix GeLU FFN → 124M) to see tied embeddings and the FFN convention at work, untick FlashAttention at S=8192 to watch the <code>B·N·S²</code> term explode, and toggle checkpointing to see activations drop toward <code>L·B·S·D</code>.</p>
+</div>
+
+<h3 id="impl">Implementation notes (the muscle-memory details)</h3>
+<p>Alisa's notes are explicit that interviews ask you to <em>write</em> this, often with AI assistance off. The parts people fumble:</p>
+<ul>
+<li><strong>Causal masking</strong>: <code>scores.masked_fill(~mask, -inf)</code> before the softmax, with the convention that <code>mask</code> is <code>True</code> where attention is allowed (<code>torch.tril</code>). <code>-inf</code> rather than a large negative keeps the softmax exact.</li>
+<li><strong>RoPE</strong>: precompute <code>cos(m·θᵢ)</code> and <code>sin(m·θᵢ)</code> for every (position, pair) at init (<code>θᵢ = base^(−2i/d)</code>); apply by reshaping the head dimension into <code>(H/2, 2)</code> pairs and rotating <code>(even, odd)</code> with two multiplies each, then interleaving back with <code>stack(...).flatten(-2)</code>. Rotate Q and K only, never V — position should affect <em>who</em> attends to whom, not <em>what</em> is passed.</li>
+<li><strong>The shape dance</strong>: project to <code>(B, S, 3D)</code>, reshape to <code>(B, S, 3, N, H)</code>, <code>unbind</code> Q/K/V, <code>transpose(1,2)</code> to <code>(B, N, S, H)</code>, attend, transpose back, reshape to <code>(B, S, D)</code>, output-project, add the residual.</li>
+<li><strong>Weight tying</strong> saves <code>V·D</code> parameters and acts as a regularizer at small scale; large models leave them untied because the input and output embeddings want different geometry.</li>
+<li><strong>Initialization</strong>: truncated normal with variance ~<code>2/(d_in + d_out)</code> for linear layers, and scaled-down (by depth) output projections so the residual stream's variance does not grow with layers; RMSNorm γ starts at 1.</li>
+<li><strong>Where FP32 lives</strong>: master weights, optimizer states, gradient accumulation, the softmax and cross-entropy (compute the log-sum-exp in FP32), and norm statistics. Everything matmul-shaped runs in BF16 (<a href="quantization.html#formats">Ch. 10</a>).</li>
+</ul>
+<div class="formula">def scaled_dot_product_attention(q, k, v, mask):          # q,k: (B, ..., S, d_k)  v: (B, ..., S, d_v)
+    d_k = q.shape[-1]
+    scores = (q @ k.transpose(-2, -1)) / math.sqrt(d_k)   # (B, ..., S, S)
+    scores = scores.masked_fill(~mask, -torch.inf)        # mask True = may attend
+    return softmax(scores, dim=-1) @ v                    # softmax subtracts the row max internally</div>
+
+<h3 id="gradflow">Gradient flow through sampling</h3>
+<p>Sampling a token is a discrete, non-differentiable step, so nothing downstream of a sample can send gradients back through it — which is exactly why RL post-training and RLHF need the <strong>score-function (REINFORCE) estimator</strong>: differentiate <code>log π(a|s)</code> weighted by a reward instead of differentiating through the sample (<a href="robot-learning.html#ladder">Ch. 17</a>). Two other escape hatches show up in interviews. The <strong>Gumbel-max trick</strong> samples a categorical by adding Gumbel(0,1) noise to each logit and taking the argmax; <strong>Gumbel-softmax</strong> replaces that argmax with a temperature-τ softmax, giving a stochastic, approximately discrete, fully differentiable relaxation — low τ means near one-hot samples, high τ means smooth gradients. The <strong>straight-through estimator</strong> applies the non-differentiable function in the forward pass and pretends it was the identity in the backward pass; the gradient's magnitude is wrong but its direction is right for monotone functions like rounding, which is why quantization-aware training uses it (<a href="quantization.html#qat">Ch. 10</a>).</p>
+
+<h2 id="reading">10. Where to go deeper</h2>
 <ul>
 <li><a href="https://arxiv.org/abs/1706.03762">Attention Is All You Need</a> — the original; read it after this page and it will feel short.</li>
 <li><a href="https://jax-ml.github.io/scaling-book/inference/">How to Scale Your Model</a> — the arithmetic of transformers at scale (Step 6 of the plan).</li>
@@ -120,7 +222,7 @@
 <li>Next: <a href="attention.html">Attention</a> for the mechanism in full depth, then the <a href="flashcards.html">Transformers deck</a>.</li>
 </ul>
 
-<div class="footer-nav"><a href="deep-learning.html">← Deep Learning</a><a href="attention.html">Attention →</a></div>
+<div class="footer-nav"><a href="deep-learning.html">← Deep Learning</a><a href="ml-coding.html">ML Coding →</a></div>
 </main>
 <script>
 // ---------- theme ----------
@@ -283,6 +385,105 @@ $('sampDraw').onclick=()=>{
 };
 $('sampClear').onclick=()=>{outText=[];document.getElementById('sampOut').textContent='';};
 ['sampT','sampK','sampP'].forEach(id=>$(id).oninput=draw);
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+
+// ---------- 9. accounting calculator ----------
+(function(){
+const $=id=>document.getElementById(id);if(!$('acD'))return;
+const fmtN=n=>n>=1e12?(n/1e12).toFixed(2)+'T':n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(1)+'M':Math.round(n).toLocaleString();
+const fmtB=b=>{const u=['B','KB','MB','GB','TB','PB'];let i=0;while(b>=1024&&i<5){b/=1024;i++;}return b.toFixed(b>=100?0:b>=10?1:2)+' '+u[i];};
+const fmtF=f=>f>=1e12?(f/1e12).toFixed(2)+' TFLOP':f>=1e9?(f/1e9).toFixed(2)+' GFLOP':(f/1e6).toFixed(1)+' MFLOP';
+function upd(){
+  const D=+$('acD').value,L=+$('acL').value,N=+$('acN').value,K=+$('acK').value,F=+$('acF').value,V=+$('acV').value,S=+$('acS').value,B=+$('acB').value;
+  const H=D/N,tied=$('acTied').checked,flash=$('acFlash').checked,ckpt=$('acCkpt').checked;
+  const nF=+$('acFFN').value;const attn=2*D*D+2*D*K*H,ffn=nF*D*F,norms=2*D;const perLayer=attn+ffn+norms;
+  const emb=(tied?1:2)*V*D;const params=L*perLayer+emb+D;const nonEmb=L*perLayer+D;
+  const fwd=2*nonEmb+2*D*V+4*L*S*D;const train=6*params;
+  const kvTok=2*L*K*H*2;
+  const actLayer=ckpt?(B*S*D):((nF===3?14:12)*B*S*D+(flash?B*N*S:B*N*S*S));const act=actLayer*L*2;
+  const inf=params*2+kvTok*S*B;const trainMem=params*18+act;
+  $('acParams').textContent=fmtN(params);$('acNonEmb').textContent=fmtN(nonEmb);
+  $('acFwd').textContent=fmtF(fwd);$('acTrain').textContent=fmtF(train);
+  $('acKV').textContent=fmtB(kvTok);$('acInf').textContent=fmtB(inf);$('acAct').textContent=fmtB(act);$('acTrainMem').textContent=fmtB(trainMem);
+}
+['acD','acL','acN','acK','acF','acV','acFFN','acS','acB','acTied','acFlash','acCkpt'].forEach(id=>$(id).oninput=upd);
+$('acLlama').onclick=()=>{[['acD',4096],['acL',32],['acN',32],['acK',8],['acF',14336],['acV',128256]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=false;$('acFFN').value='3';upd();};
+$('acGpt2').onclick=()=>{[['acD',768],['acL',12],['acN',12],['acK',12],['acF',3072],['acV',50257]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=true;$('acFFN').value='2';upd();};
+upd();
+})();
+// ---------- shape-annotated block dataflow (after Book of LLMs fig. 4) ----------
+(function(){
+const $=id=>document.getElementById(id);const cv=$('dfViz');if(!cv)return;const ctx=cv.getContext('2d');
+const ids=['B','T','S','D','N','K','H','F'];let boxes=[],hover=-1;
+function P(){const o={};ids.forEach(k=>o[k]=Math.max(1,parseInt($('df'+k).value)||1));o.G=Math.max(1,Math.round(o.N/o.K));return o;}
+function fmt(n){if(n>=1e12)return (n/1e12).toFixed(2)+'T';if(n>=1e9)return (n/1e9).toFixed(2)+'G';if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e3)return (n/1e3).toFixed(1)+'K';return String(n);}
+function bytes(n){const b=n*2;return b>=1<<30?(b/(1<<30)).toFixed(2)+' GiB':b>=1<<20?(b/(1<<20)).toFixed(2)+' MiB':b>=1024?(b/1024).toFixed(1)+' KiB':b+' B';}
+const BATCH=new Set(['B','T','S']);
+function layout(p){
+  // each node: {kind:'t'|'w'|'op', label, dims:[letters], contracted:Set, ein, x,y}
+  const G=p.G;const col=[150,430,700];
+  const nodes=[
+    {kind:'t',label:'X',dims:['B','T','D'],ein:'block input',c:1,y:40},
+    {kind:'w',label:'W_Q',dims:['D','N','H'],ein:'Q[B,T,N,H] = X[B,T,D] · W_Q[D,N,H]   (sum over D)',red:['D'],c:2,y:100},
+    {kind:'t',label:'Q',dims:['B','T','N','H'],ein:'Q = einsum("btd,dnh->btnh", X, W_Q)',c:1,y:160},
+    {kind:'w',label:'W_K / W_V',dims:['D','K','H'],ein:'K[B,S,K,H] = X[B,S,D] · W_K[D,K,H];  V likewise   (sum over D) — only K heads, not N',red:['D'],c:2,y:220},
+    {kind:'t',label:'K, V',dims:['B','S','K','H'],ein:'K, V = einsum("bsd,dkh->bskh", X, W_K/W_V) — cached during decode',c:1,y:280},
+    {kind:'op',label:'reshape Q: N → K×G',dims:['B','T','K','G','H'],ein:'Q.view(B,T,K,G,H): group the N query heads into K groups of G — this is GQA',c:1,y:340},
+    {kind:'t',label:'scores (+ mask)',dims:['B','T','K','G','S'],ein:'scores = einsum("btkgh,bskh->btkgs", Q, K) / sqrt(H) + mask   (sum over H)',red:['H'],c:1,y:400},
+    {kind:'op',label:'softmax over S',dims:['B','T','K','G','S'],ein:'weights = softmax(scores, dim=S) — each query row sums to 1 over the keys it may see',c:1,y:460},
+    {kind:'t',label:'attn · V',dims:['B','T','K','G','H'],ein:'out = einsum("btkgs,bskh->btkgh", weights, V)   (sum over S)',red:['S'],c:1,y:520},
+    {kind:'op',label:'reshape: K×G → N',dims:['B','T','N','H'],ein:'out.view(B,T,N,H): merge heads back',c:1,y:580},
+    {kind:'w',label:'W_O',dims:['N','H','D'],ein:'y[B,T,D] = einsum("btnh,nhd->btd", out, W_O)   (sum over N and H)',red:['N','H'],c:2,y:640},
+    {kind:'t',label:'h = X + y, then norm',dims:['B','T','D'],ein:'residual add, then RMSNorm over D (pre-norm for the MLP)',c:1,y:700},
+    {kind:'w',label:'W_in1, W_in2',dims:['D','F'],ein:'gate = gelu(einsum("btd,df->btf", h, W_in1));  up = einsum("btd,df->btf", h, W_in2)   (sum over D)',red:['D'],c:2,y:760},
+    {kind:'t',label:'gelu(gate) ⊙ up',dims:['B','T','F'],ein:'elementwise product of the two [B,T,F] projections — the gated MLP',c:1,y:820},
+    {kind:'w',label:'W_out',dims:['F','D'],ein:'z[B,T,D] = einsum("btf,fd->btd", m, W_out)   (sum over F)',red:['F'],c:2,y:880},
+    {kind:'t',label:'out = h + z, then norm',dims:['B','T','D'],ein:'residual add, then RMSNorm → next block',c:1,y:940},
+  ];
+  nodes.forEach(n=>{n.elems=n.dims.reduce((a,d)=>a*p[d],1);n.x=n.kind==='w'?col[1]:col[0];});
+  return nodes;
+}
+function dimText(ctx,n,x,y,p){ // draw [B,T,D] with colored letters, then = numbers
+  ctx.font='bold 13px monospace';let cx=x;ctx.textAlign='left';
+  const red=n.red||[];ctx.fillStyle=css('--text');ctx.fillText('[',cx,y);cx+=ctx.measureText('[').width;
+  n.dims.forEach((d,i)=>{ctx.fillStyle=red.includes(d)?'#e5604c':BATCH.has(d)?'#5b8cff':css('--text');ctx.fillText(d,cx,y);cx+=ctx.measureText(d).width;if(i<n.dims.length-1){ctx.fillStyle=css('--text-dim');ctx.fillText(',',cx,y);cx+=ctx.measureText(',').width;}});
+  ctx.fillStyle=css('--text');ctx.fillText(']',cx,y);cx+=ctx.measureText(']').width;
+  ctx.font='12px monospace';ctx.fillStyle=css('--text-dim');ctx.fillText(' = '+n.dims.map(d=>p[d]).join('×')+' = '+fmt(n.elems),cx,y);
+}
+function draw(){
+  const p=P();const nodes=layout(p);boxes=[];const W=cv.width,Hh=cv.height;ctx.clearRect(0,0,W,Hh);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  // residual rails
+  ctx.strokeStyle=bd;ctx.lineWidth=2;ctx.setLineDash([6,5]);
+  ctx.beginPath();ctx.moveTo(40,40+16);ctx.lineTo(40,700+16);ctx.lineTo(150,700+16);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(40,700+16);ctx.lineTo(40,940+16);ctx.lineTo(150,940+16);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.save();ctx.translate(28,400);ctx.rotate(-Math.PI/2);ctx.textAlign='center';ctx.fillText('residual stream',0,0);ctx.restore();
+  // section labels
+  ctx.fillStyle=txt;ctx.font='bold 14px sans-serif';ctx.textAlign='left';ctx.fillText('Attention',760,60);ctx.fillText('MLP',760,780);
+  nodes.forEach((n,i)=>{
+    const w=n.kind==='w'?170:260,h=34,x=n.x,y=n.y;
+    ctx.fillStyle=n.kind==='w'?'rgba(176,124,255,0.22)':n.kind==='op'?css('--bg-card'):'rgba(91,140,255,0.16)';
+    ctx.strokeStyle=i===hover?css('--accent'):bd;ctx.lineWidth=i===hover?2.5:1.2;
+    ctx.beginPath();ctx.roundRect(x,y,w,h,8);ctx.fill();ctx.stroke();
+    ctx.fillStyle=txt;ctx.font=(n.kind==='w'?'bold 13px monospace':'bold 13px sans-serif');ctx.textAlign='left';ctx.fillText(n.label,x+10,y+22);
+    dimText(ctx,n,x+w+14,y+22,p);
+    boxes.push({x,y,w,h,i});
+    // arrows down the tensor column
+    if(n.kind!=='w'&&i<nodes.length-1){const nx=nodes[i+1];const ty=nx.kind==='w'?(nodes[i+2]?nodes[i+2].y:nx.y):nx.y;ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x+40,y+h);ctx.lineTo(x+40,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(x+36,ty-6);ctx.lineTo(x+40,ty);ctx.lineTo(x+44,ty-6);ctx.stroke();}
+    if(n.kind==='w'){ctx.strokeStyle='#b07cff';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,y+h/2);ctx.lineTo(x-100,y+h/2);ctx.stroke();ctx.fillStyle='#b07cff';ctx.font='11px sans-serif';ctx.fillText('⊙ contract',x-96,y+h/2-4);}
+  });
+  // KPIs
+  const attn=2*p.B*p.T*p.D*p.N*p.H + 2*2*p.B*p.S*p.D*p.K*p.H + 2*p.B*p.T*p.S*p.N*p.H*2 + 2*p.B*p.T*p.N*p.H*p.D;
+  const mlp=2*p.B*p.T*p.D*p.F*3;
+  $('dfG').textContent=p.G+(p.K===p.N?' (MHA)':p.K===1?' (MQA)':' (GQA)');$('dfAttn').textContent=fmt(attn);$('dfMlp').textContent=fmt(mlp);$('dfKV').textContent=bytes(2*p.K*p.H);
+  if(hover>=0){const n=nodes[hover];$('dfInfo').textContent=n.label+': '+n.ein+' — '+fmt(n.elems)+' elements, '+bytes(n.elems)+' at BF16';}
+}
+cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect();const mx=(e.clientX-r.left)*cv.width/r.width,my=(e.clientY-r.top)*cv.height/r.height;let h=-1;for(const b of boxes){if(mx>=b.x&&mx<=b.x+b.w&&my>=b.y&&my<=b.y+b.h)h=b.i;}if(h!==hover){hover=h;draw();}});
+cv.addEventListener('click',()=>draw());
+ids.forEach(k=>$('df'+k).oninput=draw);
+$('dfGpt2').onclick=()=>{[['B',1],['T',1024],['S',1024],['D',768],['N',12],['K',12],['H',64],['F',3072]].forEach(([k,v])=>$('df'+k).value=v);draw();};
+$('dfLlama').onclick=()=>{[['B',1],['T',4096],['S',4096],['D',4096],['N',32],['K',8],['H',128],['F',14336]].forEach(([k,v])=>$('df'+k).value=v);draw();};
 draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 </script>
