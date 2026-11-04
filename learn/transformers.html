@@ -61,6 +61,32 @@
 <p class="caption">Five tokens flow through one block. Watch the attention stage build the 5×5 score matrix — the greyed upper triangle is the <strong>causal mask</strong>: position i may only attend to positions ≤ i, which is what makes the model autoregressive (and what makes the KV cache possible). Softmax turns each surviving row into weights; the weighted sum of value vectors is what each token "learns" from its past.</p>
 </div>
 
+<div class="card">
+<h3>Interactive: the block as a shape-annotated dataflow (with GQA)</h3>
+<p class="dim">Every tensor in one pre-norm decoder block, written the way engineers actually reason about it: by its index letters. <span class="pill a">blue</span> letters are batch-like dims that ride along (B, T, S); <span class="pill w">red</span> letters are the dims a contraction sums away (the einsum "shared" index). G = N / K is how many query heads share one KV head — K = N is MHA, K = 1 is MQA, anything between is GQA. <em>After figure 4 in Alisa Liu's Book of LLMs (the einsum dataflow of a decoder block).</em></p>
+<div class="controls">
+  <button class="btn secondary" id="dfGpt2">GPT-2 small</button>
+  <button class="btn secondary" id="dfLlama">Llama-3-8B</button>
+  <label class="ctl">B <input type="number" id="dfB" value="1" min="1" style="width:60px"></label>
+  <label class="ctl">T <input type="number" id="dfT" value="4096" min="1" style="width:76px"></label>
+  <label class="ctl">S <input type="number" id="dfS" value="4096" min="1" style="width:76px"></label>
+  <label class="ctl">D <input type="number" id="dfD" value="4096" min="1" style="width:76px"></label>
+  <label class="ctl">N <input type="number" id="dfN" value="32" min="1" style="width:60px"></label>
+  <label class="ctl">K <input type="number" id="dfK" value="8" min="1" style="width:60px"></label>
+  <label class="ctl">H <input type="number" id="dfH" value="128" min="1" style="width:60px"></label>
+  <label class="ctl">F <input type="number" id="dfF" value="14336" min="1" style="width:80px"></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="dfG">4</div><div class="l">G = N / K (queries per KV head)</div></div>
+  <div class="box"><div class="v" id="dfAttn">–</div><div class="l">attention FLOPs / block</div></div>
+  <div class="box"><div class="v" id="dfMlp">–</div><div class="l">MLP FLOPs / block</div></div>
+  <div class="box"><div class="v" id="dfKV">–</div><div class="l">KV cache / token / layer (BF16)</div></div>
+</div>
+<canvas id="dfViz" class="viz" width="900" height="980"></canvas>
+<p class="caption" id="dfInfo">Hover or click any box to see its einsum, element count and BF16 bytes.</p>
+<p class="caption">Reading it top to bottom: X is projected three times; Q gets N heads but K and V get only K heads, and the reshape that splits Q's N into K×G is the entire GQA trick — the score contraction then runs per KV head over its G queries. The mask is added to the raw scores before softmax over S. Both residual adds happen <em>after</em> each sublayer; both norms sit <em>before</em> the next one (pre-norm). The two MLP input projections produce the gate and the value of a gated MLP; the gelu'd gate multiplies the value elementwise, then W<sub>out</sub> contracts F away. Attention FLOPs scale with T·S (the score and value contractions); MLP FLOPs scale with T·D·F — set T = 128K and watch which one wins. The KV cache per token is 2·K·H values per layer, which is why K matters for serving (<a href="inference.html#kv-cache">Inference</a>) and why the <a href="#accounting">accounting section</a> counts K separately.</p>
+</div>
+
 <p>Reading the stages precisely, with x ∈ ℝ<sup>n×d</sup> the block input:</p>
 <div class="formula">h = x + Attention(RMSNorm(x))        # positions talk<br>out = h + MLP(RMSNorm(h))            # positions think<br><br>Attention(x) = softmax(QKᵀ/√d_head + causal_mask) · V,  Q = xW_Q, K = xW_K, V = xW_V<br>MLP(x) = (SiLU(xW_gate) ⊙ xW_up) W_down   # SwiGLU; hidden dim ≈ 2.7–4× d</div>
 <p>The MLP holds most of the parameters (~⅔ in a dense model) and is where factual knowledge appears to be stored; attention is the routing system that moves information to where the MLP can use it. Scaling by 1/√d_head keeps dot products in a range where softmax has useful gradients.</p>
@@ -385,6 +411,80 @@ function upd(){
 $('acLlama').onclick=()=>{[['acD',4096],['acL',32],['acN',32],['acK',8],['acF',14336],['acV',128256]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=false;$('acFFN').value='3';upd();};
 $('acGpt2').onclick=()=>{[['acD',768],['acL',12],['acN',12],['acK',12],['acF',3072],['acV',50257]].forEach(([i,v])=>$(i).value=v);$('acTied').checked=true;$('acFFN').value='2';upd();};
 upd();
+})();
+// ---------- shape-annotated block dataflow (after Book of LLMs fig. 4) ----------
+(function(){
+const $=id=>document.getElementById(id);const cv=$('dfViz');if(!cv)return;const ctx=cv.getContext('2d');
+const ids=['B','T','S','D','N','K','H','F'];let boxes=[],hover=-1;
+function P(){const o={};ids.forEach(k=>o[k]=Math.max(1,parseInt($('df'+k).value)||1));o.G=Math.max(1,Math.round(o.N/o.K));return o;}
+function fmt(n){if(n>=1e12)return (n/1e12).toFixed(2)+'T';if(n>=1e9)return (n/1e9).toFixed(2)+'G';if(n>=1e6)return (n/1e6).toFixed(2)+'M';if(n>=1e3)return (n/1e3).toFixed(1)+'K';return String(n);}
+function bytes(n){const b=n*2;return b>=1<<30?(b/(1<<30)).toFixed(2)+' GiB':b>=1<<20?(b/(1<<20)).toFixed(2)+' MiB':b>=1024?(b/1024).toFixed(1)+' KiB':b+' B';}
+const BATCH=new Set(['B','T','S']);
+function layout(p){
+  // each node: {kind:'t'|'w'|'op', label, dims:[letters], contracted:Set, ein, x,y}
+  const G=p.G;const col=[150,430,700];
+  const nodes=[
+    {kind:'t',label:'X',dims:['B','T','D'],ein:'block input',c:1,y:40},
+    {kind:'w',label:'W_Q',dims:['D','N','H'],ein:'Q[B,T,N,H] = X[B,T,D] · W_Q[D,N,H]   (sum over D)',red:['D'],c:2,y:100},
+    {kind:'t',label:'Q',dims:['B','T','N','H'],ein:'Q = einsum("btd,dnh->btnh", X, W_Q)',c:1,y:160},
+    {kind:'w',label:'W_K / W_V',dims:['D','K','H'],ein:'K[B,S,K,H] = X[B,S,D] · W_K[D,K,H];  V likewise   (sum over D) — only K heads, not N',red:['D'],c:2,y:220},
+    {kind:'t',label:'K, V',dims:['B','S','K','H'],ein:'K, V = einsum("bsd,dkh->bskh", X, W_K/W_V) — cached during decode',c:1,y:280},
+    {kind:'op',label:'reshape Q: N → K×G',dims:['B','T','K','G','H'],ein:'Q.view(B,T,K,G,H): group the N query heads into K groups of G — this is GQA',c:1,y:340},
+    {kind:'t',label:'scores (+ mask)',dims:['B','T','K','G','S'],ein:'scores = einsum("btkgh,bskh->btkgs", Q, K) / sqrt(H) + mask   (sum over H)',red:['H'],c:1,y:400},
+    {kind:'op',label:'softmax over S',dims:['B','T','K','G','S'],ein:'weights = softmax(scores, dim=S) — each query row sums to 1 over the keys it may see',c:1,y:460},
+    {kind:'t',label:'attn · V',dims:['B','T','K','G','H'],ein:'out = einsum("btkgs,bskh->btkgh", weights, V)   (sum over S)',red:['S'],c:1,y:520},
+    {kind:'op',label:'reshape: K×G → N',dims:['B','T','N','H'],ein:'out.view(B,T,N,H): merge heads back',c:1,y:580},
+    {kind:'w',label:'W_O',dims:['N','H','D'],ein:'y[B,T,D] = einsum("btnh,nhd->btd", out, W_O)   (sum over N and H)',red:['N','H'],c:2,y:640},
+    {kind:'t',label:'h = X + y, then norm',dims:['B','T','D'],ein:'residual add, then RMSNorm over D (pre-norm for the MLP)',c:1,y:700},
+    {kind:'w',label:'W_in1, W_in2',dims:['D','F'],ein:'gate = gelu(einsum("btd,df->btf", h, W_in1));  up = einsum("btd,df->btf", h, W_in2)   (sum over D)',red:['D'],c:2,y:760},
+    {kind:'t',label:'gelu(gate) ⊙ up',dims:['B','T','F'],ein:'elementwise product of the two [B,T,F] projections — the gated MLP',c:1,y:820},
+    {kind:'w',label:'W_out',dims:['F','D'],ein:'z[B,T,D] = einsum("btf,fd->btd", m, W_out)   (sum over F)',red:['F'],c:2,y:880},
+    {kind:'t',label:'out = h + z, then norm',dims:['B','T','D'],ein:'residual add, then RMSNorm → next block',c:1,y:940},
+  ];
+  nodes.forEach(n=>{n.elems=n.dims.reduce((a,d)=>a*p[d],1);n.x=n.kind==='w'?col[1]:col[0];});
+  return nodes;
+}
+function dimText(ctx,n,x,y,p){ // draw [B,T,D] with colored letters, then = numbers
+  ctx.font='bold 13px monospace';let cx=x;ctx.textAlign='left';
+  const red=n.red||[];ctx.fillStyle=css('--text');ctx.fillText('[',cx,y);cx+=ctx.measureText('[').width;
+  n.dims.forEach((d,i)=>{ctx.fillStyle=red.includes(d)?'#e5604c':BATCH.has(d)?'#5b8cff':css('--text');ctx.fillText(d,cx,y);cx+=ctx.measureText(d).width;if(i<n.dims.length-1){ctx.fillStyle=css('--text-dim');ctx.fillText(',',cx,y);cx+=ctx.measureText(',').width;}});
+  ctx.fillStyle=css('--text');ctx.fillText(']',cx,y);cx+=ctx.measureText(']').width;
+  ctx.font='12px monospace';ctx.fillStyle=css('--text-dim');ctx.fillText(' = '+n.dims.map(d=>p[d]).join('×')+' = '+fmt(n.elems),cx,y);
+}
+function draw(){
+  const p=P();const nodes=layout(p);boxes=[];const W=cv.width,Hh=cv.height;ctx.clearRect(0,0,W,Hh);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  // residual rails
+  ctx.strokeStyle=bd;ctx.lineWidth=2;ctx.setLineDash([6,5]);
+  ctx.beginPath();ctx.moveTo(40,40+16);ctx.lineTo(40,700+16);ctx.lineTo(150,700+16);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(40,700+16);ctx.lineTo(40,940+16);ctx.lineTo(150,940+16);ctx.stroke();ctx.setLineDash([]);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.save();ctx.translate(28,400);ctx.rotate(-Math.PI/2);ctx.textAlign='center';ctx.fillText('residual stream',0,0);ctx.restore();
+  // section labels
+  ctx.fillStyle=txt;ctx.font='bold 14px sans-serif';ctx.textAlign='left';ctx.fillText('Attention',760,60);ctx.fillText('MLP',760,780);
+  nodes.forEach((n,i)=>{
+    const w=n.kind==='w'?170:260,h=34,x=n.x,y=n.y;
+    ctx.fillStyle=n.kind==='w'?'rgba(176,124,255,0.22)':n.kind==='op'?css('--bg-card'):'rgba(91,140,255,0.16)';
+    ctx.strokeStyle=i===hover?css('--accent'):bd;ctx.lineWidth=i===hover?2.5:1.2;
+    ctx.beginPath();ctx.roundRect(x,y,w,h,8);ctx.fill();ctx.stroke();
+    ctx.fillStyle=txt;ctx.font=(n.kind==='w'?'bold 13px monospace':'bold 13px sans-serif');ctx.textAlign='left';ctx.fillText(n.label,x+10,y+22);
+    dimText(ctx,n,x+w+14,y+22,p);
+    boxes.push({x,y,w,h,i});
+    // arrows down the tensor column
+    if(n.kind!=='w'&&i<nodes.length-1){const nx=nodes[i+1];const ty=nx.kind==='w'?(nodes[i+2]?nodes[i+2].y:nx.y):nx.y;ctx.strokeStyle=bd;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x+40,y+h);ctx.lineTo(x+40,ty);ctx.stroke();ctx.beginPath();ctx.moveTo(x+36,ty-6);ctx.lineTo(x+40,ty);ctx.lineTo(x+44,ty-6);ctx.stroke();}
+    if(n.kind==='w'){ctx.strokeStyle='#b07cff';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x,y+h/2);ctx.lineTo(x-100,y+h/2);ctx.stroke();ctx.fillStyle='#b07cff';ctx.font='11px sans-serif';ctx.fillText('⊙ contract',x-96,y+h/2-4);}
+  });
+  // KPIs
+  const attn=2*p.B*p.T*p.D*p.N*p.H + 2*2*p.B*p.S*p.D*p.K*p.H + 2*p.B*p.T*p.S*p.N*p.H*2 + 2*p.B*p.T*p.N*p.H*p.D;
+  const mlp=2*p.B*p.T*p.D*p.F*3;
+  $('dfG').textContent=p.G+(p.K===p.N?' (MHA)':p.K===1?' (MQA)':' (GQA)');$('dfAttn').textContent=fmt(attn);$('dfMlp').textContent=fmt(mlp);$('dfKV').textContent=bytes(2*p.K*p.H);
+  if(hover>=0){const n=nodes[hover];$('dfInfo').textContent=n.label+': '+n.ein+' — '+fmt(n.elems)+' elements, '+bytes(n.elems)+' at BF16';}
+}
+cv.addEventListener('mousemove',e=>{const r=cv.getBoundingClientRect();const mx=(e.clientX-r.left)*cv.width/r.width,my=(e.clientY-r.top)*cv.height/r.height;let h=-1;for(const b of boxes){if(mx>=b.x&&mx<=b.x+b.w&&my>=b.y&&my<=b.y+b.h)h=b.i;}if(h!==hover){hover=h;draw();}});
+cv.addEventListener('click',()=>draw());
+ids.forEach(k=>$('df'+k).oninput=draw);
+$('dfGpt2').onclick=()=>{[['B',1],['T',1024],['S',1024],['D',768],['N',12],['K',12],['H',64],['F',3072]].forEach(([k,v])=>$('df'+k).value=v);draw();};
+$('dfLlama').onclick=()=>{[['B',1],['T',4096],['S',4096],['D',4096],['N',32],['K',8],['H',128],['F',14336]].forEach(([k,v])=>$('df'+k).value=v);draw();};
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 </script>
 </body>

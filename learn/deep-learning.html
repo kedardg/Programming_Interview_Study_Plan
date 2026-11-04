@@ -33,6 +33,23 @@
 <p class="caption">The solid curve is the activation; the dashed one is its derivative — what backprop multiplies by. Notice sigmoid's derivative never exceeds 0.25 and vanishes in both tails: stack ten sigmoid layers and gradients shrink by up to 0.25¹⁰ ≈ 10⁻⁶ on the way back — the vanishing-gradient problem. ReLU's derivative is a clean 0/1 gate; GELU and SiLU are its smooth relatives.</p>
 </div>
 
+<div class="card">
+<h3>Interactive: why one hidden layer changes what a model can separate</h3>
+<p class="dim">The same 60 points, two learners training live in your browser. Left: logistic regression — a single weighted sum, so its decision boundary can only ever be one straight line. Right: a 2–H–1 MLP with a tanh hidden layer — a composition of nonlinearities, so the boundary can bend. <em>After figure 1 in Alisa Liu's Book of LLMs.</em></p>
+<div class="controls">
+  <button class="btn" id="dbPlay">▶ Train</button>
+  <button class="btn secondary" id="dbStep">Step ×10 epochs</button>
+  <button class="btn secondary" id="dbReset">Reset</button>
+  <label class="ctl">hidden units <input type="range" id="dbH" min="2" max="16" value="8"> <span id="dbHv">8</span></label>
+  <label class="ctl">learning rate <input type="range" id="dbLr" min="1" max="60" value="20"> <span id="dbLrv">0.20</span></label>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+  <div><canvas id="dbLin" class="viz" width="440" height="400"></canvas><p class="caption" id="dbLinCap">linear: —</p></div>
+  <div><canvas id="dbMlp" class="viz" width="440" height="400"></canvas><p class="caption" id="dbMlpCap">MLP: —</p></div>
+</div>
+<p class="caption">What the figure shows: the linear model has exactly one hyperplane to spend, so it settles for the best straight cut and misclassifies the inner cluster no matter how long it trains (capacity-limited, not under-trained). The hidden layer's units each draw a line in input space; the output layer combines their tanh "bends" into a curved region, and more units mean more bends. Push units to 16 and keep training: the boundary starts wrapping around the deliberate outliers — that is overfitting, the price of capacity, and why the next sections are about regularization and validation curves.</p>
+</div>
+
 <h2 id="backprop">2. The forward and backward pass</h2>
 <p>Training needs ∂loss/∂w for every weight, and <strong>backpropagation</strong> computes all of them in one backward sweep, at roughly twice the cost of the forward pass. The algorithm is just the chain rule with bookkeeping: run forward and <em>remember the intermediate activations</em>; then walk backward from the loss, computing each node's gradient from the gradients of the nodes that consumed it. Every layer needs only local knowledge — "given dL/d(my output), produce dL/d(my inputs) and dL/d(my weights)" — which is why autograd frameworks can differentiate arbitrary graphs.</p>
 <p>Two facts from this picture reach all the way to systems design later in the track: the stored activations are why training uses so much more memory than inference (and why <em>activation checkpointing</em> trades recompute for memory), and the backward pass's structure — two matmuls per forward matmul — is why training FLOPs ≈ 3× forward FLOPs, the source of the 6ND rule in section 5.</p>
@@ -403,6 +420,62 @@ function draw(){
 }
 wS.oninput=draw;mS.oninput=draw;
 draw();themeWatch(draw);
+})();
+// ---------- decision boundary trainer (after Book of LLMs fig. 1) ----------
+(function(){
+const $=id=>document.getElementById(id);
+const cL=$('dbLin'),cM=$('dbMlp');if(!cL||!cM)return;
+const ctxL=cL.getContext('2d'),ctxM=cM.getContext('2d');
+let seed=7;function rnd(){seed=(seed*1664525+1013904223)%4294967296;return seed/4294967296;}
+function gauss(){return (rnd()+rnd()+rnd()+rnd()-2)*0.9;}
+// data: inner blob (class 1, green) + ring (class 0, red) + outliers
+let pts=[];
+function makeData(){seed=7;pts=[];
+  for(let i=0;i<22;i++){pts.push({x:0.12*gauss()-0.25,y:0.12*gauss()-0.3,c:1});}
+  for(let i=0;i<30;i++){const a=rnd()*Math.PI*2,r=0.62+0.07*gauss();pts.push({x:r*Math.cos(a)-0.1,y:r*Math.sin(a)-0.05,c:0});}
+  for(let i=0;i<8;i++){pts.push({x:0.45+0.08*gauss(),y:-0.5+0.08*gauss(),c:1});} // second green cluster
+  pts.push({x:0.55,y:0.55,c:1});pts.push({x:-0.7,y:0.6,c:1});pts.push({x:0.05,y:0.12,c:0}); // outliers
+}
+let H=8,lr=0.2,lin,mlp,epochs=0,timer=null;
+function initModels(){seed=99;lin={w:[0.1*gauss(),0.1*gauss()],b:0};
+  mlp={W1:[],b1:[],W2:[],b2:0};for(let j=0;j<H;j++){mlp.W1.push([gauss()*0.8,gauss()*0.8]);mlp.b1.push(gauss()*0.3);mlp.W2.push(gauss()*0.5);}
+  epochs=0;}
+const sig=z=>1/(1+Math.exp(-z));
+function linP(x,y){return sig(lin.w[0]*x+lin.w[1]*y+lin.b);}
+function mlpF(x,y){const h=new Array(H);let z=mlp.b2;for(let j=0;j<H;j++){h[j]=Math.tanh(mlp.W1[j][0]*x+mlp.W1[j][1]*y+mlp.b1[j]);z+=mlp.W2[j]*h[j];}return {h,p:sig(z)};}
+function epoch(){ // full-batch gradient descent on cross-entropy
+  const n=pts.length;let gw=[0,0],gb=0;
+  const gW1=mlp.W1.map(()=>[0,0]),gb1=new Array(H).fill(0),gW2=new Array(H).fill(0);let gb2=0;
+  for(const p of pts){
+    const e=linP(p.x,p.y)-p.c;gw[0]+=e*p.x;gw[1]+=e*p.y;gb+=e;
+    const {h,p:q}=mlpF(p.x,p.y);const d=q-p.c;gb2+=d;
+    for(let j=0;j<H;j++){gW2[j]+=d*h[j];const dh=d*mlp.W2[j]*(1-h[j]*h[j]);gW1[j][0]+=dh*p.x;gW1[j][1]+=dh*p.y;gb1[j]+=dh;}
+  }
+  lin.w[0]-=lr*gw[0]/n*4;lin.w[1]-=lr*gw[1]/n*4;lin.b-=lr*gb/n*4;
+  for(let j=0;j<H;j++){mlp.W2[j]-=lr*gW2[j]/n*4;mlp.b1[j]-=lr*gb1[j]/n*4;mlp.W1[j][0]-=lr*gW1[j][0]/n*4;mlp.W1[j][1]-=lr*gW1[j][1]/n*4;}
+  mlp.b2-=lr*gb2/n*4;epochs++;
+}
+function acc(f){let k=0;for(const p of pts){if((f(p.x,p.y)>0.5?1:0)===p.c)k++;}return Math.round(100*k/pts.length);}
+function paint(cv,ctx,f,label){
+  const W=cv.width,Hh=cv.height,g=56;ctx.clearRect(0,0,W,Hh);
+  const red=[229,96,76],green=[56,198,160];
+  for(let i=0;i<g;i++)for(let j=0;j<g;j++){const x=-1+2*(i+0.5)/g,y=1-2*(j+0.5)/g;const q=f(x,y);const c=q>0.5?green:red;const a=0.18+0.5*Math.abs(q-0.5)*2;
+    ctx.fillStyle=`rgba(${c[0]},${c[1]},${c[2]},${a})`;ctx.fillRect(i*W/g,j*Hh/g,W/g+1,Hh/g+1);}
+  ctx.strokeStyle=css('--border');ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,Hh);ctx.moveTo(0,Hh/2);ctx.lineTo(W,Hh/2);ctx.stroke();
+  for(const p of pts){const X=(p.x+1)/2*W,Y=(1-p.y)/2*Hh;ctx.beginPath();ctx.arc(X,Y,5,0,7);ctx.fillStyle=p.c?'#1f9d78':'#b8402f';ctx.fill();ctx.strokeStyle='rgba(0,0,0,.45)';ctx.stroke();}
+  ctx.fillStyle=css('--text');ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillText(label,10,20);
+}
+function draw(){paint(cL,ctxL,linP,'logistic regression (no hidden layer)');paint(cM,ctxM,(x,y)=>mlpF(x,y).p,'MLP 2–'+H+'–1 (tanh hidden)');
+  $('dbLinCap').textContent='linear: train accuracy '+acc(linP)+'% after '+epochs+' epochs — one straight boundary, however long it trains';
+  $('dbMlpCap').textContent='MLP: train accuracy '+acc((x,y)=>mlpF(x,y).p)+'% after '+epochs+' epochs — '+H+' hidden units = up to '+H+' bends';}
+function step(){for(let i=0;i<10;i++)epoch();draw();}
+function stop(){if(timer){clearInterval(timer);timer=null;$('dbPlay').textContent='▶ Train';}}
+$('dbPlay').onclick=function(){if(timer){stop();return;}this.textContent='⏸ Pause';timer=setInterval(()=>{step();if(epochs>=3000)stop();},70);};
+$('dbStep').onclick=()=>{stop();step();};
+$('dbReset').onclick=()=>{stop();makeData();initModels();draw();};
+$('dbH').oninput=function(){H=parseInt(this.value);$('dbHv').textContent=H;stop();initModels();draw();};
+$('dbLr').oninput=function(){lr=parseInt(this.value)/100;$('dbLrv').textContent=lr.toFixed(2);};
+makeData();initModels();draw();themeWatch(draw);
 })();
 </script>
 </body>

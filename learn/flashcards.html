@@ -295,6 +295,18 @@ const DECKS = {
 ["Nathan Lambert's 'signal vs noise' point?","Prestige and brand are noisy signals; demonstrated skill in the interview styles each role uses is what gets evaluated — prepare for the styles."],
 ["How does this notebook map to the mini-cram?","ML coding → ML Coding chapter + deck; breadth → Parallelism/Inference/RL Systems decks; math round → Interview Math simulators; behavioral → the story bank in Interview Journey."]
 ],
+"AV Patterns": [
+["Aditya Verma's 0/1 knapsack identification cue?","Choice per item (take or leave) + a capacity/target constraint + optimize or count → 0/1 knapsack; its variants: subset sum, equal partition, count subsets, min subset difference, target sum."],
+["Unbounded vs 0/1 knapsack in code?","Unbounded lets an item be reused: after taking item i you stay at i (dp[i][w-wt] ) instead of moving to i-1. Rod cutting, coin change (ways/min), ribbon cut."],
+["LCS family — how to recognize?","Two strings and a 'common/subsequence/supersequence/palindrome/edit' question → LCS table; longest palindromic subsequence = LCS(s, reverse(s)); min insertions/deletions = n − LCS."],
+["MCM (matrix chain) pattern cue?","A range [i, j] with a partition point k to try every split and combine (i..k, k+1..j) → MCM template; palindrome partitioning, boolean parenthesization, egg dropping, scrambled strings."],
+["Sliding window: fixed vs variable — the two templates?","Fixed size k: expand to k then slide one in/one out. Variable: expand right while condition holds, shrink left when violated; answer updated on each valid window (longest substring k unique, min window substring)."],
+["Stack pattern cue?","'Nearest greater/smaller to left/right' — monotonic stack; stock span, largest histogram area, max rectangle in binary matrix, trapping rain water all reduce to NGL/NGR/NSL/NSR."],
+["Binary search beyond sorted arrays?","Monotonic predicate → binary search on the answer: allocate minimum pages, Koko eating bananas, split array largest sum; also first/last occurrence, rotations, bitonic peak, infinite arrays."],
+["Recursion playlist's core device?","Input–output method: shrink the input one decision at a time, carry the partial output; subsets, permutations with case/space, balanced parentheses, N-bit binary numbers, Josephus."],
+["Heap pattern cue?","'k' + 'smallest/largest/closest/frequent' → a heap of size k (min-heap for k largest, max-heap for k smallest): top k frequent, k closest points, connect ropes, sort k-sorted array."],
+["His three-step DP method?","Write the brute-force recursion with the choice diagram, memoize it top-down, then convert to a bottom-up table — same transitions, no re-derivation."]
+],
 "GPU": [
 ["GPU vs CPU design philosophy in one line?","CPU minimizes latency of one thread; GPU hides latency with tens of thousands of threads and spends transistors on ALUs, not caches."],
 ["The memory hierarchy, fastest to slowest?","Registers → shared memory/L1 (SRAM, ~TB/s, KBs) → L2 → HBM (GBs, ~TB/s but far) → NVLink/PCIe → host."],
