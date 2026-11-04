@@ -10,7 +10,7 @@
 <nav class="topnav">
   <a class="home" href="index.html">Learn</a>
   <div class="links">
-    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html" class="here">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html" class="here">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="flashcards.html">Flashcards</a>
   </div>
   <div class="spacer"></div>
   <button class="theme-btn" id="themeBtn">◐ theme</button>
@@ -52,6 +52,30 @@
 <p class="caption">Each GPU's vector is split into 4 chunks (columns). <strong>Phase 1, reduce-scatter</strong> (3 steps): chunks travel clockwise, accumulating partial sums — after step 3, each GPU owns one fully-summed chunk (bright). <strong>Phase 2, all-gather</strong> (3 steps): the finished chunks travel the ring, replacing stale ones, until everyone has all four sums. Total traffic per GPU: 2·(N−1)/N ≈ 1.5× the data — and only neighbor-to-neighbor links are used, which is why rings love NVLink.</p>
 </div>
 
+
+<div class="card">
+<h3>Interactive: what each collective does to the data</h3>
+<canvas id="colViz" class="viz" width="900" height="340"></canvas>
+<div class="controls">
+  <label class="ctl">collective
+    <select id="colSel">
+      <option value="reduce-scatter">reduce-scatter</option>
+      <option value="all-gather">all-gather</option>
+      <option value="all-reduce" selected>all-reduce</option>
+      <option value="broadcast">broadcast</option>
+      <option value="all-to-all">all-to-all</option>
+      <option value="scatter">scatter (from device 0)</option>
+      <option value="gather">gather (to device 0)</option>
+    </select>
+  </label>
+  <button class="btn" id="colStep">Step</button>
+  <button class="btn secondary" id="colReset">Reset</button>
+  <label class="ctl">D per device <select id="colD"><option value="1">1 GB</option><option value="4" selected>4 GB</option><option value="16">16 GB</option></select></label>
+  <span class="dim" id="colLabel"></span>
+</div>
+<p class="caption">Four devices (columns) each hold four chunks (rows, one color per chunk). <em>Faded</em> = a partial value that still needs summing; <em>solid</em> = complete. Step through to watch the data move and read the bytes each device sends under the ring algorithm: reduce-scatter and all-gather each cost D·(N−1)/N, all-reduce is their sum 2·D·(N−1)/N, all-to-all is a transpose across devices (also D·(N−1)/N), broadcast/scatter/gather are one-to-all or all-to-one and cost up to D on the root. The ring all-reduce above is exactly reduce-scatter followed by all-gather. <span class="dim">After figure 8 in Alisa Liu's Book of LLMs.</span></p>
+</div>
+
 <p>Bandwidth is hierarchical: ~900 GB/s NVLink inside a node (an "NVLink island" of 8 GPUs, or 72 in GB200 NVL72), ~50–100 GB/s InfiniBand/Ethernet between nodes — an order of magnitude cliff. The art of placement is keeping chatty collectives inside the island and only quiet ones crossing it.</p>
 
 <h2 id="tp">3. Tensor parallelism: shard the matrices</h2>
@@ -72,7 +96,57 @@ all-reduce(Z_1 … Z_N)            # one sum makes Z exact on every GPU</div>
 <p class="caption">X is replicated; A is split by columns (top/bottom halves on GPU 0/1), B by rows. Step through: each GPU computes its half independently until the final partial outputs Z₀ + Z₁ must be all-reduced. Two giant matmuls, one communication. In attention the same picture holds with heads instead of columns.</p>
 </div>
 
+
+<div class="card">
+<h3>Interactive: sharding notation and the sharded-matmul rule</h3>
+<canvas id="shardViz" class="viz" width="900" height="300"></canvas>
+<div class="controls">
+  <label class="ctl">A sharding
+    <select id="shSpec">
+      <option value="I,J">A[I, J] — replicated</option>
+      <option value="IX,J">A[I_X, J]</option>
+      <option value="I,JX">A[I, J_X]</option>
+      <option value="IY,J">A[I_Y, J]</option>
+      <option value="IXY,J" selected>A[I_XY, J]</option>
+      <option value="IY,JX">A[I_Y, J_X]</option>
+      <option value="I,JY">A[I, J_Y]</option>
+      <option value="IX,JY">A[I_X, J_Y]</option>
+      <option value="I,JXY">A[I, J_XY]</option>
+    </select>
+  </label>
+  <span class="dim" id="shLabel"></span>
+</div>
+<p class="caption">A 4×4 array of labeled blocks laid over a 2×2 device mesh with axes <strong>X</strong> (columns of the mesh) and <strong>Y</strong> (rows). A subscript says which mesh axis a dimension is split across: <code>A[I_X, J]</code> splits the rows over X, so the two devices in each mesh column hold the same half (faded = replicated copies); <code>A[I_XY, J]</code> splits rows four ways, one quarter per device, nothing replicated. This is the notation How to Scale Your Model uses for every parallelism scheme.</p>
+<canvas id="mmViz" class="viz" width="900" height="250"></canvas>
+<div class="controls">
+  <label class="ctl">A[I, J] <select id="mmA"><option value="I,J">A[I, J]</option><option value="IX,J">A[I_X, J]</option><option value="I,JX" selected>A[I, J_X]</option><option value="IY,J">A[I_Y, J]</option><option value="I,JY">A[I, J_Y]</option></select></label>
+  <label class="ctl">B[J, K] <select id="mmB"><option value="J,K">B[J, K]</option><option value="JX,K" selected>B[J_X, K]</option><option value="J,KX">B[J, K_X]</option><option value="JY,K">B[J_Y, K]</option><option value="J,KY">B[J, K_Y]</option></select></label>
+  <label class="ctl">n (square dims) <select id="mmN"><option value="4096">4096</option><option value="8192" selected>8192</option><option value="16384">16384</option></select></label>
+</div>
+<p class="caption">The sharded-matmul rule, C[I, K] = A[I, J] · B[J, K] with J the contracting dimension: <strong>(1)</strong> neither input sharded along J → every device multiplies locally, C inherits the inputs' shardings, no communication; <strong>(2)</strong> J sharded the same way on both → each device has a partial product, so finish with an all-reduce (or a reduce-scatter if you want C sharded), cost 2·|C|·(N−1)/N; <strong>(3)</strong> J sharded on only one input → all-gather that input along J first (cost |A|·(N−1)/N), then case 1; <strong>(4)</strong> both inputs sharded on the <em>same mesh axis</em> but different dims (A[I_X, J]·B[J, K_X]) → C cannot be sharded along X twice, so one side is all-gathered first. Megatron's MLP is case 2 made deliberate: W_up is sharded on its output columns (J_X), so the hidden activations come out sharded, W_down on its input rows (also J_X), and the single all-reduce at the end is the rule's price. <span class="dim">After figures 9–10 in Alisa Liu's Book of LLMs (sharding notation from How to Scale Your Model, chapter 4).</span></p>
+</div>
+
 <p><strong>Costs and limits:</strong> TP communicates activations (batch × seq × hidden) twice per layer, every microbatch — the chattiest parallelism there is. That is why TP degree stays within the NVLink island (TP = 8 is the classic choice) and why TP is the tool for the <em>latency</em> wall: TP=4 gives a decode token 4× the aggregate HBM bandwidth, directly cutting TPOT. Beyond the island, the all-reduce over slow links erases the gain.</p>
+
+
+<div class="card">
+<h3>Interactive: when does communication hide behind compute?</h3>
+<canvas id="ccViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <label class="ctl">accelerator <select id="ccAcc"><option value="h100" selected>H100 (≈990 TFLOP/s BF16, NVLink ≈450 GB/s)</option><option value="v5p">TPU v5p (≈459 TFLOP/s, ICI ≈600 GB/s)</option><option value="trn2">Trainium2 (≈667 TFLOP/s, NeuronLink ≈ 1 TB/s)</option></select></label>
+  <label class="ctl">D <select id="ccD"><option value="4096">4096</option><option value="8192" selected>8192</option><option value="16384">16384</option></select></label>
+  <label class="ctl">F/D <select id="ccFD"><option value="4" selected>4</option><option value="8">8</option></select></label>
+  <label class="ctl">TP degree <input type="range" id="ccTP" min="1" max="8" value="4"> <span id="ccTPL">4</span></label>
+  <label class="ctl">tokens per device <input type="range" id="ccB" min="7" max="17" value="12"> <span id="ccBL">4096</span></label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="ccComp">–</div><div class="l">matmul time / layer (fwd+bwd)</div></div>
+  <div class="box"><div class="v" id="ccDP">–</div><div class="l">DP / FSDP comms / layer</div></div>
+  <div class="box"><div class="v" id="ccTPt">–</div><div class="l">TP comms / layer</div></div>
+  <div class="box"><div class="v" id="ccBstar">–</div><div class="l">tokens/device where DP comms hide</div></div>
+</div>
+<p class="caption">The book's first-order model for one transformer layer in BF16. Compute: 6 × params × tokens ÷ peak FLOP/s, with params ≈ 4D² + 3DF. <strong>Data parallel / FSDP</strong> moves the layer's weights (gradients all-reduced, or parameters all-gathered plus gradients reduce-scattered — the same ≈ 4 bytes per parameter) once per step regardless of batch, so its line is flat and compute overtakes it once tokens per device exceed ≈ (2/3) · (FLOP/s ÷ bytes/s): the crossover marked on the chart, and the reason FSDP is "free" above a per-device batch threshold set by the interconnect-to-FLOPs ratio. <strong>Tensor parallel</strong> all-reduces activations (2 per layer, each 2·B·D bytes) — both sides scale with the batch, so its ratio does not improve with B; it is hidden only while F ÷ TP-degree stays above ≈ (4/9) · (FLOP/s ÷ bytes/s), which is why TP degree stays small and inside the fastest link. FSDP + TP combine: TP shrinks per-device compute by the TP degree, raising the DP crossover accordingly. Presets are approximate peak numbers; measured utilization is lower. <span class="dim">After the chapter-6 figures in How to Scale Your Model.</span></p>
+</div>
 
 <h2 id="pp">4. Pipeline parallelism: shard the layers</h2>
 <p>Pipeline parallelism cuts the model into <strong>stages</strong> of consecutive layers — GPU 0 holds layers 1–20, GPU 1 holds 21–40, and so on. Communication is tiny (one activation tensor handed to the next stage, point-to-point), so PP crosses nodes happily. The price is the <strong>bubble</strong>: stages idle while the pipeline fills and drains. Splitting the batch into m microbatches and scheduling <em>one-forward-one-backward</em> (1F1B) keeps memory flat and shrinks the idle fraction to:</p>
@@ -149,6 +223,31 @@ cache capacity:     57 GB / 40 KB ≈ 1.4 M tokens    → ~175 concurrent 8K-con
 
 <h2 id="multinode">9. Multi-node reality</h2>
 <p>Across nodes, topology is destiny: NCCL builds rings and trees out of whatever NVLink, PCIe, and NIC paths exist, and a bad mapping (a TP group spanning two nodes, a ring crossing a slow switch) silently halves throughput — the Multi-node NVLink Tuning Guide in Step 15 is about exactly this. The interconnects themselves are standardizing: <strong>UALink</strong> as an open NVLink-class scale-up fabric, <strong>Ultra Ethernet</strong> as the RDMA-style scale-out transport — read both specs as "what has to be true of a network for collectives to be fast."</p>
+
+
+<div class="card">
+<h3>Explorer: the cluster topology</h3>
+<canvas id="topoViz" class="viz" width="900" height="400"></canvas>
+<div class="controls">
+  <label class="ctl">system
+    <select id="topoSel">
+      <option value="hgx" selected>8× H100 HGX node (NVSwitch all-to-all)</option>
+      <option value="superpod">DGX SuperPod (128 nodes over InfiniBand)</option>
+      <option value="nvl72">GB200 NVL72 rack (72 GPUs, one NVLink domain)</option>
+      <option value="tpu">TPU v5p slice (3-D torus, 4×4×4)</option>
+      <option value="trn2">Trn2 UltraServer (64 chips, NeuronLink)</option>
+    </select>
+  </label>
+  <label class="ctl"><input type="checkbox" id="topoOverlay" checked> show where TP / PP / DP live</label>
+</div>
+<div class="kpi">
+  <div class="box"><div class="v" id="topoUp">–</div><div class="l">scale-up link per GPU</div></div>
+  <div class="box"><div class="v" id="topoOut">–</div><div class="l">scale-out link per GPU</div></div>
+  <div class="box"><div class="v" id="topoRatio">–</div><div class="l">scale-up ÷ scale-out</div></div>
+  <div class="box"><div class="v" id="topoDom">–</div><div class="l">GPUs in one scale-up domain</div></div>
+</div>
+<p class="caption">Each system drawn as its scale-up domains (fast links, solid) joined by scale-out links (slow, dashed). The ratio between the two — roughly 10–20× on an HGX node, closer to 1 inside a TPU pod or an NVL72 rack because the whole domain is one fabric — decides placement: <strong>tensor parallel</strong> needs two all-reduces per layer every microbatch and lives only inside the scale-up domain; <strong>pipeline parallel</strong> sends one activation per microbatch across a stage boundary and tolerates the scale-out tier; <strong>data parallel / FSDP</strong> sends gradients once per step and spans everything. NVL72 changes the arithmetic by making 72 GPUs one NVLink domain: TP = 8 stops being a ceiling and expert parallelism for MoE can stay inside the rack. Bandwidth figures are approximate vendor peaks. <span class="dim">After the chapter-3 node and SuperPod figures in How to Scale Your Model.</span></p>
+</div>
 
 <h2 id="reading">10. Where to go deeper</h2>
 <ul>
@@ -412,6 +511,191 @@ function draw(){
 document.getElementById('moeStep').onclick=()=>{step=(step+1)%4;draw();};
 document.getElementById('moeReset').onclick=()=>{step=0;draw();};
 draw();onTheme(draw);
+})();
+
+// ---------- collectives explorer ----------
+(function(){
+const cv=document.getElementById('colViz');if(!cv)return;const ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+const COLORS=['#5b8cff','#e5604c','#38c6a0','#d2b84c'];let phase=0;
+function layout(op,ph){ // returns grid[device][chunk] = {alpha,present,label}
+  const g=[];for(let d=0;d<4;d++){g.push([]);for(let c=0;c<4;c++){
+    let cell={present:false,alpha:1,label:''};
+    const before=ph===0;
+    if(op==='reduce-scatter'){cell=before?{present:true,alpha:0.3}:{present:c===d,alpha:1};}
+    else if(op==='all-gather'){cell=before?{present:c===d,alpha:1}:{present:true,alpha:1};}
+    else if(op==='all-reduce'){cell=before?{present:true,alpha:0.3}:{present:true,alpha:1};}
+    else if(op==='broadcast'){cell=before?{present:d===0,alpha:1}:{present:true,alpha:1};}
+    else if(op==='scatter'){cell=before?{present:d===0,alpha:1}:{present:c===d,alpha:1};}
+    else if(op==='gather'){cell=before?{present:c===d,alpha:1}:{present:d===0,alpha:1};}
+    else if(op==='all-to-all'){cell=before?{present:true,alpha:1,label:'→'+c}:{present:true,alpha:1,label:'←'+c};}
+    g[d].push(cell);}}
+  return g;
+}
+function bytes(op,D){const N=4;const f=(N-1)/N;return {'reduce-scatter':D*f,'all-gather':D*f,'all-reduce':2*D*f,'all-to-all':D*f,'broadcast':D,'scatter':D*f,'gather':D*f}[op];}
+function draw(){
+  const op=$('colSel').value,D=+$('colD').value;const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const cw=40,chh=26,gap=6;
+  function panel(x0,title,grid,colorByDest){
+    ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillText(title,x0,26);
+    for(let d=0;d<4;d++){ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';ctx.fillText('dev '+d,x0+d*(cw+gap)+cw/2,44);
+      for(let c=0;c<4;c++){const cell=grid[d][c];const x=x0+d*(cw+gap),y=54+c*(chh+gap);ctx.strokeStyle=bd;ctx.strokeRect(x,y,cw,chh);
+        if(cell.present){let col=COLORS[c];if(colorByDest&&cell.label)col=COLORS[+cell.label.slice(1)];ctx.fillStyle=col;ctx.globalAlpha=cell.alpha;ctx.fillRect(x+1,y+1,cw-2,chh-2);ctx.globalAlpha=1;
+          if(cell.label){ctx.fillStyle='#fff';ctx.font='10px monospace';ctx.fillText(cell.label,x+cw/2,y+17);}}}}
+  }
+  const before=layout(op,0),after=layout(op,1);
+  panel(30,'before',before,op==='all-to-all');
+  panel(560,'after',after,op==='all-to-all');
+  // arrows in the middle when phase>=1
+  const mx=280,my=120;ctx.strokeStyle=css('--accent');ctx.fillStyle=css('--accent');ctx.lineWidth=2;
+  if(phase>=1){const n=op==='broadcast'||op==='scatter'?3:(op==='gather'?3:4);
+    for(let i=0;i<n;i++){const y=70+i*34;ctx.beginPath();ctx.moveTo(mx,y);ctx.lineTo(mx+150,y);ctx.stroke();ctx.beginPath();ctx.moveTo(mx+150,y);ctx.lineTo(mx+140,y-5);ctx.lineTo(mx+140,y+5);ctx.closePath();ctx.fill();}
+    ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='center';
+    const how={'reduce-scatter':'ring: each device forwards partial chunks 3 times','all-gather':'ring: finished chunks circulate 3 times','all-reduce':'reduce-scatter, then all-gather','broadcast':'root sends to all (tree/ring)','scatter':'root sends chunk i to device i','gather':'device i sends chunk i to root','all-to-all':'device i sends chunk j to device j'}[op];
+    ctx.fillText(how,mx+75,230);}
+  if(phase>=2){ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='center';ctx.fillText('done',mx+75,260);}
+  const b=bytes(op,D);$('colLabel').textContent=(phase===0?'press Step':phase===1?'moving…':'complete')+' — bytes sent per device: '+b.toFixed(1)+' GB (D='+D+' GB, N=4'+(op==='broadcast'?', root sends D':'')+')';
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('faded = partial sum pending · solid = complete · all-to-all labels: →dest / ←source',30,H-14);
+}
+$('colStep').onclick=()=>{phase=(phase+1)%3;draw();};
+$('colReset').onclick=()=>{phase=0;draw();};
+$('colSel').onchange=()=>{phase=0;draw();};$('colD').onchange=draw;
+draw();onTheme(draw);
+})();
+
+// ---------- sharding notation + matmul rule ----------
+(function(){
+const cv=document.getElementById('shardViz');if(!cv)return;const ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+const PAL=['#9ad24c','#5fb34a','#c97cd8','#b14fd1','#e8c85a','#c9a227','#6cc7e8','#3a8fb5'];
+function blockColor(r,c){return [['#bfe36b','#8fd13a','#d19ae0','#c35ee6'],['#9fc650','#6e9f2f','#b47ec4','#9e55b0'],['#f0d774','#d8b43b','#8fd5ee','#4fb6e0'],['#d6c27c','#b89a3a','#7fb8d8','#3d8fb8']][r][c];}
+function holds(spec,x,y){ // returns {rows:[...], cols:[...]}
+  const [I,J]=spec.split(',');
+  function idx(tag,x,y){const s=tag.slice(1);if(s==='')return [0,1,2,3];if(s==='X')return x?[2,3]:[0,1];if(s==='Y')return y?[2,3]:[0,1];if(s==='XY'){const q=y*2+x;return [q];}}
+  return {rows:idx(I,x,y),cols:idx(J,x,y)};
+}
+function draw(){
+  const spec=$('shSpec').value;const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border');
+  const cell=22;
+  // count holders per block for replication fading
+  const count={};for(let x=0;x<2;x++)for(let y=0;y<2;y++){const h=holds(spec,x,y);h.rows.forEach(r=>h.cols.forEach(c=>{count[r+','+c]=(count[r+','+c]||0)+1;}));}
+  for(let y=0;y<2;y++)for(let x=0;x<2;x++){
+    const px=40+x*210,py=30+y*130;ctx.fillStyle=css('--bg-card');ctx.strokeStyle=bd;ctx.fillRect(px,py,190,118);ctx.strokeRect(px,py,190,118);
+    ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('device (X='+x+', Y='+y+')',px+6,py+12);
+    const h=holds(spec,x,y);
+    h.rows.forEach(r=>h.cols.forEach(c=>{const bx=px+50+c*cell,by=py+20+r*cell;ctx.fillStyle=blockColor(r,c);ctx.globalAlpha=count[r+','+c]>1?0.35:1;ctx.fillRect(bx,by,cell-1,cell-1);ctx.globalAlpha=1;ctx.fillStyle='#000';ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText(''+r+c,bx+cell/2,by+15);}));
+  }
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';ctx.fillText('A'+spec.replace(/(\w)([XY]+)/g,(m,a,b)=>a+'_'+b).replace(/^/,'[').replace(/$/,']').replace(',',', '),480,40);
+  const perDev=Object.values(count).length? (holds(spec,0,0).rows.length*holds(spec,0,0).cols.length):16;
+  const rep=Object.values(count).filter(v=>v>1).length;
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  const lines=['blocks per device: '+perDev+' of 16','replicated blocks (faded): '+rep,'memory per device: '+(perDev/16*100).toFixed(0)+'% of the full array','mesh axes: X = mesh columns (2 devices), Y = mesh rows (2)','XY = both axes, 4 shards'];
+  lines.forEach((l,i)=>ctx.fillText(l,480,66+i*20));
+  $('shLabel').textContent='';
+}
+$('shSpec').onchange=draw;draw();onTheme(draw);
+
+// matmul rule
+const mv=document.getElementById('mmViz');const mctx=mv.getContext('2d');
+function parse(v){const [a,b]=v.split(',');return {d1:a[0],a1:a.slice(1),d2:b[0],a2:b.slice(1)};}
+function rule(){
+  const A=parse($('mmA').value),B=parse($('mmB').value),n=+$('mmN').value;const bytesM=n*n*2;const N=2;const f=(N-1)/N;
+  const aJ=A.a2,bJ=B.a1,aI=A.a1,bK=B.a2;
+  let text,comms=0,out;
+  if(!aJ&&!bJ){ if(aI&&bK&&aI===bK){text='Case 4: A[I_'+aI+'] and B[K_'+bK+'] are sharded on the same mesh axis along different dims — C cannot be sharded along '+aI+' twice. All-gather one input first (|B|·(N−1)/N), then multiply locally.';comms=bytesM*f;out='C[I_'+aI+', K]';}
+    else{text='Case 1: neither input is sharded along the contracting dim J. Every device multiplies its local blocks; C inherits the shardings. No communication.';out='C[I'+(aI?'_'+aI:'')+', K'+(bK?'_'+bK:'')+']';}}
+  else if(aJ&&bJ&&aJ===bJ){text='Case 2: J is sharded the same way ('+aJ+') on both inputs. Each device computes a partial product over its J shard, then an all-reduce over '+aJ+' makes C exact (or a reduce-scatter leaves it sharded). This is Megatron\'s MLP.';comms=2*bytesM*f;out='C[I, K] after all-reduce (partial sums before)';}
+  else {const which=aJ?'A':'B';text='Case 3: J is sharded on only '+which+'. All-gather '+which+' along J first (|'+which+'|·(N−1)/N), then it is case 1.';comms=bytesM*f;out='C[I'+(aI?'_'+aI:'')+', K'+(bK?'_'+bK:'')+']';}
+  return {text,comms,out,bytesM};
+}
+function drawMM(){
+  const W=mv.width,H=mv.height;mctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent');
+  const r=rule();mctx.fillStyle=txt;mctx.font='bold 14px sans-serif';mctx.textAlign='left';
+  mctx.fillText($('mmA').value.replace(/^/,'A[').replace(/(\w)([XY])/g,'$1_$2').replace(',',', ')+']  ·  '+$('mmB').value.replace(/^/,'B[').replace(/(\w)([XY])/g,'$1_$2').replace(',',', ')+']  →  '+r.out,24,30);
+  mctx.font='13px sans-serif';const words=r.text.split(' ');let line='',y=62;for(const w of words){const t=line+w+' ';if(mctx.measureText(t).width>W-48){mctx.fillText(line,24,y);line=w+' ';y+=20;}else line=t;}mctx.fillText(line,24,y);
+  mctx.fillStyle=acc;mctx.font='bold 13px sans-serif';
+  const gb=r.comms/1e9;mctx.fillText('communication: '+(r.comms?gb.toFixed(2)+' GB per device (BF16, n = '+$('mmN').value+', N = 2 devices on the axis; each matrix is '+(r.bytesM/1e9).toFixed(2)+' GB)':'none'),24,y+36);
+  mctx.fillStyle=dim;mctx.font='12px sans-serif';mctx.fillText('compare: the local matmul itself is 2·n³ FLOPs = '+(2*Math.pow(+$('mmN').value,3)/1e12).toFixed(1)+' TFLOP per device-share',24,y+58);
+}
+['mmA','mmB','mmN'].forEach(id=>$(id).onchange=drawMM);drawMM();onTheme(drawMM);
+})();
+
+// ---------- comms vs compute ----------
+(function(){
+const cv=document.getElementById('ccViz');if(!cv)return;const ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+const ACC={h100:{C:990e12,W:450e9},v5p:{C:459e12,W:600e9},trn2:{C:667e12,W:1000e9}};
+function model(){
+  const a=ACC[$('ccAcc').value],D=+$('ccD').value,F=D*+$('ccFD').value,T=+$('ccTP').value,B=Math.pow(2,+$('ccB').value);
+  const P=4*D*D+3*D*F;
+  const comp=b=>6*P*b/(a.C*T);           // seconds per layer, fwd+bwd, TP splits compute
+  const dp=4*P/T/a.W;                    // bytes/param ≈4 (bf16 grads all-reduce ≈ 2·2(N−1)/N), weights per device shrink with TP
+  const tp=b=>T>1?2*(2*2*b*D)*(T-1)/T/a.W:0; // two all-reduces of activations per layer
+  return {a,D,F,T,B,P,comp,dp,tp};
+}
+function fmt(s){return s<1e-3?(s*1e6).toFixed(0)+' µs':(s*1e3).toFixed(2)+' ms';}
+function draw(){
+  const m=model();const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn');
+  $('ccTPL').textContent=m.T;$('ccBL').textContent=m.B.toLocaleString();
+  $('ccComp').textContent=fmt(m.comp(m.B));$('ccDP').textContent=fmt(m.dp);$('ccTPt').textContent=m.T>1?fmt(m.tp(m.B)):'— (TP=1)';
+  const Bstar=m.dp/(6*m.P/(m.a.C*m.T));$('ccBstar').textContent=Math.round(Bstar).toLocaleString();
+  // plot: x log2 tokens 128..131072, y log time
+  const x0=60,y0=H-50,pw=W-x0-220,ph=H-90;
+  const xs=[];for(let e=7;e<=17;e+=0.25)xs.push(Math.pow(2,e));
+  const series=[['compute',xs.map(b=>m.comp(b)),acc],['DP / FSDP comms',xs.map(_=>m.dp),warn],['TP comms',xs.map(b=>Math.max(m.tp(b),1e-9)),acc2]];
+  const all=series.flatMap(s=>s[1]).filter(v=>v>1e-8);const ymin=Math.min(...all),ymax=Math.max(...all);
+  const X=b=>x0+(Math.log2(b)-7)/10*pw,Y=t=>y0-(Math.log10(t)-Math.log10(ymin))/(Math.log10(ymax)-Math.log10(ymin)+1e-9)*ph;
+  ctx.strokeStyle=bd;ctx.strokeRect(x0,y0-ph,pw,ph);
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';for(let e=7;e<=17;e+=2)ctx.fillText(Math.pow(2,e).toLocaleString(),X(Math.pow(2,e)),y0+16);
+  ctx.fillText('tokens per device (log)',x0+pw/2,y0+34);ctx.save();ctx.translate(16,y0-ph/2);ctx.rotate(-Math.PI/2);ctx.fillText('time per layer (log)',0,0);ctx.restore();
+  series.forEach(([name,ys,col],i)=>{ctx.strokeStyle=col;ctx.lineWidth=2;ctx.beginPath();xs.forEach((b,j)=>{if(ys[j]<=1e-8)return;const px=X(b),py=Y(ys[j]);j?ctx.lineTo(px,py):ctx.moveTo(px,py);});ctx.stroke();
+    ctx.fillStyle=col;ctx.fillRect(x0+pw+20,40+i*22,12,12);ctx.fillStyle=dim;ctx.textAlign='left';ctx.fillText(name,x0+pw+38,51+i*22);});
+  // crossover marker
+  if(Bstar>128&&Bstar<131072){ctx.strokeStyle=warn;ctx.setLineDash([4,4]);ctx.beginPath();ctx.moveTo(X(Bstar),y0);ctx.lineTo(X(Bstar),y0-ph);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=warn;ctx.textAlign='left';ctx.fillText('DP comms hidden beyond ≈'+Math.round(Bstar).toLocaleString()+' tokens/device',X(Bstar)+6,y0-ph+16);}
+  // current B marker
+  ctx.strokeStyle=acc;ctx.setLineDash([2,3]);ctx.beginPath();ctx.moveTo(X(m.B),y0);ctx.lineTo(X(m.B),y0-ph);ctx.stroke();ctx.setLineDash([]);
+  const ratioTP=m.T>1?(m.comp(m.B)/m.tp(m.B)):Infinity;const thr=(4/9)*m.a.C/m.a.W;
+  ctx.fillStyle=dim;ctx.textAlign='left';ctx.font='12px sans-serif';
+  const rules=['rule of thumb (DP/FSDP): free when tokens/device > (2/3)·C/W ≈ '+Math.round((2/3)*m.a.C/m.a.W).toLocaleString(),'rule of thumb (TP): free while F/TP > (4/9)·C/W ≈ '+Math.round(thr).toLocaleString()+'  — here F/TP = '+Math.round(m.F/m.T).toLocaleString()+(m.T>1?(m.F/m.T>thr?' ✓ hidden':' ✗ exposed'):''),'TP compute/comms ratio at this B: '+(isFinite(ratioTP)?ratioTP.toFixed(1)+'×':'n/a')+' (does not change with B)'];
+  rules.forEach((r,i)=>ctx.fillText(r,x0+pw+20,120+i*20));
+}
+['ccAcc','ccD','ccFD','ccTP','ccB'].forEach(id=>$(id).oninput=draw);draw();onTheme(draw);
+})();
+
+// ---------- cluster topology ----------
+(function(){
+const cv=document.getElementById('topoViz');if(!cv)return;const ctx=cv.getContext('2d');const $=id=>document.getElementById(id);
+const SYS={
+ hgx:{up:900,out:50,dom:8,desc:'8 GPUs, NVSwitch: every GPU reaches every other at ≈900 GB/s; 400 Gb/s (≈50 GB/s) InfiniBand per GPU leaves the node',draw:'node'},
+ superpod:{up:900,out:50,dom:8,desc:'128 nodes × 8 GPUs; inside a node NVSwitch ≈900 GB/s, between nodes an InfiniBand fat tree at ≈50 GB/s per GPU',draw:'pod'},
+ nvl72:{up:1800,out:100,dom:72,desc:'18 compute trays × 4 GPUs = 72 GPUs on one NVLink-5 switched domain at ≈1.8 TB/s per GPU; ≈800 Gb/s (≈100 GB/s) per GPU leaves the rack',draw:'rack'},
+ tpu:{up:600,out:600,dom:64,desc:'4×4×4 slice of a 3-D torus; each chip links to 6 neighbours over ICI (≈4.8 Tb/s ≈ 600 GB/s total); the pod is one fabric, no separate scale-out tier until the data-center network',draw:'torus'},
+ trn2:{up:1000,out:100,dom:64,desc:'4 Trn2 servers × 16 chips joined by NeuronLink into one 64-chip UltraServer (≈1 TB/s per chip, 2-D torus); EFA ≈ 100 GB/s per chip out (approximate)',draw:'ultra'}};
+function draw(){
+  const key=$('topoSel').value,S=SYS[key],ov=$('topoOverlay').checked;const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn');
+  $('topoUp').textContent='≈'+S.up+' GB/s';$('topoOut').textContent='≈'+S.out+' GB/s';$('topoRatio').textContent=(S.up/S.out).toFixed(0)+'×';$('topoDom').textContent=S.dom;
+  function gpu(x,y,sz,col){ctx.fillStyle=col;ctx.fillRect(x,y,sz,sz);ctx.strokeStyle=bd;ctx.strokeRect(x,y,sz,sz);}
+  if(S.draw==='node'){const cx=300,cy=200;for(let i=0;i<8;i++){const a=i/8*Math.PI*2;const x=cx+Math.cos(a)*120,y=cy+Math.sin(a)*120;for(let j=i+1;j<8;j++){const b=j/8*Math.PI*2;ctx.strokeStyle=acc;ctx.globalAlpha=0.35;ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(cx+Math.cos(b)*120,cy+Math.sin(b)*120);ctx.stroke();ctx.globalAlpha=1;}}
+    for(let i=0;i<8;i++){const a=i/8*Math.PI*2;gpu(cx+Math.cos(a)*120-14,cy+Math.sin(a)*120-14,28,acc);}
+    ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText('NVSwitch: all-to-all ≈900 GB/s',cx,cy+4);
+    ctx.setLineDash([5,5]);ctx.strokeStyle=warn;ctx.beginPath();ctx.moveTo(cx+150,cy);ctx.lineTo(cx+260,cy);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=warn;ctx.textAlign='left';ctx.fillText('IB ≈50 GB/s per GPU → other nodes',cx+160,cy-10);}
+  else if(S.draw==='pod'){for(let n=0;n<16;n++){const x=40+(n%8)*95,y=60+Math.floor(n/8)*150;ctx.strokeStyle=acc;ctx.strokeRect(x,y,80,90);for(let g=0;g<8;g++)gpu(x+8+(g%4)*17,y+8+Math.floor(g/4)*17,14,acc);ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText('node '+n,x+40,y+82);}
+    ctx.setLineDash([5,5]);ctx.strokeStyle=warn;for(let n=0;n<16;n++){const x=80+(n%8)*95,y=60+Math.floor(n/8)*150;ctx.beginPath();ctx.moveTo(x,y+(n<8?90:0));ctx.lineTo(x,205);ctx.stroke();}ctx.beginPath();ctx.moveTo(60,205);ctx.lineTo(800,205);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle=warn;ctx.textAlign='left';ctx.font='12px sans-serif';ctx.fillText('InfiniBand fat tree ≈50 GB/s per GPU (16 of 128 nodes shown)',60,222);}
+  else if(S.draw==='rack'){ctx.strokeStyle=acc;ctx.strokeRect(120,30,360,340);for(let t=0;t<18;t++){const y=40+t*18;for(let g=0;g<4;g++)gpu(140+g*80,y,14,acc);}
+    ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('18 trays × 4 GPUs: one NVLink-5 domain, ≈1.8 TB/s per GPU',500,80);ctx.fillStyle=dim;ctx.fillText('NVSwitch trays connect all 72',500,100);
+    ctx.setLineDash([5,5]);ctx.strokeStyle=warn;ctx.beginPath();ctx.moveTo(480,250);ctx.lineTo(640,250);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle=warn;ctx.fillText('≈100 GB/s per GPU to other racks',500,240);}
+  else if(S.draw==='torus'){const ox=140,oy=90;for(let z=0;z<4;z++)for(let y=0;y<4;y++)for(let x=0;x<4;x++){const px=ox+x*70+z*22,py=oy+y*60-z*18;ctx.strokeStyle=acc2;ctx.globalAlpha=0.5;if(x<3){ctx.beginPath();ctx.moveTo(px+8,py+8);ctx.lineTo(px+78,py+8);ctx.stroke();}if(y<3){ctx.beginPath();ctx.moveTo(px+8,py+8);ctx.lineTo(px+8,py+68);ctx.stroke();}if(z<3){ctx.beginPath();ctx.moveTo(px+8,py+8);ctx.lineTo(px+30,py-10);ctx.stroke();}ctx.globalAlpha=1;}
+    for(let z=3;z>=0;z--)for(let y=0;y<4;y++)for(let x=0;x<4;x++){gpu(ox+x*70+z*22,oy+y*60-z*18,16,acc2);}
+    ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('ICI 3-D torus: 6 neighbours per chip, wraparound links',520,120);ctx.fillStyle=dim;ctx.fillText('no NVLink-vs-IB cliff inside the pod',520,140);}
+  else if(S.draw==='ultra'){for(let s=0;s<4;s++){const x=60+s*200,y=90;ctx.strokeStyle=acc;ctx.strokeRect(x,y,170,170);for(let g=0;g<16;g++)gpu(x+12+(g%4)*38,y+12+Math.floor(g/4)*38,26,acc);ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='center';ctx.fillText('Trn2 server '+s,x+85,y+188);}
+    ctx.strokeStyle=acc;ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(230,175);ctx.lineTo(860,175);ctx.stroke();ctx.lineWidth=1;ctx.fillStyle=txt;ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillText('NeuronLink joins the 4 servers into one 64-chip domain (≈1 TB/s per chip)',60,310);
+    ctx.fillStyle=warn;ctx.fillText('EFA ≈100 GB/s per chip to other UltraServers (dashed)',60,330);}
+  if(ov){ctx.font='bold 12px sans-serif';ctx.textAlign='left';ctx.fillStyle=acc;ctx.fillText('TP: inside the scale-up domain only',600,H-70);ctx.fillStyle=acc2;ctx.fillText('PP: across domains is fine (one activation per microbatch)',600,H-50);ctx.fillStyle=warn;ctx.fillText('DP / FSDP: spans everything (once per step)',600,H-30);}
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.textAlign='left';const words=S.desc.split(' ');let line='',y=H-18;ctx.fillText(S.desc.length>120?S.desc.slice(0,118)+'…':S.desc,24,y);
+}
+$('topoSel').onchange=draw;$('topoOverlay').onchange=draw;draw();onTheme(draw);
 })();
 </script>
 </body>
