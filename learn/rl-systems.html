@@ -14,7 +14,7 @@
 <h1>RL Post-Training Systems: RLVR, Agentic RL and the Trainer–Rollout Machine</h1>
 <p class="dim">The <a href="training.html">training chapter</a> explained <em>what</em> RLHF, DPO and GRPO optimize. This chapter is about the machine that runs them at frontier scale: an inference engine generating millions of rollouts, verifiers and environments scoring them, a distributed trainer updating a dense or mixture-of-experts policy, and the weight-sync loop that ties them together. It is the systems counterpart of post-training — and the part a model-customization lead actually spends their time on.</p>
 
-<div class="card audio-card"><h3>🎧 Listen to this chapter (15:51)</h3><audio controls preload="none" src="audio/rl-systems.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/rl-systems.txt">Read the transcript</a>.</p></div>
+<div class="card audio-card"><h3>🎧 Listen to this chapter (20:51)</h3><audio controls preload="none" src="audio/rl-systems.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/rl-systems.txt">Read the transcript</a>.</p></div>
 <h2 id="why">1. Why RL after SFT, and which objective</h2>
 <p>Supervised fine-tuning teaches a model to imitate demonstrations. It cannot teach the model to <em>search over its own outputs</em>: to try a derivation, notice it fails a check, and prefer the attempt that passes. RL closes that gap by sampling from the model, scoring the samples, and pushing probability toward what scored well. For a decade the scoring came from humans (RLHF: a reward model trained on preferences, optimized with PPO). The 2025 shift — DeepSeek-R1, Tulu 3's "RL with verifiable rewards", Kimi K1.5 — was to score with <strong>verifiers</strong> instead: an exact-answer checker for math, unit tests for code, a compiler, a schema validator. Verifiable rewards are cheap, unhackable in ways reward models are not, and scale to millions of problems. The visible side effect is the <em>reasoning-length effect</em>: when the reward only cares about the final answer, the policy learns to spend more tokens thinking, because longer chains of thought pass the checker more often.</p>
 <p>The objectives are a family with one shared skeleton — a policy-gradient weighted by an advantage, kept near the old policy by a ratio clip or a KL penalty — and different answers to "where does the baseline come from?":</p>
@@ -204,7 +204,116 @@ def build_loss_mask(segments):
 # The same mask multiplies per-token loss in grpo_loss() above; env tokens still sit in the context for attention,
 # they simply contribute no gradient. Forgetting this trains the model to imitate tool outputs.</div>
 
-<h2 id="data">5. Data and curriculum for RL</h2>
+<h2 id="rft">5. Multi-turn RFT for agents: the end-to-end recipe</h2>
+<p>"RFT" is the most overloaded acronym in post-training, and the two things it names are both in this recipe, so fix the vocabulary first:</p>
+<ul>
+<li><strong>RFT-1, Rejection-sampling Fine-Tuning</strong>: sample <em>k</em> candidate solutions per prompt, keep only those a verifier passes, deduplicate, and run ordinary supervised fine-tuning on the survivors. It is SFT whose data a grader produced; there is no policy gradient. <a href="customization.html">Chapter 14</a> shows the funnel and the collapse you avoid by filtering.</li>
+<li><strong>RFT-2, Reinforcement Fine-Tuning</strong> as a product and recipe (OpenAI's RFT API, and its open equivalents built on verl, TRL or NeMo RL): reinforcement learning on a <em>small</em> set of tasks — dozens to a few thousand — with a <em>programmable grader</em> in place of a learned reward model, GRPO or PPO underneath. The pitch is that a domain expert who can write a checker can improve a model on their task without a preference dataset.</li>
+</ul>
+<p>They relate as stages, not alternatives: RFT-1 is the warm start that gives RFT-2 a non-zero success rate to climb from. In the rest of this section "RFT" means the full recipe, and the two stages are named when it matters.</p>
+<table class="cmp">
+<tr><th></th><th>Rejection-sampling FT (RFT-1)</th><th>Reinforcement FT (RFT-2)</th></tr>
+<tr><td>Signal</td><td>Grader selects trajectories; loss is SFT on tokens</td><td>Grader scores trajectories; loss is a policy gradient on advantages</td></tr>
+<tr><td>Data needed</td><td>Enough tasks that <em>some</em> samples pass (hundreds to thousands)</td><td>Dozens to thousands of tasks with checkable outcomes; prompts, not answers</td></tr>
+<tr><td>Compute</td><td>One sampling pass plus an SFT run</td><td>Repeated rollout + update loops; generation dominates (Section 2)</td></tr>
+<tr><td>What it teaches</td><td>Imitate your own successes: format, tool use, common paths</td><td>Search beyond imitation: strategies the grader rewards that SFT never saw</td></tr>
+<tr><td>When to use</td><td>First; always; cheap and stable</td><td>When RFT-1 plateaus below the eval bar and the grader is trustworthy</td></tr>
+<tr><td>Failure mode</td><td>Mode collapse toward easy tasks; silently learning grader loopholes present in kept samples</td><td>Reward hacking, length blow-up, regression on general ability, all-zero groups on hard tasks</td></tr>
+</table>
+
+<h3>The recipe, stage by stage</h3>
+<ol>
+<li><strong>Task design.</strong> An agentic RFT task is a <em>prompt plus an environment plus a checkable end state</em>: a SWE-bench-style issue in a repo with hidden tests; a τ-bench-style customer-service task whose success is a database state (the right booking exists, the refund was issued) rather than a transcript; a data-analysis task whose answer a checker can compare numerically. Define the tool schemas the policy may call, the sandbox image, and a turn and token budget per episode — budgets are part of the task, because an agent that solves everything in 200 turns is not deployable. Aim for tasks with a spread of difficulty; a set the SFT model solves 0% or 100% of the time teaches nothing (Section 6).</li>
+<li><strong>Graders.</strong> Prefer <em>outcome graders</em>: tests pass, final state matches, exact or numerically-tolerant answer. Add <em>rubric or LLM graders</em> only where outcomes are not checkable, and calibrate them against human labels before trusting them (<a href="customization.html">Chapter 14</a>). <em>Process rewards</em> — per-turn scores or a process reward model (PRM) — densify signal but are the easiest to hack: a policy will happily emit turns that <em>look</em> productive. A composite reward works in practice: outcome (dominant) plus small shaping terms for format validity and efficiency (fewer turns, fewer tokens). Build anti-hacking in from day one: hidden tests the policy never sees, write-protected test directories, a rule that test-file edits score zero, and a held-out grader to audit the training grader (Section 3's divergence curve is what you are preventing).</li>
+<li><strong>Trajectory collection.</strong> Roll the policy with real tool execution in the environment servers (Section 4), <em>k</em> trajectories per task. Store everything the update needs later: token ids, per-token log-probabilities from the rollout engine, the policy/environment source mask, tool outputs, the grader's verdict and any per-turn scores. Trajectories are long and uneven — a 30-turn episode with test runs can take minutes — which is why this stage is asynchronous in every serious system.</li>
+<li><strong>Rejection-sampled SFT warm start (RFT-1).</strong> Filter the collected trajectories by the grader, deduplicate near-identical ones, and SFT on the successes with the environment tokens masked out of the loss — the SWE-Gym / agent-trajectory-SFT pattern. This matters more for agents than for math: sparse terminal rewards mean a weak policy produces all-zero groups, and GRPO's group-relative advantage is exactly zero on an all-zero group. The warm start buys the non-zero success rate that RL needs to have anything to contrast.</li>
+<li><strong>Multi-turn RL (RFT-2).</strong> Run GRPO (or PPO) over whole trajectories: the loss is computed only on policy tokens (the mask from Section 4), and the baseline is the group of <em>k</em> trajectories for the same task. The design decision is <em>credit assignment</em>. <em>Trajectory-level</em>: broadcast one terminal advantage to every policy token in the episode — unbiased, simple, and the default; it works for short episodes and gets noisy as episodes lengthen, because the one wasted turn and the five good ones get the same credit. <em>Turn-level</em>: give each turn its own advantage from per-turn process rewards — informative but only as trustworthy as the process reward. <em>Step-level group baselines</em>: compare the same intermediate state across the <em>k</em> sampled trajectories (when trajectories revisit equivalent states, actions taken from that state form their own group), which recovers per-step signal from the outcome reward alone without a PRM — the idea behind the GiGPO family of methods; the names and exact estimators are still moving, the idea is stable. Alongside: dynamic sampling of tasks by current solve rate, a KL term or clip bounds to keep the policy near the SFT start, length and turn penalties so efficiency does not regress, and asynchronous rollouts (Section 2), because tool latency makes trajectory times wildly uneven and a synchronous step waits for the slowest episode.</li>
+<li><strong>Evaluation.</strong> Hold out tasks the policy never trained on, in the same environment. Report pass@1 and pass@k (RL often raises pass@1 more than pass@k — Section 8), and report <em>success against cost</em>: tokens, tool calls and turns per solved task, because an agent that doubles its turns to gain two points may be a worse product. Run the broad regression suite every checkpoint (chat quality, instruction following, safety), and audit the grader itself: sample passing trajectories and check by hand that they deserved to pass.</li>
+<li><strong>Iteration.</strong> The task set is the product. Grow it from production failures — every escalation or user correction is a candidate task with a known-good end state — and re-run the recipe; this is the data flywheel of <a href="customization.html">Chapter 14</a> applied to agents.</li>
+</ol>
+
+<table class="cmp">
+<tr><th>Reward / grader type</th><th>Example</th><th>Signal density</th><th>Hackability</th><th>Use</th></tr>
+<tr><td>Outcome, programmatic</td><td>Hidden tests pass; final DB state matches; numeric answer within tolerance</td><td>Sparse (terminal)</td><td>Low if tests are hidden and the sandbox is write-protected</td><td>Always the primary term</td></tr>
+<tr><td>Rubric / LLM grader</td><td>"Is the explanation correct and complete?" scored 0–10 by a judge model</td><td>Terminal, graded</td><td>Medium: verbosity, position and self-preference biases</td><td>Only when outcomes aren't checkable; calibrate first</td></tr>
+<tr><td>Process reward (per-turn or PRM)</td><td>Each turn scored for progress toward the goal</td><td>Dense</td><td>High: "looks productive" is easy to fake</td><td>Shaping or step-level signal; never the sole term</td></tr>
+<tr><td>Format / efficiency</td><td>Valid tool-call JSON; fewer turns and tokens</td><td>Dense, cheap</td><td>Low, but can dominate if weighted too high</td><td>Small weight; prevents regressions</td></tr>
+</table>
+
+<div class="card">
+<h3>Interactive: credit assignment across a 6-turn episode</h3>
+<canvas id="creditViz" class="viz" width="900" height="360"></canvas>
+<div class="controls">
+  <label class="ctl">Scheme
+    <select id="creditMode">
+      <option value="terminal">terminal reward broadcast to every policy token</option>
+      <option value="turn">turn-level advantages from per-turn process rewards</option>
+      <option value="step">step-level group baselines (same state across the k samples)</option>
+    </select>
+  </label>
+  <label class="ctl">k trajectories <input type="range" id="creditK" min="2" max="16" value="8"> <span id="creditKl">8</span></label>
+  <button class="btn secondary" id="creditResample">Resample group</button>
+</div>
+<p class="caption">One sampled episode of six policy turns (tool observations in between are masked out and shown grey). Turn 3 is the wasted action — a destructive <code>rm</code> that the agent then has to undo. The bars are the advantage each turn's tokens receive under the chosen scheme, and the readout says how much of the total signal lands on the bad turn. Terminal broadcast gives every turn the same credit, so the bad turn is punished only through the whole episode's luck; process rewards single it out at once but can be gamed; step-level group baselines recover a per-turn signal from outcomes alone by comparing what the other <em>k−1</em> trajectories did from the same state — and the signal sharpens as <em>k</em> grows.</p>
+</div>
+
+<div class="formula"># Illustrative, framework-agnostic sketch of multi-turn GRPO for an agent (RFT-2). Real systems (verl AgentLoop,
+# NeMo RL, prime-rl) add batching, async rollouts, and resharding; the shape is this.
+def collect_group(env, engine, task, k):
+    trajs = []
+    for _ in range(k):                                  # k trajectories for the same task = one GRPO group
+        obs = env.reset(task); segs = [(tok(obs["prompt"]), "prompt")]; turns = []
+        done = False
+        while not done:
+            out = engine.generate(ctx=flat(segs), tools=obs["tools"])     # policy turn: thoughts + tool call
+            segs.append((out.tokens, "policy")); turns.append(out)        # keep per-token logprobs from the engine
+            obs_txt, r_step, done, info = env.step(parse_call(out.text))  # tool executes in the sandbox
+            segs.append((tok(obs_txt), "env"))                            # observation tokens: in context, not in loss
+            turns[-1].r_step = r_step                                     # per-turn process reward if the env gives one
+        ids, mask = build_loss_mask(segs)
+        trajs.append(dict(ids=ids, mask=mask, turns=turns, R=grade(env, info)))   # terminal outcome reward
+    return trajs
+
+def advantages(trajs, mode="trajectory"):
+    R = torch.tensor([t["R"] for t in trajs]); A_traj = (R - R.mean()) / (R.std() + 1e-6)   # group-relative
+    for t, a in zip(trajs, A_traj):
+        if mode == "trajectory":                        # broadcast one advantage to every policy token
+            t["adv"] = torch.full_like(t["mask"], a, dtype=torch.float) * t["mask"]
+        else:                                           # turn-level: per-turn process rewards, normalized in the group
+            per_turn = torch.tensor([u.r_step for u in t["turns"]])
+            per_turn = (per_turn - per_turn.mean()) / (per_turn.std() + 1e-6) + a      # outcome term still included
+            t["adv"] = expand_turn_adv(per_turn, t)      # repeat each turn's value over that turn's policy tokens
+    return trajs
+
+def train_step(policy, ref, trajs, eps=0.2, beta=0.01):
+    loss = 0.0
+    for t in trajs:
+        logp_new = policy.logprobs(t["ids"]); logp_old = t["logp_rollout"]; logp_ref = ref.logprobs(t["ids"])
+        ratio = torch.exp(logp_new - logp_old)
+        clipped = torch.minimum(ratio * t["adv"], torch.clamp(ratio, 1 - eps, 1 + eps) * t["adv"])
+        kl = torch.exp(logp_ref - logp_new) - (logp_ref - logp_new) - 1                 # k3 estimator
+        tok_loss = -(clipped - beta * kl) * t["mask"]                                    # masked to policy tokens
+        loss = loss + tok_loss.sum() / t["mask"].sum().clamp(min=1)                      # token-level aggregation
+    (loss / len(trajs)).backward(); optimizer.step(); optimizer.zero_grad()
+
+for step in range(num_steps):
+    tasks = sampler.by_solve_rate(low=0.1, high=0.9)          # dynamic sampling: skip all-0 / all-1 tasks
+    groups = [collect_group(env, engine, task, k=8) for task in tasks]   # async in practice (Section 2)
+    for g in groups: advantages(g, mode="trajectory")
+    train_step(policy, ref, [t for g in groups for t in g])
+    engine.load_weights(policy.state_dict())                  # sync new weights into the rollout engine</div>
+
+<div class="formula"># A composite grader for a repo task: outcome dominates, small shaping terms, explicit anti-hacking checks.
+def grade(env, info, max_turns=30):
+    if env.box.diff_touches("tests/") or env.box.diff_touches("hidden/"):
+        return 0.0                                              # editing tests is an automatic zero
+    passed = env.box.run("pytest -q hidden/", timeout=300).returncode == 0   # hidden tests the policy never saw
+    outcome = 1.0 if passed else 0.0
+    fmt = 0.05 if info.get("all_calls_parsed", True) else 0.0  # valid tool-call JSON throughout
+    eff = 0.05 * max(0.0, 1 - info["turns"] / max_turns)       # fewer turns is slightly better
+    return outcome + fmt + eff                                  # outcome in {0,1}; shaping never exceeds 0.1</div>
+
+<h2 id="data">6. Data and curriculum for RL</h2>
 <p>RL data is prompts, not answers — but <em>which</em> prompts decides whether a step teaches anything. A prompt the policy always solves yields a group of all-1s (zero advantage); a prompt it never solves yields all-0s (also zero). The useful prompts are the ones with a solve rate in the middle, where the group contains both successes and failures to contrast. Practical pipeline:</p>
 <ul>
 <li><strong>Pre-filter by solve rate</strong>: sample a few responses per prompt with the SFT checkpoint, keep prompts with pass rates roughly in [0.1, 0.9]. Re-estimate periodically; the band moves as the policy improves.</li>
@@ -214,7 +323,7 @@ def build_loss_mask(segments):
 <li><strong>Regression control</strong>: mix in SFT data (or add an SFT loss term) so chat quality, instruction following and safety do not decay while the model gets better at the verifier's tasks; evaluate every checkpoint on a broad suite and select by it (<a href="customization.html">Chapter 14</a>).</li>
 </ul>
 
-<h2 id="scale">6. Scaling RL to frontier models</h2>
+<h2 id="scale">7. Scaling RL to frontier models</h2>
 <h3>MoE-specific problems</h3>
 <p>Mixture-of-experts policies add a failure mode: as weights update, the router's top-k choices flip, so the <em>same token</em> is processed by different experts under π_θ and π_old. Per-token importance ratios then swing wildly for reasons unrelated to the policy's actual behavior, and PPO/GRPO-style training destabilizes. The fixes are to compute ratios at the sequence level with length normalization (<strong>GSPO</strong>), or to pin the routing from rollout time during the training forward pass ("routing replay"). Expert parallelism also has to exist on both sides — the engine needs EP for throughput, the trainer for memory — and weight sync must map expert shards between them.</p>
 <h3>Long rollouts and memory</h3>
@@ -256,10 +365,10 @@ def build_loss_mask(segments):
 <tr><td>Fraction of zero-advantage groups</td><td>Low</td><td>High = prompts too easy/hard; refresh the solve-rate filter</td></tr>
 </table>
 
-<h2 id="eval">7. Evaluating an RL'd model</h2>
+<h2 id="eval">8. Evaluating an RL'd model</h2>
 <p>Two pitfalls specific to RL. First, <strong>pass@1 vs pass@k</strong>: RLVR reliably raises pass@1 — the model's first answer is right more often — but several studies found the base model's pass@k at large k can match or exceed the RL'd model's, suggesting much of the gain is <em>sharpening</em> the distribution onto solutions the base model could already sample, rather than discovering new ones. Whether RL expands capability or concentrates it is an open debate; for a product you usually want sharpening, but report both numbers. Second, <strong>evaluation contamination through the verifier</strong>: if your RL prompts overlap your eval set (or your reward model was trained on it), the eval measures memorization of the reward, not generalization. Keep held-out verifiers and held-out prompt distributions, and check for behavioral regressions — verbosity, over-refusal, instruction-following drift — on a broad suite, not only the target domain. The methodology (what to measure, how to make it defensible to a customer) is <a href="customization.html">Chapter 14</a>'s subject.</p>
 
-<h2 id="frameworks">8. The framework landscape</h2>
+<h2 id="frameworks">9. The framework landscape</h2>
 <p>These move fast; the <em>roles</em> are stable even where the APIs are not. Choose by topology and by which engine/trainer pairing your team already operates.</p>
 <table class="cmp">
 <tr><th>Framework</th><th>Architecture</th><th>Good for</th><th>Trade-offs</th></tr>
@@ -299,10 +408,11 @@ trainer:
   nnodes: 16
   save_freq: 20                  # checkpoint policy + optimizer (+ buffer, if async)</div>
 
-<h2 id="reading">9. Where to go deeper</h2>
+<h2 id="reading">10. Where to go deeper</h2>
 <ul>
 <li><strong>Objectives</strong>: DeepSeekMath (GRPO) and the DeepSeek-R1 report; DAPO (ByteDance Seed, 2025); "Understanding R1-Zero-like training" (Dr. GRPO); Group Sequence Policy Optimization (GSPO, Qwen); Tulu 3 (the RLVR recipe, AI2).</li>
 <li><strong>Systems</strong>: HybridFlow (the verl paper) for the single-controller colocated design; the slime and Miles repositories for SGLang-native disaggregated/async RL; Kimi K1.5 and K2 technical reports for partial rollouts and large-scale RL infrastructure; the NeMo Gym and OpenEnv documentation for the environment-server pattern.</li>
+<li><strong>Multi-turn RFT for agents</strong>: OpenAI's Reinforcement Fine-Tuning guide (programmable graders, small task sets); SWE-Gym (training environments and agent-trajectory SFT for software engineering); τ-bench (state-checked tool-use tasks); GiGPO and related step-level credit-assignment papers for multi-turn agent RL (the estimators are still evolving — read them as a family); verl's multi-turn <em>AgentLoop</em> documentation; and the <a href="notes.html">notes library</a>'s verl multi-turn code walkthroughs and tokenization/masking notes.</li>
 <li><strong>Evaluation debate</strong>: "Does RL really incentivize reasoning capacity in LLMs beyond the base model?" (pass@k analysis) and responses.</li>
 <li>In this notebook: <a href="training.html">Training</a> for the objectives' origins, <a href="inference.html">Inference</a> and <a href="parallelism.html">Parallelism</a> for the engine and trainer internals, <a href="agents.html">Agents</a> for the loop you are training, <a href="customization.html">Customization &amp; Evals</a> for deciding when RL is even the right tool, and the <a href="flashcards.html">RL Systems</a> flashcard deck.</li>
 </ul>
@@ -502,6 +612,76 @@ function upd(){
   $('kTok').textContent=fmt(toks);$('kRoll').textContent=tm(roll);$('kTrain').textContent=tm(train);$('kRatio').textContent=(roll/train).toFixed(1)+' : 1';
 }
 ['cN','cG','cL','cA','cTP','cRN','cTN'].forEach(id=>$(id).oninput=upd);upd();
+})();
+
+// ---------- 5. credit assignment visualizer ----------
+(function(){
+const cv=document.getElementById('creditViz');if(!cv)return;const ctx=cv.getContext('2d');
+const TURNS=['plan & read task','edit parser.py','rm -rf build/ (wasted)','restore build/','edit tests call','run tests → submit'];
+const BAD=2;let k=8,group=null;
+const modeEl=document.getElementById('creditMode'),kEl=document.getElementById('creditK');
+// simulated process rewards for the shown episode (turn 3 is the bad one)
+const PROC=[0.6,0.8,-0.9,0.3,0.7,1.0];
+function resample(){
+  k=parseInt(kEl.value);document.getElementById('creditKl').textContent=k;
+  // k trajectories: outcomes and, per turn, whether the sibling took the bad action from the same state
+  group={R:[],badAt:[]};
+  for(let i=0;i<k;i++){const tookBad=Math.random()<0.45;group.badAt.push(tookBad);group.R.push(Math.random()<(tookBad?0.35:0.8)?1:0);}
+  // the displayed episode is trajectory 0: it took the bad action and still succeeded
+  group.badAt[0]=true;group.R[0]=1;draw();
+}
+function stats(a){const m=a.reduce((x,y)=>x+y,0)/a.length;const sd=Math.sqrt(a.reduce((x,y)=>x+(y-m)**2,0)/a.length);return {m,sd};}
+function advs(){
+  const mode=modeEl.value;const {m,sd}=stats(group.R);const Atraj=sd>1e-6?(group.R[0]-m)/sd:0;
+  if(mode==='terminal')return TURNS.map(()=>Atraj);
+  if(mode==='turn'){const {m:pm,sd:psd}=stats(PROC);return PROC.map(p=>(p-pm)/(psd+1e-6)+Atraj);}
+  // step-level: for each turn, compare outcome of trajectories that took the same action from this state
+  return TURNS.map((_,t)=>{
+    if(t!==BAD){ // other turns: siblings mostly agree; baseline is the group mean of successes
+      return Atraj*0.6;}
+    const same=group.R.filter((r,i)=>group.badAt[i]),other=group.R.filter((r,i)=>!group.badAt[i]);
+    if(!other.length||!same.length)return Atraj;
+    const ms=same.reduce((a,b)=>a+b,0)/same.length,mo=other.reduce((a,b)=>a+b,0)/other.length;
+    return (ms-mo)/(sd+1e-6)*1.2; // the bad action's value relative to the alternative, in group-std units
+  });
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),bd=css('--border'),acc=css('--accent'),acc2=css('--accent2'),dan=css('--danger');
+  const A=advs();const mode=modeEl.value;
+  ctx.font='12px sans-serif';ctx.textAlign='left';ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';
+  ctx.fillText('Episode 1 of '+k+' (outcome: tests pass, R = 1) — advantage per policy turn',20,24);
+  const x0=170,colW=(W-x0-40)/TURNS.length,base=200,scale=55;
+  // zero line
+  ctx.strokeStyle=bd;ctx.beginPath();ctx.moveTo(x0,base);ctx.lineTo(W-30,base);ctx.stroke();
+  TURNS.forEach((name,t)=>{
+    const x=x0+t*colW;
+    // observation block (masked) between turns
+    ctx.fillStyle='rgba(128,128,128,0.18)';ctx.fillRect(x+colW*0.62,base-12,colW*0.3,24);
+    ctx.fillStyle=dim;ctx.font='10px sans-serif';ctx.textAlign='center';ctx.fillText('obs',x+colW*0.77,base+4);
+    // advantage bar
+    const a=A[t],h=a*scale;
+    ctx.fillStyle=t===BAD?dan:(a>=0?acc2:acc);ctx.globalAlpha=0.9;
+    rr(ctx,x+6,h>=0?base-h:base,colW*0.5,Math.abs(h)||2,5);ctx.fill();ctx.globalAlpha=1;
+    ctx.fillStyle=txt;ctx.font='11px monospace';ctx.fillText(a.toFixed(2),x+6+colW*0.25,h>=0?base-h-6:base+Math.abs(h)+14);
+    // labels
+    ctx.fillStyle=t===BAD?dan:dim;ctx.font=(t===BAD?'bold ':'')+'11px sans-serif';
+    wrap(ctx,'T'+(t+1)+': '+name,x+6+colW*0.25,base+90,colW-10,13);
+  });
+  // readout
+  const total=A.reduce((s,v)=>s+Math.abs(v),0)||1;const badShare=Math.abs(A[BAD])/total;
+  const neg=A[BAD]<0;
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.textAlign='left';
+  ctx.fillText('Signal landing on the bad turn: '+Math.round(badShare*100)+'% of total |advantage|'+(neg?' — and it is negative (punished)':' — and it is POSITIVE (the wasted action gets rewarded)'),20,H-40);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  const note={terminal:'Every turn inherits the episode\'s luck: a success rewards the rm -rf too. Unbiased, zero extra machinery, noisy at long horizons.',
+    turn:'Per-turn process rewards isolate T3 immediately — but a policy can learn to make turns look productive to the scorer.',
+    step:'Siblings that skipped the rm -rf from the same state succeed more often, so the contrast punishes T3 using outcomes only; raise k to sharpen it.'}[mode];
+  wrap(ctx,note,20,H-20,W-40,14);
+}
+function wrap(c,text,x,y,w,lh){const words=text.split(' ');let line='',yy=y;const align=c.textAlign;for(const wd of words){const t=line+wd+' ';if(c.measureText(t).width>w&&line){c.fillText(line.trim(),x,yy);line=wd+' ';yy+=lh;}else line=t;}c.fillText(line.trim(),x,yy);}
+modeEl.onchange=draw;kEl.oninput=resample;document.getElementById('creditResample').onclick=resample;
+resample();onTheme(draw);
 })();
 </script>
 </body>
