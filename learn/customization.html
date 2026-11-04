@@ -22,7 +22,7 @@
 <h1>Model Customization Strategy, Data &amp; Evaluation</h1>
 <p class="dim">The chapter for the person who has to <em>decide</em>: a customer wants a model that is better, faster, or cheaper at their task — which of a dozen techniques do you reach for, what data makes it work, and how do you prove it worked? This is the technical-lead counterpart of the <a href="training.html">training</a> and <a href="inference.html">inference</a> chapters: less about how the machinery runs, more about choosing the machinery and making the choice defensible.</p>
 
-<div class="card audio-card"><h3>🎧 Listen to this chapter (16:10)</h3><audio controls preload="none" src="audio/customization.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/customization.txt">Read the transcript</a>.</p></div>
+<div class="card audio-card"><h3>🎧 Listen to this chapter (17:11)</h3><audio controls preload="none" src="audio/customization.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/customization.txt">Read the transcript</a>.</p></div>
 <h2 id="framing">1. Framing the problem: from a business ask to an eval bar</h2>
 <p>Customization engagements fail at the start, not the end. The failure mode is beginning with a technique ("we want to fine-tune Llama") instead of a target. A technical lead's first job is to turn an ambiguous ask into three numbers that an executive and an engineer both accept, and to agree on how those numbers will be measured <em>before</em> any model is touched. The three numbers are always the same triad:</p>
 <ul>
@@ -257,19 +257,57 @@ def paired_delta_ci(a, b, iters=5000, seed=0):
 #        mean_gain, lo, hi = paired_delta_ci(a, b)   # ship only if lo > 0 and the regression suite holds</div>
 <p><strong>Task-specific suites</strong> you should know the shape of: SWE-bench (resolve a real GitHub issue so hidden tests pass — the coding-agent standard; its Verified subset fixes broken tasks), τ-bench (agents following policies with tools and simulated users — measures consistency across trials with pass^k), and domain exam sets (bar exams, USMLE-style, internal certification questions) for vertical models. Build your customer's suite in the same shape as the public one closest to their task so results are interpretable to outsiders.</p>
 
-<h2 id="encoders">8. Not everything is a decoder: fine-tuning GLiNER-style encoders vs LLaMA/Qwen-style decoders for extraction</h2>
+<h2 id="encoders">8. Not everything is a decoder: GLiNER and Laya — encoder-side fine-tuning vs decoder fine-tuning</h2>
 <p>The customization ladder above assumes the model is a generative decoder. For a large class of customer asks — pull the entities, fields, and relations out of documents at volume — that assumption quietly costs you a hundredfold in latency and dollars. <strong>GLiNER</strong> (Zaratiana, Tomeh, Holat and Charnois, 2023/2024) is the clearest example of the alternative: a <em>bidirectional encoder</em> (a DeBERTa-v3 or mDeBERTa backbone, roughly 50M–300M parameters) that reads the entity-type names as a prompt prefix in front of the text, builds a representation for every candidate span up to a maximum width, embeds each label name into the same space, and scores every span×label pair with a sigmoid. There is no generation: one forward pass yields every entity of every requested type, and because the label names are <em>inputs the model reads</em>, a label it has never seen works zero-shot. The family has grown around that trick — multi-task and bi-encoder GLiNER variants (labels encoded once and cached), <strong>GLiClass</strong> for zero-shot text classification, <strong>GLiREL</strong> for relation extraction — while extraction-tuned small decoders such as <strong>NuExtract</strong> occupy the middle ground: still generative, but trained only to emit JSON that matches a template.</p>
-<h3>How fine-tuning differs from decoder SFT</h3>
+<h3 id="laya">Laya: an encoder that <em>decides</em> instead of extracting</h3>
+<p>GLiNER answers "which spans are entities of these types?". The other encoder-side question a customer asks at volume is "<em>what should we do with this?</em>" — route the ticket, score the urgency, flag the churn risk, pick the next action. <strong>Laya</strong> (NandhaKishorM/laya, Apache-2.0) is built for exactly that: a <em>non-autoregressive, multilingual "System 1" decision engine</em>. An encoder backbone — ModernBERT-large (421M parameters, 512-token context) for the English checkpoint, mmBERT-base (322M, 1,024 tokens, extendable to 8,192) for the 100+-language checkpoint, and a ModernBERT-large <code>laya-typed-decisions</code> fine-tune — carries a <em>decision head</em> that answers typed questions over any state (a ticket, an email, a JSON document, an agent's observation) in <strong>one forward pass</strong>: about 33 ms per question on a T4 and 7.2 ms per question batched (README checkpoints table; BENCHMARKS.md reports 32.8 ms p50). Three question types cover most routing work: <code>choice</code> (pick one of the criteria you name), <code>score</code> (an ordinal rating over named rungs), and <code>noul</code> (the probability that the answer is yes). Nothing is generated, so there is nothing to parse and nothing to hallucinate; outputs are probabilities, calibrated with one temperature per question type (expected calibration error 0.081 after fitting, against 0.246 for the published TypeSafe Jev numbers it is benchmarked against). A <code>Router</code> detects the script and language of the state and sends it to the right checkpoint; <code>max_len=8192</code> lets the multilingual checkpoint read long documents, with the README's own caveat that accuracy is 16–18 of 20 test requests up to about 4,000 tokens of preceding text and more variable beyond. It ships as a Python package with an HTTP and an MCP server, LangChain/LangGraph, LlamaIndex and CrewAI adapters, ONNX Runtime and a TileLang GPU fast path, and SDKs for TypeScript, Go, Rust, Java and .NET — the shape of a component you drop <em>inside</em> an agent loop (<a href="agents.html">Ch. 22</a>) rather than a model you chat with. In the terms of <a href="architectures.html">Chapter 5</a>'s System&nbsp;1 vs System&nbsp;2 section, it is the deliberately System-1 half: fast, calibrated pattern completion for decisions whose answer space you can name in advance.</p>
+<div class="formula"># Laya quickstart (README): typed decisions over a state, one forward pass
+from laya import Router
+router = Router()                      # downloads a checkpoint on first use; Router(preload=True) loads all three
+
+state = "Hi, we were billed twice for March. Please refund the duplicate today or we will cancel our plan."
+questions = {
+    "department": {"type": "choice", "instructions": "Which department should handle this?",
+                   "criteria": {"billing": "invoices, payments, refunds",
+                                "technical": "bugs, outages, system errors",
+                                "other": "everything else"}},
+    "urgency":    {"type": "score",  "instructions": "How urgent is this?",
+                   "criteria": ["not urgent", "soon", "blocking"]},
+    "churn_risk": {"type": "noul",   "instructions": "Does the user threaten to cancel or leave?"},
+}
+result = router.predict(state, questions)            # add max_len=8192 for long documents
+result["answers"]["department"]["choice"]           # "billing"
+result["answers"]["churn_risk"]["noul"]             # probability the answer is yes
+result["routing"]["model"]                          # "english" | "multilingual" (chosen by script/language)</div>
+<p><strong>How it is trained, and why that matters.</strong> The decision head is not trained with next-token cross-entropy and not with plain classification either. Laya's recipe, <strong>RLCD</strong>, is reinforcement learning against <em>strictly proper scoring rules</em>: the reward for a predicted distribution over the answers is its proper score (a log or Brier-type score) against the label, so the reward-maximizing policy is the <em>calibrated truth</em> rather than a confident guess — the same property that makes proper scoring rules the right loss for forecasting. The repo describes the optimizer as a GRPO-style policy gradient on the head (README's Fine-Tuning section) and, in the browser-agent write-up, as "gold-distribution soft targets + noisy-logit policy gradient + soft cross-entropy" (<code>docs/finetune_browser_agent.md</code>). Read it with <a href="rl-systems.html">Chapter 15</a> in mind: a one-step typed decision is a <em>contextual bandit</em> (<a href="robot-learning.html#ladder">Ch. 19's RL ladder</a>), so there is no trajectory, no value bootstrapping and no rollout engine — just a group of sampled answers per state, their proper-score rewards, and a policy-gradient step on a head that answers in one pass. After training, one temperature per type (<code>choice</code>, <code>score</code>, <code>noul</code>) is fitted on held-out items and written into the exported config.</p>
+<div class="formula"># RLCD, in the shape of the loss (sketch; see notebooks/laya_finetune_typed_decisions_mps.py and the Kaggle notebook)
+# p = head(state, question) -> distribution over answers; y = gold answer (or gold distribution)
+# proper scores: log score = log p[y] ; Brier score = -(sum_k (p_k - onehot_y_k)^2)   # maximized by p == truth
+# GRPO-style step: sample a group of answers from p (noisy logits), reward each with the proper score,
+# advantage = reward - group mean, policy-gradient on log p(answer), plus a soft cross-entropy to the
+# gold distribution as an anchor; then fit one temperature per question type on held-out items.
+
+# Fine-tuning entry points (README "Fine-Tuning"):
+#   notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb   # 2xT4 DDP: build dataset -> RLCD -> calibrate -> eval -> push
+#   python notebooks/laya_finetune_typed_decisions_mps.py --epochs 4 --micro-batch 1 --grad-accum 32   # Apple Silicon / CPU
+#   gradient checkpointing on the encoder and the head (model.head_checkpointing = True); 4 epochs over ~30k questions
+#   takes roughly 4-5 hours on 2xT4; --calib-max 400 held-out items fit the (choice, score, noul) temperatures.</div>
+<p><strong>The honest numbers.</strong> The shipped checkpoints are near chance <em>zero-shot</em> on the repo's typed-decisions benchmark (0.36 and 0.35 accuracy against a 0.318 random baseline, README) — and the fine-tuned <code>laya-typed-decisions</code> checkpoint reaches <strong>0.766</strong> on the same 2,000 decisions, above TypeSafe Jev's published 0.727 and above the 0.735 self-agreement ceiling of the teacher that labelled the data. On public English suites the English checkpoint scores 0.953 on AG News and 0.600 on DAIR Emotion; across all 51 MASSIVE languages the multilingual checkpoint reaches 0.40 macro accuracy on 20-way intent (random 0.05) while the English checkpoint wins only on English (0.82 vs 0.71) — and <code>BENCHMARKS.md</code> is unusually candid that the committed multilingual columns did not reproduce on later code and were re-run on three machines (issue #208) before the table was refreshed. The browser-agent case study (<code>docs/finetune_browser_agent.md</code>) is the best illustration of the whole method on one 16 GB GPU with no paid API: element top-1 among ~45 candidates goes from 0.10 (chance) zero-shot to 0.66, operation accuracy from 0.54 to 0.88–0.89, real-task success from 0% to 62%, at 17–23 ms per step for the 322M backbone; moving the candidate elements out of the state and into the option list mattered more than any data change, and confidence-gated escalation to an 8B/27B LLM made results <em>worse</em>. The README's own summary is the right one: <em>treat Laya as a fast base to specialise, not as a zero-shot decision engine</em>.</p>
+<p><strong>Where it fits in an engagement.</strong> Support triage and routing, email and phishing classification, guardrails, RAG relevance judgments, moderation, model routing (which model should answer this?), and — the agentic case — picking the next action or target in a loop where a 7B decoder would cost a second per step. The data pattern is the <a href="#distillation">distillation</a> move of this chapter applied to decisions instead of text: a frontier LLM (or a human) labels a few thousand states with typed answers, you fine-tune Laya on them with RLCD, and the decisions run at millisecond latency with calibrated confidence you can threshold for escalation. The browser-agent write-up's reverse-generated goals (pick the answer, have a local LLM write the question a user would ask) are a clean way to manufacture such labels without a teacher that has to <em>solve</em> anything.</p>
+
+<h3>How the three differ: span encoder, decision encoder, decoder</h3>
 <table class="cmp">
-<tr><th></th><th>GLiNER-style encoder</th><th>LLaMA / Qwen-style decoder (SFT)</th></tr>
-<tr><td>Objective</td><td>Binary cross-entropy on span×label matches (each candidate span scored against each label; negatives sampled)</td><td>Next-token cross-entropy on an instruction → JSON target (cross-link <a href="training.html">Training</a>)</td></tr>
-<tr><td>Data format</td><td>Text + character/token spans + free-text label strings — a few hundred examples sharpen a label set</td><td>Instruction and schema in the prompt, serialized JSON as the answer — thousands of examples for a new format</td></tr>
-<tr><td>Label semantics</td><td>Labels are read as text: rename or add a label at inference, zero-shot; fine-tuning teaches the <em>boundaries</em> your annotators use</td><td>Labels are whatever the model was taught to write; new fields need new examples or prompt engineering</td></tr>
-<tr><td>Compute to adapt</td><td>Minutes on one GPU (or CPU for small backbones); full fine-tune of a 200M model is cheap</td><td>Hours on multi-GPU for a 7B+ model even with LoRA; eval loops dominate</td></tr>
-<tr><td>Inference</td><td>One forward pass, milliseconds per document, batchable, deterministic, no hallucinated or paraphrased entities, runs on CPU</td><td>Autoregressive decode: seconds, cost per output token, constrained decoding required for valid JSON (<a href="inference.html#structured">Ch. 11 §7</a>); can reason over context and normalize or link entities</td></tr>
-<tr><td>Context</td><td>512–2K tokens per window; long documents are chunked with overlap</td><td>32K+ tokens; whole-document reasoning</td></tr>
-<tr><td>Structure</td><td>Nested and overlapping spans handled natively (every span is scored); relations via GLiREL</td><td>Any schema the prompt describes, including normalized values, but spans are not grounded unless you ask for offsets</td></tr>
-<tr><td>Languages</td><td>mDeBERTa backbones give strong multilingual zero-shot</td><td>Depends on the base model's pretraining mix</td></tr>
+<tr><th></th><th>GLiNER-style span encoder</th><th>Laya-style decision encoder</th><th>LLaMA / Qwen-style decoder (SFT)</th></tr>
+<tr><td>Task shape</td><td>Which spans are entities of these types? (extraction; relations via GLiREL)</td><td>What is the answer to this typed question about this state? (<code>choice</code> / <code>score</code> / <code>noul</code>)</td><td>Free generation: any schema, any prose, reasoning over context</td></tr>
+<tr><td>Objective</td><td>Binary cross-entropy on span×label matches (negatives sampled)</td><td>RLCD: policy gradient with strictly proper scoring rules as reward on a decision head, plus soft cross-entropy to gold distributions</td><td>Next-token cross-entropy on an instruction → JSON target (<a href="training.html">Training</a>)</td></tr>
+<tr><td>Label semantics</td><td>Label names are inputs the model reads: rename or add a label zero-shot; fine-tuning teaches boundary conventions</td><td>Question instructions and criteria are inputs the model reads: new questions work zero-shot, fine-tuning on your decisions is where accuracy jumps (0.36 → 0.766)</td><td>Labels are whatever the model was taught to write; new fields need examples or prompting</td></tr>
+<tr><td>Data per example</td><td>Text + spans + label strings; a few hundred examples sharpen a label set</td><td>State + typed questions + answers (or answer distributions); ~30k questions for the typed-decisions checkpoint, a few thousand for one decision family</td><td>Instruction + schema + serialized JSON; thousands for a new format</td></tr>
+<tr><td>Compute to adapt</td><td>Minutes on one GPU; CPU for small backbones</td><td>Hours: 4 epochs over ~30k questions ≈ 4–5 h on 2×T4; a 16 GB GPU or Apple Silicon suffices</td><td>Hours on multi-GPU for 7B+ even with LoRA; eval loops dominate</td></tr>
+<tr><td>Inference</td><td>One forward pass, milliseconds per document, batchable, deterministic, CPU-capable</td><td>One forward pass, ~33 ms per question on a T4 (7.2 ms batched), ONNX/TensorRT paths, dynamic batching under p99 SLOs measured in the repo</td><td>Autoregressive decode: seconds, cost per output token, constrained decoding for valid JSON (<a href="inference.html#structured">Ch. 11 §7</a>)</td></tr>
+<tr><td>Calibration</td><td>Per-span sigmoid scores; threshold tuned on validation</td><td>Calibrated by construction (proper scoring rules) plus a fitted temperature per type: ECE 0.081; thresholdable for escalation</td><td>Needs logprob tricks or verbalized confidence; rarely calibrated out of the box</td></tr>
+<tr><td>Languages</td><td>mDeBERTa backbones: strong multilingual zero-shot</td><td>mmBERT-base checkpoint: 100+ languages with a router; 48 of 51 MASSIVE languages clear 3× random</td><td>Depends on the base model's pretraining mix</td></tr>
+<tr><td>Context</td><td>512–2K tokens per window; chunk long documents</td><td>512 (English) / 1,024 tokens, extendable to 8,192 with accuracy caveats by length</td><td>32K+ tokens; whole-document reasoning</td></tr>
+<tr><td>What it cannot do</td><td>Decide or classify a whole document; normalize values; generate</td><td>Extract spans; generate text; answer open-ended questions whose options you cannot name</td><td>Be cheap, calibrated and deterministic at volume</td></tr>
 </table>
 <p>The practical consequence: an encoder is fine-tuned the way a classifier is — small learning rate on the backbone, larger on the span and label heads, a span-width cap, negative sampling so the model learns to say <em>no entity here</em>, a decision threshold tuned on a validation set, early stopping on span-F1. A decoder is fine-tuned the way this chapter already described: data engineering, SFT, evals, with the extra burden that the output must parse.</p>
 
@@ -287,6 +325,19 @@ def paired_delta_ci(a, b, iters=5000, seed=0):
   <span class="dim" id="spanKpi"></span>
 </div>
 <p class="caption">Every candidate span of width ≤ 3 (arcs) is scored against every label (heat strips below the tokens; the best span per label is outlined). Zero-shot scores are soft because the model only knows the label by its name; the fine-tuned toggle sharpens them toward the annotator's boundary conventions (e.g. "Acme Corp" vs "Acme Corp Ltd", "March 3" vs "3rd"). Move the threshold: lowering it trades precision for recall and the span-F1 against the hidden gold annotation moves with it. Rename a label — "company", "firm", "employer" — and watch the organization scores survive, which is the whole point of reading labels as text.</p>
+</div>
+
+<div class="card">
+<h3>Interactive: a Laya-style typed-decision card (illustrative scorer)</h3>
+<p class="dim">The state is editable; the three questions are the quickstart's. The scores come from a keyword heuristic standing in for the encoder — the mechanics shown (one pass for all questions, a temperature that calibrates the choice distribution, no decoding) are the real ones; the numbers are not.</p>
+<textarea id="tdState" rows="3" style="width:100%;background:var(--bg-inset);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-size:.9rem">Hi, we were billed twice for March. Please refund the duplicate today or we will cancel our plan.</textarea>
+<div class="controls">
+  <label class="ctl">Temperature <input type="range" id="tdTemp" min="0.5" max="5" step="0.1" value="1.2"> <span id="tdTempLabel">1.2</span></label>
+  <label class="ctl">Decoder TPOT (ms) <input type="range" id="tdTpot" min="10" max="80" step="5" value="25"> <span id="tdTpotLabel">25</span></label>
+  <label class="ctl">Decoder TTFT (ms) <input type="range" id="tdTtft" min="50" max="1500" step="50" value="400"> <span id="tdTtftLabel">400</span></label>
+</div>
+<canvas id="tdViz" class="viz" width="900" height="330"></canvas>
+<p class="caption">Left: the <code>choice</code> distribution over departments at the chosen temperature (temperature 1 = the head's raw logits; the repo clamps fitted temperatures to [0.5, 5]), the <code>score</code> rung, and the <code>noul</code> probability. The calibration readout is the gap between the top choice's confidence and how often such a confidence <em>should</em> be right under the heuristic's own agreement with the gold answer — an ECE-style illustration, not a measurement. Right: one encoder pass (~33 ms on a T4 per the README) versus a decoder that must emit a ~40-token JSON answer: TTFT plus 40 × TPOT. Edit the state (mention an outage, drop the cancel threat) and watch all three answers move together in one pass.</p>
 </div>
 
 <h3>Recipes</h3>
@@ -318,7 +369,7 @@ cfg = dict(
 # serve with a JSON-schema grammar so every token is valid (vLLM: response_format / guided_json; see inference.html#structured)</div>
 <p><strong>Evaluate them on the same footing.</strong> For the encoder, span-level precision, recall, and F1 with <em>exact</em> matching (boundaries and label identical) and a <em>relaxed</em> variant (overlap counts) — the gap between the two tells you whether errors are boundary conventions or real misses. For the decoder, field-level accuracy on the parsed JSON plus the parse-failure rate, and, if you asked for offsets, the same span metrics. Then put latency and cost per 1K documents next to the quality numbers: an encoder on one L4 processes thousands of documents a minute for cents; a 7B decoder emitting 200 tokens per document is seconds and dollars. The customer's SLO decides which table matters more (<a href="#cost">Section 10</a>).</p>
 <h3>Decision rule, and the hybrid that usually wins</h3>
-<p>The <strong>encoder wins</strong> when the schema is fixed or changes slowly, volume is high, latency and cost are constraints, outputs must be auditable (every entity is a literal span with a score), or deployment is on-prem/CPU. The <strong>decoder wins</strong> when extraction needs reasoning over context, documents are long, values must be normalized or linked (dates to ISO, companies to IDs), the schema is open-ended, or the output is prose. In practice the strongest pattern is the <strong>hybrid</strong>: GLiNER extracts grounded candidates at scale and the LLM reasons over, normalizes, and links only those — or, in the other direction, a frontier LLM labels a few thousand documents, a human spot-checks them, and GLiNER is fine-tuned on that silver data to run the volume. That second pattern is <a href="#distillation">distillation</a> in all but name: the expensive model's judgment compiled into a model that costs a hundredth as much to run.</p>
+<p>Pick by <em>task shape</em> first. The <strong>span encoder (GLiNER) wins</strong> when the schema is fixed or changes slowly, volume is high, latency and cost are constraints, outputs must be auditable (every entity is a literal span with a score), or deployment is on-prem/CPU. The <strong>decoder wins</strong> when extraction needs reasoning over context, documents are long, values must be normalized or linked (dates to ISO, companies to IDs), the schema is open-ended, or the output is prose. The <strong>decision encoder (Laya) wins</strong> when the question has nameable answers — route, score, yes/no, pick one of these candidates — and you need millisecond latency, calibrated confidence to threshold on, and many languages; it loses the moment you need a span, a free-text value, or an answer space you cannot enumerate. In practice the strongest pattern is the <strong>hybrid stack</strong>: GLiNER extracts grounded candidates at scale, Laya makes the typed decisions about them (route, prioritize, flag), and the decoder reasons over, normalizes, writes, and links only what those two hand it — or, in the other direction, a frontier LLM labels a few thousand documents, a human spot-checks them, and GLiNER is fine-tuned on that silver data to run the volume. That second pattern is <a href="#distillation">distillation</a> in all but name: the expensive model's judgment compiled into a model that costs a hundredth as much to run.</p>
 
 <h2 id="production">9. Production patterns</h2>
 <h3>Multi-adapter serving</h3>
@@ -367,6 +418,7 @@ cfg = dict(
 <li>Data: Lee et al., <em>Deduplicating Training Data Makes Language Models Better</em> (2022); the Dolma and FineWeb/FineWeb-Edu dataset papers; Hoffmann et al., <em>Chinchilla</em> (2022) for the compute arithmetic.</li>
 <li>Evaluation: Chen et al., <em>Evaluating LLMs Trained on Code</em> (2021) for pass@k; Zheng et al., <em>Judging LLM-as-a-Judge with MT-Bench</em> (2023); Liang et al., <em>HELM</em>; the lm-evaluation-harness; SWE-bench and SWE-bench Verified; τ-bench.</li>
 <li>Encoders for extraction: Zaratiana et al., <em>GLiNER: Generalist Model for Named Entity Recognition using Bidirectional Transformer</em> (arXiv 2311.08526, NAACL 2024); the <a href="https://github.com/urchade/GLiNER">gliner repository</a> and model hub; GLiClass and GLiREL; NuExtract; He et al., <em>DeBERTa-v3</em> (2021).</li>
+<li>Decision encoders: the <a href="https://github.com/NandhaKishorM/laya">Laya repository</a> (Apache-2.0) and its <a href="https://nandhakishorm.github.io/laya/">docs</a>; checkpoints <a href="https://huggingface.co/convaiinnovations/laya">laya</a>, <a href="https://huggingface.co/convaiinnovations/laya-multilingual">laya-multilingual</a> and <a href="https://huggingface.co/convaiinnovations/laya-typed-decisions">laya-typed-decisions</a>; the author's dev.to post <a href="https://dev.to/nandakishor_m_6cc0adfde9f/i-built-non-autoregressive-decision-models-a-year-ago-then-a-frontier-lab-called-it-a-18me">on non-autoregressive decision models</a>; <a href="https://github.com/NandhaKishorM/laya/blob/main/docs/finetune_browser_agent.md">docs/finetune_browser_agent.md</a> (the worked specialisation); <a href="https://github.com/NandhaKishorM/laya/blob/main/BENCHMARKS.md">BENCHMARKS.md</a> for every number and its caveats.</li>
 <li>Serving: Sheng et al., <em>S-LoRA</em> (2023); Chen et al., <em>Punica</em> (2023); vLLM's LoRA documentation.</li>
 <li>In this notebook: <a href="training.html">Training</a> for the mechanics of each rung, <a href="rl-systems.html">RL Systems</a> for verifiable-reward RL harnesses, <a href="inference.html">Inference</a> and <a href="hardware.html">Hardware</a> for the throughput numbers that feed the cost model; the study plan's Axolotl and vLLM hands-on steps; the Customization flashcard deck.</li>
 </ul>
@@ -616,6 +668,62 @@ function draw(){
 }
 ['spanL1','spanL2','spanL3','spanThr','spanFT'].forEach(id=>{$(id).oninput=draw;$(id).onchange=draw;});
 draw();onTheme(draw);
+})();
+
+// ---------- 8b. typed-decision card (Laya) ----------
+(function(){
+const cv=$('tdViz');if(!cv)return;const ctx=cv.getContext('2d');
+const KW={billing:['bill','billed','invoice','payment','refund','charge','charged','price','plan','subscription'],
+          technical:['bug','crash','outage','error','down','broken','login','slow','settings','app'],
+          other:['question','feature','feedback','thanks','hello']};
+const URG=['deadline','today','now','asap','immediately','urgent','blocking','cannot','can\'t','down','outage'];
+const CHURN=['cancel','leave','switch','churn','competitor','unsubscribe','refund'];
+const GOLD={choice:'billing'};
+function count(text,words){const t=text.toLowerCase();let n=0;for(const w of words){const m=t.match(new RegExp('\\b'+w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'g'));if(m)n+=m.length;}return n;}
+function softmax(z,T){const m=Math.max(...z);const e=z.map(v=>Math.exp((v-m)/T));const s=e.reduce((a,b)=>a+b,0);return e.map(v=>v/s);}
+function sig(x){return 1/(1+Math.exp(-x));}
+function compute(){
+  const text=$('tdState').value,T=parseFloat($('tdTemp').value);
+  const logits=['billing','technical','other'].map(k=>0.4+1.6*count(text,KW[k]));
+  const p=softmax(logits,T);
+  const u=count(text,URG);const score=u>=2?2:u===1?1:0;
+  const churn=sig(-1.5+1.8*count(text,CHURN));
+  return {p,score,churn,T};
+}
+function draw(){
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);
+  const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2'),warn=css('--warn'),bd=css('--border');
+  const r=compute();$('tdTempLabel').textContent=r.T.toFixed(1);
+  const tpot=parseInt($('tdTpot').value),ttft=parseInt($('tdTtft').value);$('tdTpotLabel').textContent=tpot;$('tdTtftLabel').textContent=ttft;
+  ctx.font='bold 13px sans-serif';ctx.fillStyle=txt;ctx.textAlign='left';
+  ctx.fillText('choice: department (temperature '+r.T.toFixed(1)+')',24,26);
+  const names=['billing','technical','other'];const top=r.p.indexOf(Math.max(...r.p));
+  names.forEach((n,i)=>{const y=44+i*34;ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText(n,24,y+14);
+    ctx.fillStyle=css('--bg-card');ctx.fillRect(100,y,260,20);ctx.strokeStyle=bd;ctx.strokeRect(100,y,260,20);
+    ctx.fillStyle=i===top?acc:acc2;ctx.globalAlpha=i===top?1:0.6;ctx.fillRect(100,y,260*r.p[i],20);ctx.globalAlpha=1;
+    ctx.fillStyle=txt;ctx.fillText((100*r.p[i]).toFixed(0)+'%',368,y+14);});
+  ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('score: urgency',24,170);
+  ['not urgent','soon','blocking'].forEach((n,i)=>{const x=24+i*120;ctx.fillStyle=i===r.score?warn:css('--bg-card');ctx.fillRect(x,180,110,24);ctx.strokeStyle=bd;ctx.strokeRect(x,180,110,24);ctx.fillStyle=i===r.score?'#fff':dim;ctx.font='12px sans-serif';ctx.textAlign='center';ctx.fillText(n,x+55,197);});
+  ctx.textAlign='left';ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('noul: churn risk = '+(100*r.churn).toFixed(0)+'% yes',24,236);
+  ctx.fillStyle=css('--bg-card');ctx.fillRect(24,246,336,16);ctx.strokeStyle=bd;ctx.strokeRect(24,246,336,16);ctx.fillStyle=r.churn>0.5?css('--danger'):acc2;ctx.fillRect(24,246,336*r.churn,16);
+  // calibration readout (illustrative): confidence vs the heuristic's agreement with gold
+  const conf=r.p[top];const hit=names[top]===GOLD.choice?1:0;const ece=Math.abs(conf-hit);
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';
+  ctx.fillText('calibration (illustrative): top-choice confidence '+(100*conf).toFixed(0)+'% vs correct '+(hit?'yes':'no')+' -> gap '+(100*ece).toFixed(0)+' pts; fit the temperature so confidence tracks accuracy',24,290);
+  ctx.fillText('ECE 0.081 for the real checkpoints after temperature fitting (BENCHMARKS.md)',24,308);
+  // latency bars
+  const x0=470,bw=400;ctx.fillStyle=txt;ctx.font='bold 13px sans-serif';ctx.fillText('latency for these three answers',x0,26);
+  const enc=33,dec=ttft+40*tpot;const scale=bw/Math.max(dec,enc)*0.95;
+  ctx.fillStyle=dim;ctx.font='12px sans-serif';ctx.fillText('Laya: one encoder pass, all questions',x0,52);
+  ctx.fillStyle=acc2;ctx.fillRect(x0,58,Math.max(3,enc*scale),22);ctx.fillStyle=txt;ctx.fillText(enc+' ms',x0+Math.max(3,enc*scale)+8,74);
+  ctx.fillStyle=dim;ctx.fillText('decoder: TTFT + 40 JSON tokens x TPOT (then parse)',x0,108);
+  ctx.fillStyle=acc;ctx.fillRect(x0,114,ttft*scale,22);ctx.fillStyle=warn;ctx.fillRect(x0+ttft*scale,114,40*tpot*scale,22);
+  ctx.fillStyle=txt;ctx.fillText(dec+' ms  ('+(dec/enc).toFixed(0)+'x)',x0+Math.min(bw-80,dec*scale+8),130);
+  ctx.fillStyle=dim;ctx.fillText('batched: 7.2 ms per question on a T4 (README); the decoder also needs constrained decoding to guarantee valid JSON',x0,166);
+  ctx.fillText('the decoder can reason and write; the encoder can only pick among what you named',x0,184);
+}
+['tdState','tdTemp','tdTpot','tdTtft'].forEach(id=>$(id).addEventListener('input',draw));
+draw();new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
 })();
 
 // ---------- 9. multi-adapter batch ----------
