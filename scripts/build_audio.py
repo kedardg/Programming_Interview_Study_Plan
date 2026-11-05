@@ -33,7 +33,7 @@ VOICES = {
     "multimodal": "af_nicole", "gpu": "bm_lewis", "kernels": "af_sarah",
     "quantization": "am_adam", "inference": "af_heart", "parallelism": "bm_daniel",
     "training": "af_nova", "robot-learning": "am_michael", "hardware": "bf_isabella",
-    "agents": "am_echo", "system-design": "bf_emma", "coding-patterns": "af_bella",
+    "agents": "am_echo", "system-design": "bf_emma", "coding-patterns": "af_bella", "resume-defense": "am_michael",
 }
 SPEED = 1.0
 

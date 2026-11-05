@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Defending Your Résumé</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+.q{border-left:3px solid var(--accent);padding:6px 12px;margin:8px 0;background:var(--bg-inset);border-radius:0 8px 8px 0}
+.q b{color:var(--accent)}
+.trap{border-left:3px solid var(--warn);padding:6px 12px;margin:8px 0;background:var(--bg-inset);border-radius:0 8px 8px 0}
+.trap b{color:var(--warn)}
+.pocket{border:1px dashed var(--border);border-radius:10px;padding:8px 14px;margin:10px 0;font-size:.9rem}
+.layer{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:10px 0}
+.layer div{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
+.layer h4{margin:0 0 4px 0;font-size:.85rem;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim)}
+textarea{width:100%;min-height:90px;background:var(--bg-inset);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--mono);font-size:.85rem}
+input[type=number]{width:90px;background:var(--bg-inset);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 6px}
+.check{display:flex;gap:8px;align-items:flex-start;margin:4px 0}
+.check span.ok{color:var(--accent2)} .check span.no{color:var(--warn)}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="model-playbooks.html">Playbooks</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="resume-defense.html" class="here">Résumé Defense</a><a href="notes.html">Notes</a><a href="lectures.html">Lectures</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Defending Your Résumé: every concept behind the bullets, and every question they invite</h1>
+<p class="dim">A résumé bullet is a claim. An interviewer who likes it will spend ten minutes trying to find the seam between what you did and what you wrote. This chapter takes the bullets of a forward-deployed senior data scientist who post-trains open-weight LLMs for a lending and financial-planning domain, and for each one lays out the concepts it rests on, the arithmetic an interviewer can check on a whiteboard, the probing questions with model answers, and the consistency traps that appear when bullets are read side by side. Nothing here names an employer or a product: every bullet is referred to as "the bullet claiming …", which is also how an interviewer will refer to it. Read it with <a href="interview-journey.html">The Interview Journey</a> (the process) and <a href="customization.html">Customization &amp; Evals</a> (the methodology) open beside it.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (12:12)</h3><audio controls preload="none" src="audio/resume-defense.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/resume-defense.txt">Read the transcript</a>.</p></div>
+<h2 id="method">0. The three-layer answer</h2>
+<p>Every question about a bullet is answered at three depths, and the interviewer decides how deep to go. Prepare all three for every claim; the failure mode is having only the first.</p>
+<div class="layer">
+<div><h4>Layer 1 · the claim</h4>What changed, for whom, by how much, measured how. One sentence, with the unit of the number ("five F1 points on the held-out test split, up from 71.2").</div>
+<div><h4>Layer 2 · the mechanism</h4>Why the technique you chose produced that change, and what you compared it against. "SFT on distilled traces taught the format and the derivation steps; DPO on hard negatives fixed the arithmetic sign errors that SFT left."</div>
+<div><h4>Layer 3 · the receipts</h4>The numbers an engineer can check: parameter counts, bytes per parameter, tokens, GPU-hours, batch sizes, learning rates, how many pairs, what agreement the labellers reached, what the baseline list converted at.</div>
+</div>
+<p>The chapter is ordered by bullet. Each section ends with a <em>pocket</em>: the three or four numbers to carry into the room, computed below so that you know where they come from rather than memorising them.</p>
+
+<h2 id="b1">1. The bullet claiming +5% on TAT-QA from post-training gpt-oss-20B on 8×A100</h2>
+<p>This is the bullet an ML interviewer reads first, because it names a public benchmark, a public model, a GPU count, and five techniques (SFT on distilled reasoning traces, LoRA rank sweeps, PPO/DPO, DeepSpeed sharding, vLLM tensor-parallel serving). Each of those five is a door, and the number "5%" is the handle on all of them.</p>
+
+<h3>1.1 What TAT-QA actually is</h3>
+<p><strong>TAT-QA</strong> (Zhu et al., ACL 2021) is a question-answering benchmark over <em>hybrid</em> financial-report context: each question comes with a table and the paragraphs that surround it, drawn from real annual reports, and about 16,500 questions across roughly 2,750 contexts. Answers come in four types: a <strong>span</strong> copied from the table or text, a <strong>multi-span</strong>, a <strong>count</strong>, and an <strong>arithmetic</strong> answer that requires a derivation (sum, difference, ratio, change, average) over cells and numbers in the prose, with a scale (thousands, millions, percent) that must also be predicted. The two metrics are <strong>exact match (EM)</strong> and a numeracy-aware <strong>F1</strong> that tolerates partial multi-span credit and checks both value and scale for numbers. The original TagOp baseline scored in the mid-50s EM; later systems that generate programs or chain-of-thought derivations and execute them, and large generative models with reasoning traces, sit well above that, so an interviewer who knows the benchmark will immediately ask <em>which split</em> (dev is public with labels; the test leaderboard is held out), <em>which metric</em>, and <em>from what starting point</em>.</p>
+<div class="trap"><b>Trap · "5%" has no unit.</b> Five <em>percentage points</em> (71.2 → 76.2 F1) and five <em>percent relative</em> (71.2 → 74.8) are different claims, and "5%" with no baseline is neither. Fix the bullet so it reads "+5.1 F1 points (71.2 → 76.3) on the TAT-QA dev split, over the same model prompted zero-shot with the same decoding settings" or whatever the true numbers are. If you only have the dev split, say dev; claiming "test" without a leaderboard submission is the kind of thing a careful interviewer will ask you to show.</div>
+<div class="trap"><b>Trap · what is the comparison?</b> "+5%" over the base model is a different story from "+5%" over the best off-the-shelf competitor, and both are different from "+5%" over the previous production system. Be able to name the baseline in one breath and justify why it is a fair one (same context formatting, same number of shots, same reasoning effort, same max tokens, same scoring script).</div>
+
+<h3>1.2 What gpt-oss-20B is, in numbers</h3>
+<p>gpt-oss-20b is OpenAI's smaller open-weight model (Apache-2.0): a <strong>mixture-of-experts</strong> transformer with about <strong>21 B total parameters</strong> and about <strong>3.6 B active per token</strong>, 24 layers, 32 experts per MoE layer with 4 routed per token, grouped-query attention with alternating banded (sliding-window) and full attention, 128k context, and expert weights released in <strong>MXFP4</strong> (4-bit microscaling floats with shared block exponents) so the checkpoint is about 12–13 GB on disk. It uses the <em>harmony</em> chat format with separate analysis (reasoning) and final channels and three reasoning-effort levels. The full playbook with memory calculators is in <a href="model-playbooks.html">Model Playbooks</a>; the parts that matter for this bullet are:</p>
+<ul>
+<li><strong>Active vs total parameters.</strong> FLOPs per token scale with the 3.6 B active parameters; memory scales with the 21 B total. Training is memory-bound by the whole model and compute-light per token, which is why it is attractive on 8×A100 and why "I trained a 20B model" should be followed by "3.6 B active".</li>
+<li><strong>Upcast for training.</strong> A100s have no FP4 tensor cores. For fine-tuning you dequantize MXFP4 experts to BF16: 21 B × 2 bytes ≈ <strong>42 GB</strong> of weights. That one number drives every memory decision below.</li>
+<li><strong>Where the parameters live.</strong> The great majority of parameters are in the expert FFNs; attention and embeddings are a small fraction. A LoRA that targets only attention projections touches little of the model's capacity; one that targets expert projections multiplies adapter count by the number of experts.</li>
+</ul>
+
+<h3>1.3 SFT on distilled reasoning traces</h3>
+<p><strong>Distillation</strong> here means sequence-level knowledge distillation: a stronger teacher (a larger model, or the same model at high reasoning effort with many samples) writes step-by-step derivations for the training questions; you keep the traces whose final answer matches the gold label (<strong>rejection sampling</strong>), optionally filter for length and for derivations that actually reference the right cells, and fine-tune the student with ordinary next-token cross-entropy on the kept traces (the <em>analysis</em> channel followed by the final answer). This is the recipe behind most "reasoning SFT" results since DeepSeek-R1's distilled models, and <a href="customization.html">Customization &amp; Evals</a> covers the loss, the masking of the prompt, and the data-mixture questions.</p>
+<p>Questions it invites: how many traces (per question, after filtering), what the acceptance rate of the teacher was (a proxy for how hard the data is), whether you distilled <em>on-policy</em> (student generates, teacher scores) or <em>off-policy</em> (teacher generates, student imitates) and why, whether you masked the prompt tokens from the loss, how long the traces were and whether length correlated with accuracy, and what happened to the arithmetic answers specifically (the type where models fail by sign and scale rather than by retrieval). Have the answer-type breakdown of your +5 points: if most of the gain is on arithmetic, that supports the traces story; if it is on span questions, the gain may be format learning and an interviewer will say so.</p>
+
+<h3>1.4 LoRA rank sweeps</h3>
+<p>A <strong>LoRA</strong> adapter replaces the update of a weight matrix W (d<sub>out</sub> × d<sub>in</sub>) with a low-rank product B·A, with A of shape r × d<sub>in</sub> and B of shape d<sub>out</sub> × r, scaled by α/r. Trainable parameters per adapted matrix are <strong>r · (d<sub>in</sub> + d<sub>out</sub>)</strong>; a sweep over r ∈ {8, 16, 32, 64, 128} multiplies that by 16× end to end. What a rank sweep usually shows is a plateau: gains from r = 8 to 32, little after, and sometimes degradation at very high rank with a fixed α because the effective learning rate α/r shrinks (hence <em>rsLoRA</em>, which scales by α/√r). The interview questions are about <em>what you held fixed</em> (α, learning rate, target modules, steps, seed) and <em>what you concluded</em> (a rank you can name, with the number that justified it).</p>
+<div class="trap"><b>Trap · LoRA on a mixture of experts.</b> Which modules did the adapter target? Attention q/k/v/o only is the cheap default; adding expert up/down projections means one adapter per expert per layer (32 × 24 × 2 matrices), and routers are usually left frozen because perturbing them destabilises load balance. If you say "LoRA on all linear layers," expect "including the router?" and have an answer.</div>
+
+<h3>1.5 PPO or DPO, and why not GRPO</h3>
+<p>"PPO/DPO" in a bullet reads as hedging. They are different algorithms with different data requirements, and an interviewer will ask which one produced the number:</p>
+<table class="cmp">
+<tr><th></th><th>PPO (on-policy RL)</th><th>DPO (offline preference)</th><th>GRPO / RLVR (the 2025 default for verifiable tasks)</th></tr>
+<tr><td>Needs</td><td>A reward signal per sample; usually a reward model, or a verifier when the answer is checkable</td><td>Pairs (chosen, rejected) for the same prompt; no reward model at train time</td><td>A verifier (exact match / F1 against gold) and a group of samples per prompt</td></tr>
+<tr><td>Models in memory</td><td>Policy, frozen reference, reward model, value model (4)</td><td>Policy and frozen reference (2)</td><td>Policy and reference; no value model (advantage is group-normalised)</td></tr>
+<tr><td>Fit for TAT-QA</td><td>Works, but the value model is wasted effort when the reward is a checker</td><td>Works if you can mine good rejected traces (wrong answer, plausible derivation)</td><td>The natural fit: gold answers make the reward verifiable</td></tr>
+<tr><td>Typical question</td><td>"Why a value model when exact match is the reward?"</td><td>"How did you build the rejected side, and did it drift to long answers?"</td><td>"Why not this?"</td></tr>
+</table>
+<p>A defensible story is: "I ran DPO on pairs mined from the rejection-sampling step (correct trace vs. the highest-likelihood incorrect trace for the same question), which gave most of the gain; I also tried a PPO run with the exact-match reward and a KL penalty, which matched DPO within noise at much higher cost, so I shipped DPO." If you ran only one of the two, the bullet should say that one. The mechanics of all three (clipped objective, GAE, β in DPO, group advantages) are in <a href="robot-learning.html#llm">RL &amp; Robotics</a> and <a href="rl-systems.html">RL Systems</a>; the RLHF bullet below has the worked arithmetic.</p>
+
+<h3>1.6 DeepSpeed sharding: the memory arithmetic that decides whether the bullet is consistent</h3>
+<p>Here is the seam interviewers look for. <strong>DeepSpeed ZeRO</strong> shards optimizer state (stage 1), gradients (stage 2) and parameters (stage 3) across data-parallel ranks so that a model that does not fit on one GPU can be trained on many. <strong>LoRA</strong> exists precisely so that you do not need to hold optimizer state for the full model. Mentioning both in the same bullet is not wrong, but you must be able to say which combination you actually ran and why. The calculator below reproduces the arithmetic (details in <a href="parallelism.html">Parallelism</a> and <a href="training.html">Training</a>).</p>
+<div class="card">
+<h3>Calculator: does it fit? Full fine-tune vs LoRA on N GPUs</h3>
+<div class="controls">
+<label>Total params (B) <input type="number" id="mP" value="21" step="1"></label>
+<label>GPUs <input type="number" id="mN" value="8" step="1"></label>
+<label>GPU memory (GB) <input type="number" id="mG" value="80" step="40"></label>
+<label>Seq len <input type="number" id="mS" value="4096" step="512"></label>
+<label>Micro-batch <input type="number" id="mB" value="1" step="1"></label>
+<label>Hidden (d) <input type="number" id="mD" value="2880" step="64"></label>
+<label>Layers <input type="number" id="mL" value="24" step="1"></label>
+</div>
+<div id="memOut"></div>
+<p class="caption">Rules: full FT in BF16 with AdamW keeps 2 (weights) + 2 (grads) + 4 (FP32 master) + 8 (two Adam moments) = 16 bytes per parameter; LoRA keeps 2 bytes per frozen parameter plus optimizer state only for the adapters. Activations are approximated as 34·s·b·d bytes per layer with gradient checkpointing off (Korthikanti et al.), and roughly 2·s·b·d with checkpointing on. For an MoE only the routed experts' activations count per token, so the real number is lower than this upper bound.</p>
+</div>
+<p>Reading the default output: full fine-tuning of 21 B parameters needs about 336 GB of states, which does not fit one 80 GB A100 but does fit 8 of them under ZeRO-3 at about 42 GB per GPU before activations. LoRA needs about 42 GB of frozen BF16 weights per GPU, which fits an 80 GB A100 with room for activations and <em>no sharding at all</em>, but does <em>not</em> fit a 40 GB A100, where ZeRO-3 (which shards frozen parameters too) or offloading becomes necessary. So the consistent stories are:</p>
+<ol>
+<li><strong>8×A100-80GB, LoRA, DeepSpeed ZeRO-2 or plain DDP for data parallelism.</strong> DeepSpeed is there for the training loop, gradient accumulation and bf16 handling, not because memory forced it. Say "data-parallel across 8 GPUs with DeepSpeed; LoRA meant no parameter sharding was needed."</li>
+<li><strong>8×A100-40GB, LoRA, ZeRO-3.</strong> Sharding was <em>required</em> to hold 42 GB of frozen weights. Say that; it is a perfectly good reason and it tells the interviewer you know what ZeRO-3 shards.</li>
+<li><strong>Full fine-tune with ZeRO-3, and a LoRA sweep as an ablation.</strong> The most expensive story and the one that best justifies "DeepSpeed sharding", but then the bullet should lead with the full fine-tune.</li>
+</ol>
+<div class="trap"><b>Trap · "8×A100" invites "80 or 40 GB, and what was the per-GPU batch?"</b> Know the memory, the micro-batch, the gradient-accumulation steps, the sequence length, and the wall-clock per epoch. For 3.6 B active parameters at 6·N·D FLOPs per token, 20 M training tokens is ~4.3×10<sup>17</sup> FLOPs; at a realistic 40% of 312 TFLOP/s BF16 per A100 that is about an hour on 8 GPUs per epoch, which tells you that the run was memory- and I/O-bound, not compute-bound. If you quote a 12-hour epoch, be ready to explain where the time went (long sequences, MoE dispatch overhead, checkpointing).</div>
+
+<h3>1.7 vLLM with tensor parallelism on a model that fits one GPU</h3>
+<p>Tensor parallelism splits each weight matrix across GPUs and all-reduces the partial results every layer. It is the tool for a model that does not fit on one GPU, or for cutting per-token latency when it does. On A100, vLLM runs gpt-oss-20b through a Triton MXFP4 path or upcast BF16 weights (about 42 GB), so a single 80 GB A100 holds the weights and roughly 30 GB of KV cache. The honest reasons to serve it with TP=2 anyway are: (a) <strong>latency</strong>, since the decode step is memory-bandwidth-bound and two GPUs read the weights in half the time; (b) <strong>KV-cache headroom</strong> for long financial-report contexts (128k context × many concurrent requests); (c) 40 GB A100s, where TP=2 is required. The reason <em>not</em> to is throughput per GPU: two replicas with data parallelism usually beat one TP=2 instance on tokens per second per dollar. The arithmetic (per-token KV bytes = 2 · layers · kv_heads · head_dim · bytes) is in <a href="inference.html">Inference</a> and the vLLM command builder in <a href="model-playbooks.html">Model Playbooks</a>.</p>
+<div class="pocket"><strong>Pocket for bullet 1.</strong> TAT-QA: ~16.5k Qs, hybrid table+text, EM and numeracy F1, four answer types. gpt-oss-20b: 21 B total / 3.6 B active, 32 experts top-4, MXFP4 ≈ 13 GB on disk, BF16 ≈ 42 GB. Full FT = 16 B/param → 336 GB → ZeRO-3 across 8×80 GB. LoRA params = r·(d<sub>in</sub>+d<sub>out</sub>) per matrix. Your baseline, your split, your metric, your rank, and the per-answer-type breakdown of the +5.</div>
+
+<h2 id="b2">2. The bullet claiming a post-training data loop: vLLM baselines across five models, an LLM-as-judge materiality rubric, and synthetic human-verified DPO pairs</h2>
+<p>This bullet is about methodology, so the questions are about rigour: were the baselines fair, is the judge trustworthy, and what does "human-verified synthetic" mean.</p>
+<h3>2.1 A fair baseline table</h3>
+<p>Five models served through vLLM is a reasonable baseline sweep (for example a mix of open models at 8–30 B and the model you intend to fine-tune). What makes it fair is that everything except the model is held fixed, and the interview question is "what did you hold fixed?" The answer is a table you should be able to sketch from memory:</p>
+<table class="cmp">
+<tr><th>Held fixed</th><th>Why it matters</th></tr>
+<tr><td>Prompt template, few-shot examples, context truncation rule</td><td>Table serialisation alone moves TAT-QA scores by several points</td></tr>
+<tr><td>Decoding: temperature, top-p, max new tokens, reasoning effort, stop sequences</td><td>Greedy vs sampled, and a 512-token cap on a model that reasons for 800 tokens, both change the number</td></tr>
+<tr><td>Scoring script and answer normalisation</td><td>Scale handling ("in millions"), units, rounding; use the official evaluator</td></tr>
+<tr><td>Precision and kernel (BF16 vs FP8 vs AWQ) and vLLM version</td><td>Quantized serving can cost a point; version changes change sampling defaults</td></tr>
+<tr><td>Seed and number of runs</td><td>Report mean ± std over ≥3 seeds when sampling; a 1-point gap at one seed is noise</td></tr>
+</table>
+<p>Also carry: cost per million tokens and tokens per second per model, because a forward-deployed engineer is asked "why not the biggest model?" and the answer is a latency or cost number, not a preference. See <a href="deployment.html">Deployment</a> for the load-testing side.</p>
+<h3>2.2 LLM-as-judge with a materiality rubric</h3>
+<p>In accounting, a misstatement is <strong>material</strong> if it could change the decision of someone relying on the statement. A materiality rubric for a judge model turns that into graded criteria: a wrong sign or wrong scale on a headline figure is a critical error, a rounding difference below a threshold is immaterial, a missing caveat is minor, and so on. The judge is prompted with the question, the gold or reference answer, the candidate answer and the rubric, and asked for a score or a pairwise preference with a rationale. The concepts an interviewer will probe (all in <a href="customization.html">Customization &amp; Evals</a>):</p>
+<ul>
+<li><strong>Calibration against humans.</strong> On a labelled subset, what was the agreement (Cohen's κ, or pairwise accuracy) between the judge and human graders? A judge that agrees with humans 85% of the time is a tool; one you never checked is a liability.</li>
+<li><strong>Position bias and length bias.</strong> Pairwise judges prefer the first answer and the longer answer. Swap order and average; penalise or control length.</li>
+<li><strong>Self-preference.</strong> A judge from the same family as the policy favours its own style. Use a different family, or an ensemble, or anchor to the reference answer.</li>
+<li><strong>Pointwise vs pairwise.</strong> Pointwise scores are easier to aggregate; pairwise is more reliable for close calls. Which did you use for the DPO pairs?</li>
+<li><strong>Verifiable where possible.</strong> For TAT-QA-like questions the final number is checkable; use the checker for the final answer and reserve the judge for the derivation and the explanation.</li>
+</ul>
+<h3>2.3 "Synthetic, human-verified" preference pairs</h3>
+<p>Synthetic pairs are generated by a model; human-verified means a person checked them. Both can be true, but the phrase invites "verified how, by whom, how many?" A defensible protocol: generate candidate pairs (chosen = a rejection-sampled correct trace; rejected = an incorrect trace for the same question, or a correct answer with a materially wrong derivation, or a deliberately corrupted scale), have the judge pre-filter, then have domain reviewers confirm a random sample or the full set with a stated inter-annotator agreement, and drop any pair where reviewers disagreed. Know the counts: pairs generated, pairs kept, fraction human-reviewed, agreement. Then the DPO facts: the loss is −log σ(β · [log π(y<sub>w</sub>)/π<sub>ref</sub>(y<sub>w</sub>) − log π(y<sub>l</sub>)/π<sub>ref</sub>(y<sub>l</sub>)]), β (usually 0.05–0.5) controls how far the policy may move from the reference, DPO is known to drift toward longer outputs unless pairs are length-matched, and a chosen/rejected pair that differs only in the final number teaches arithmetic while one that differs in style teaches style.</p>
+<div class="trap"><b>Trap · the loop.</b> "Data loop" implies iteration: generate → train → evaluate → mine new failures → generate. Say how many rounds you ran and what changed between rounds (which failure categories shrank). One round is a pipeline, not a loop.</div>
+<div class="pocket"><strong>Pocket for bullet 2.</strong> Five models, one table of held-fixed settings, judge agreement with humans as a number, counts for pairs generated/kept/reviewed, β, number of loop rounds, and the one failure category that the loop fixed.</div>
+
+<h2 id="b3">3. The bullet claiming 4× deal conversion from a PageRank and Personalized PageRank lead list over news graphs plus CRM data</h2>
+<p>This is the bullet most likely to be examined by a non-ML interviewer, because "4×" is a business number, and by an ML interviewer, because PageRank is a whiteboard algorithm. Prepare both.</p>
+<h3>3.1 PageRank, properly</h3>
+<p>Model a graph of n nodes (companies, people, events, articles) with adjacency A. A <strong>random surfer</strong> at node i follows a uniformly random out-edge with probability d (the damping factor, classically 0.85) and jumps to a random node with probability 1 − d. The stationary distribution of that walk is the PageRank vector <strong>p</strong>, which satisfies</p>
+<div class="formula">p = (1 − d) · v + d · Mᵀ p, &nbsp; where M<sub>ij</sub> = 1 / outdeg(i) if i → j, and v is the jump distribution</div>
+<p><strong>Global PageRank</strong> uses v = uniform (1/n everywhere). <strong>Personalized PageRank (PPR)</strong> uses v concentrated on a seed set (your existing customers from the CRM, the deals that converted last year, the sectors you cover): the surfer teleports back to the seeds, so p becomes a measure of <em>proximity to the seeds through the graph</em>, which is exactly what a lead list wants. Computation is <strong>power iteration</strong>: start from p = v, apply the update until ‖p<sub>t+1</sub> − p<sub>t</sub>‖<sub>1</sub> falls below a tolerance; convergence is geometric at rate d, so about 50–100 iterations for d = 0.85 at 1e-6. <strong>Dangling nodes</strong> (no out-edges) leak mass; the standard fix redistributes their mass by v. The matrix is sparse, so each iteration costs O(edges), which is why this scales to millions of nodes without any ML infrastructure.</p>
+<div class="card">
+<h3>Animation: power iteration on a small news-and-CRM graph</h3>
+<div class="controls">
+<label>Damping d <input type="range" id="prD" min="0.5" max="0.99" step="0.01" value="0.85"> <span id="prDv">0.85</span></label>
+<label><input type="checkbox" id="prPers"> Personalize to CRM seeds (green)</label>
+<button class="btn" id="prStep">Step</button>
+<button class="btn" id="prRun">Run to convergence</button>
+<button class="btn" id="prReset">Reset</button>
+</div>
+<canvas id="prViz" class="viz" width="900" height="420"></canvas>
+<div id="prOut" class="caption"></div>
+<p class="caption">Node size is current score. Edges are co-mentions in news (grey) and CRM relationships (green). With personalization on, the surfer teleports back to the seed accounts, and the ranking becomes "who is close to our existing book"; with it off, it becomes "who is central in the news", which is a different lead list. Watch which node wins under each setting.</p>
+</div>
+<h3>3.2 Building the graph</h3>
+<p>The questions here are data-engineering questions. Nodes: companies (resolved to a canonical identifier so that "Acme Corp" and "ACME Corporation" are one node; entity resolution is the hard part), people, and events (fundraises, acquisitions, management changes). Edges: co-mention within an article or within a sentence, weighted by count and decayed by article age; relationship edges from the CRM (existing borrower, referral source, lost deal). Directed or undirected: co-mention is undirected, so symmetrise or use the undirected variant; CRM relationships may be directed. Edge weights go into M as weights divided by weighted out-degree. Things to say unprompted: how you handled hubs (a news wire mentioned with everyone; down-weight by inverse document frequency or drop), time decay (half-life in weeks), and how often the graph is rebuilt.</p>
+<h3>3.3 Evaluating a ranked list, and defending "4×"</h3>
+<p>A ranked lead list is evaluated like a retrieval system: <strong>precision@k</strong> (of the top k leads, how many became deals), <strong>recall@k</strong> (of the deals that closed, how many were in the top k), <strong>MRR</strong> or <strong>NDCG</strong> if you care about order, and <strong>lift</strong> relative to the previous list. "4× conversion" needs: the <em>baseline</em> (the old list's conversion rate over the same window and the same team), the <em>window</em> (quarters, since deal cycles are long), the <em>denominator</em> (leads contacted, not leads generated), and <em>attribution</em> (was the team also changed, was the market different, was there an A/B split or a before/after comparison). A before/after over a market upswing is not 4×. The strongest form of the claim is an interleaved or randomised test: half the outreach from each list, conversion measured per list. If you ran before/after, say so and say what you controlled for; an interviewer trusts a smaller, well-attributed number more than a large unattributed one.</p>
+<div class="trap"><b>Trap · why not a model?</b> The reason PageRank beats a learned ranker here is usually label scarcity: a few hundred closed deals is not enough to train a ranker but is enough to seed PPR. Say that, then say what you would do with more labels (learning-to-rank with PPR score as a feature).</div>
+<div class="pocket"><strong>Pocket for bullet 3.</strong> p = (1−d)v + dMᵀp; d = 0.85; power iteration O(edges) per step, ~geometric convergence at rate d; PPR = v on seeds; dangling fix; precision@k and lift; the old list's conversion rate; the window; the test design.</div>
+
+<h2 id="b4">4. The bullet claiming schema normalization with retrieve-then-select, SFT then DPO on hard negatives and synthetic distractors</h2>
+<p><strong>Schema normalization</strong> maps fields from heterogeneous sources (a borrower's spreadsheet, a PDF table, a vendor's export) onto a canonical schema: "Total Rev (k$)" → <code>revenue_total_usd_thousands</code>. The classic formulation is schema matching; the LLM formulation is a two-stage pipeline:</p>
+<ol>
+<li><strong>Retrieve.</strong> Embed the source field (name, sample values, surrounding header context) and the canonical fields with a bi-encoder; take the top-k canonical candidates by cosine similarity. This bounds the LLM's choice set and makes the task tractable for thousands of canonical fields.</li>
+<li><strong>Select.</strong> Prompt the LLM with the source field, its sample values and the k candidates; it outputs one candidate (or "none"). SFT trains this selection on labelled mappings; the loss is cross-entropy on the chosen candidate's tokens.</li>
+<li><strong>DPO on hard negatives.</strong> The rejected side of each pair is a <em>hard negative</em>: a candidate the retriever ranked highly that is wrong (<code>revenue_net</code> for a gross revenue field), or a <strong>synthetic distractor</strong> constructed to be confusable (same words, different unit or period). This teaches the model the distinctions that SFT's positive-only signal leaves ambiguous, which is the same reason dense retrievers are trained with hard negatives (DPR, Karpukhin et al.).</li>
+</ol>
+<p>Metrics: top-1 accuracy of the full pipeline, recall@k of the retriever (if the right field is not in the top k, the selector cannot win; this bounds the system), and a confusion breakdown by error type (unit, period, gross/net, entity). Questions: why not a cross-encoder instead of a generative selector (answer: the LLM can also output "none" and a justification, and handles value-level evidence), how you prevented the selector from copying the first candidate (shuffle candidate order in training), how you chose k, and how DPO changed the error distribution relative to SFT alone.</p>
+<div class="trap"><b>Trap · SFT → DPO appears twice.</b> Bullets 1 and 4 both say "SFT then DPO on hard negatives". That is fine (it is a reusable recipe) if you present it as such: "the same two-stage recipe, applied to two tasks; in the QA task the negatives were wrong derivations, in the schema task they were confusable fields." If you cannot explain how the negatives differed, the two bullets look like one bullet written twice.</div>
+<div class="pocket"><strong>Pocket for bullet 4.</strong> Retriever recall@k bounds the system; selector top-1; hard negatives from the retriever's own top-k; distractors by unit/period perturbation; candidate-order shuffling; the error-type breakdown before and after DPO.</div>
+
+<h2 id="b5">5. The bullet claiming RLHF end to end: a LoRA reward model, clipped PPO, GAE, and a KL penalty to a frozen reference</h2>
+<p>This is the bullet that gets the most whiteboard time, because every term in it is a formula. It is also the bullet most at risk of contradicting bullet 1, which also mentions PPO.</p>
+<h3>5.1 Reward model</h3>
+<p>A <strong>Bradley–Terry</strong> reward model takes a prompt and a response and outputs a scalar r. On pairs (y<sub>w</sub>, y<sub>l</sub>) it is trained with loss −log σ(r(y<sub>w</sub>) − r(y<sub>l</sub>)). A <strong>LoRA reward model</strong> is the policy's base model with a LoRA adapter and a scalar head: it saves memory (the frozen base can be shared with the policy and the reference, so three of the four PPO models share one set of weights), and it is the standard trick for fitting PPO on a small cluster. Know: pair count, accuracy on a held-out pair set (70–80% is typical; higher suggests easy pairs), and how you guarded against reward hacking (length correlation of r, adversarial probes).</p>
+<h3>5.2 Clipped PPO, GAE, and the KL term</h3>
+<p>Per token, with ratio ρ<sub>t</sub> = π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) / π<sub>old</sub>(a<sub>t</sub>|s<sub>t</sub>) and advantage Â<sub>t</sub>, the clipped objective is</p>
+<div class="formula">L<sup>CLIP</sup> = E<sub>t</sub>[ min( ρ<sub>t</sub> Â<sub>t</sub>, clip(ρ<sub>t</sub>, 1−ε, 1+ε) Â<sub>t</sub> ) ], ε ≈ 0.2</div>
+<p>The reward for a response is the reward model's scalar on the final token, with a per-token penalty −β · log(π<sub>θ</sub>/π<sub>ref</sub>) that keeps the policy near the frozen SFT reference (β ≈ 0.01–0.1; a KL that grows past a few nats per sequence is the first sign of hacking). The <strong>value model</strong> predicts expected return per token, and <strong>GAE</strong> turns rewards and values into advantages with a bias–variance knob λ:</p>
+<div class="formula">δ<sub>t</sub> = r<sub>t</sub> + γ V(s<sub>t+1</sub>) − V(s<sub>t</sub>), &nbsp; Â<sub>t</sub> = Σ<sub>l≥0</sub> (γλ)<sup>l</sup> δ<sub>t+l</sub></div>
+<p>With λ = 1 the advantage is the Monte-Carlo return minus the baseline (unbiased, high variance); with λ = 0 it is the one-step TD error (low variance, biased by V). In LLM RLHF γ is usually 1 and λ 0.95. The canvas below runs the recursion on a toy 12-token sequence so that you can say what λ does rather than recite it. Full derivations are in <a href="robot-learning.html#llm">RL &amp; Robotics</a>; the systems side (four models, rollout vs training engines, weight sync) is in <a href="rl-systems.html">RL Systems</a>.</p>
+<div class="card">
+<h3>Animation: GAE on a 12-token response</h3>
+<div class="controls">
+<label>λ <input type="range" id="gL" min="0" max="1" step="0.05" value="0.95"> <span id="gLv">0.95</span></label>
+<label>γ <input type="range" id="gG" min="0.9" max="1" step="0.01" value="1"> <span id="gGv">1.00</span></label>
+<label>KL β <input type="range" id="gB" min="0" max="0.2" step="0.01" value="0.05"> <span id="gBv">0.05</span></label>
+<button class="btn" id="gRe">New sample</button>
+</div>
+<canvas id="gaeViz" class="viz" width="900" height="360"></canvas>
+<p class="caption">Bars: per-token reward (final-token reward-model score minus β·KL at every token), the value model's prediction V, and the resulting advantage Â<sub>t</sub>. Slide λ toward 0 and the advantages collapse to one-step TD errors; slide toward 1 and they become discounted sums of everything after t.</p>
+</div>
+<h3>5.3 Questions, and the consistency fix</h3>
+<div class="q"><b>Q.</b> You list PPO in the TAT-QA bullet and "RLHF end to end" as a separate bullet. Same system? <br><b>A.</b> Decide now. Either the RLHF bullet <em>is</em> the PPO run from bullet 1 (then merge them: one bullet for the TAT-QA result, one sub-clause saying it was done with the RLHF stack you built), or RLHF was built for a different task (then name the task and its metric). Two bullets that both say "PPO" with no task in the second one look like padding.</div>
+<div class="q"><b>Q.</b> Four models on 8×A100: how did they fit? <br><b>A.</b> Shared frozen base in BF16 (42 GB) with three LoRA adapters (policy, value head, reward) switched at forward time; reference = base with adapters disabled; rollouts generated with vLLM on a subset of GPUs and weights synced each step, or with HF generate at lower throughput. Say which, and the rollout-to-train ratio of wall-clock.</div>
+<div class="q"><b>Q.</b> How did you know it was working? <br><b>A.</b> Reward going up <em>while</em> KL stays bounded and a held-out, judge-free metric (exact match, human spot checks) also improves; reward up with KL exploding or length exploding is hacking.</div>
+<div class="q"><b>Q.</b> Why PPO and not DPO or GRPO? <br><b>A.</b> PPO is the right answer when you have a learned reward model and no verifier and want on-policy samples; GRPO when the reward is verifiable; DPO when you have pairs and a small budget. If your answer is "because the tutorial used PPO", say instead what you would choose now and why.</div>
+<div class="pocket"><strong>Pocket for bullet 5.</strong> BT loss −log σ(r<sub>w</sub> − r<sub>l</sub>); clipped ratio with ε = 0.2; per-token KL β; δ<sub>t</sub> and the (γλ)<sup>l</sup> sum; λ = 0.95, γ = 1; four models and the shared-base trick; RM accuracy; the KL-per-sequence you watched.</div>
+
+<h2 id="b6">6. The bullet claiming &gt;60% faster per-record processing from a multi-agent medical-record review system with RAG, MCP servers, and drift and hallucination guardrails</h2>
+<p>This bullet changes domain (from finance to clinical records), which an interviewer will notice; have the one-sentence context ready (a different client or an earlier project, and that the stack carried over). The technical content is an agent system, covered at depth in <a href="agents.html">Agents</a> and <a href="system-design.html">System Design</a>.</p>
+<ul>
+<li><strong>Multi-agent review.</strong> Typically an orchestrator that splits a record into sections, specialist workers (medications, diagnoses, timeline, billing codes) that each produce structured findings with citations, and a reconciler that merges and flags conflicts. The questions: why multiple agents rather than one long-context call (parallelism, bounded context per worker, auditable intermediate outputs), how workers communicate (shared state vs message passing), and what the failure mode of the orchestrator was.</li>
+<li><strong>RAG over long records.</strong> Chunking strategy (by section, by encounter, with overlap), embedding model, hybrid lexical + dense retrieval for drug names and codes, re-ranking, and the citation format that lets a reviewer click back to the page. The number to carry is retrieval recall on a labelled set of "fact → page" pairs.</li>
+<li><strong>MCP servers.</strong> The Model Context Protocol standardises how a model calls tools and reads resources: a server exposes <em>tools</em> (functions with JSON schemas), <em>resources</em> (documents) and <em>prompts</em>; the client (the agent runtime) lists and invokes them over JSON-RPC. Saying "MCP servers" means you wrapped the record store, the coding database, and the guardrail checks as servers so that any agent runtime could use them; be ready for "what did each server expose and why MCP rather than plain function calling" (answer: decoupling, reuse across runtimes, permissioning per server).</li>
+<li><strong>Hallucination guardrails.</strong> Every extracted claim must cite a span; a verifier (NLI model or a second LLM call) checks that the span entails the claim; unsupported claims are dropped or flagged. Metric: unsupported-claim rate on an audited sample, before and after.</li>
+<li><strong>Drift guardrails.</strong> Input drift (record formats or vocabulary change; monitor embedding-distribution distance and OOV rates), model drift (provider updates a hosted model; pin versions, run a golden set nightly), and prompt drift (changes to prompts or tools go through the same golden set). Say which you monitored and what the alert threshold was.</li>
+<li><strong>Privacy.</strong> Clinical records are protected data: de-identification before any third-party model, access logging, and data residency. An interviewer in healthcare will ask before anything else.</li>
+</ul>
+<div class="trap"><b>Trap · "&gt;60% faster" than what?</b> Per-record wall-clock of the new system against the previous one (a human reviewer, a single-agent pipeline, a rules engine)? Measured over how many records? And the quality side: did accuracy on an audited set hold? Speed without a quality number reads as a system that skips work. Carry both: "median review time 42 → 16 minutes over 300 records, with unsupported-claim rate under 2% on a 100-record audit".</div>
+<div class="pocket"><strong>Pocket for bullet 6.</strong> Orchestrator/workers/reconciler; chunking and hybrid retrieval with recall on a labelled set; MCP tools/resources/prompts over JSON-RPC; citation-entailment check and its unsupported-claim rate; three kinds of drift and one monitor each; the baseline and sample size behind 60%.</div>
+
+<h2 id="b7">7. The bullet claiming end-to-end ownership of AI products for an origination and financial-planning domain</h2>
+<p>"Owning end to end" is tested by asking for the pieces. The forward-deployed definition is: <strong>discovery</strong> (what decision the user makes, and what a wrong answer costs: that is where the materiality rubric came from), <strong>data</strong> (access, lineage, labelling budget), <strong>modelling</strong> (the ladder from prompting to RAG to fine-tuning, and why you stopped where you did), <strong>evaluation</strong> (offline metrics that predict the user's outcome, and the online metric that confirmed it), <strong>serving</strong> (latency and cost envelopes, vLLM, load tests), <strong>monitoring</strong> (drift, regressions, feedback capture), and <strong>the people</strong> (who used it, how adoption was measured). Prepare one story per piece and a one-line answer to "what would you do differently", because that question is the actual test of ownership.</p>
+
+<h2 id="consistency">8. Consistency checklist: reading the bullets side by side</h2>
+<p>These are the cross-bullet questions a careful reader writes in the margin. Resolve each before the interview; the resolution often improves the bullet.</p>
+<table class="cmp">
+<tr><th>Signal</th><th>What the reader thinks</th><th>Resolution</th></tr>
+<tr><td>PPO in bullet 1 and a separate RLHF bullet</td><td>Same project counted twice?</td><td>Merge, or name the second task and metric</td></tr>
+<tr><td>"SFT then DPO on hard negatives" in bullets 1 and 4</td><td>One recipe, two bullets?</td><td>Present as a reusable recipe; say how the negatives differed</td></tr>
+<tr><td>"5%", "4×", "&gt;60%"</td><td>Units, baselines, windows missing</td><td>Points vs percent; what the old number was; over what period and sample</td></tr>
+<tr><td>DeepSpeed sharding + LoRA on 8×A100</td><td>Did memory require sharding?</td><td>Name the GPU memory (40 vs 80 GB) and the ZeRO stage, or say DeepSpeed was the DP loop</td></tr>
+<tr><td>vLLM tensor parallelism for a 13–42 GB model</td><td>TP for a model that fits one GPU?</td><td>Latency, KV headroom, or 40 GB cards; otherwise say DP replicas</td></tr>
+<tr><td>"PPO/DPO"</td><td>Which one?</td><td>Pick the one that produced the number; mention the other as a comparison</td></tr>
+<tr><td>"Synthetic human-verified"</td><td>Which is it?</td><td>Generated by a model, reviewed by people: give counts and agreement</td></tr>
+<tr><td>LLM-as-judge rubric</td><td>Was it calibrated?</td><td>Agreement with humans on a labelled subset</td></tr>
+<tr><td>Finance bullets then a clinical-records bullet</td><td>Different employer or client?</td><td>One clause of context; the stack carried over</td></tr>
+<tr><td>Six substantial projects since the role began</td><td>All shipped in about a year?</td><td>Which are in production, which were experiments; sequence them in the story</td></tr>
+<tr><td>"8×A100" with no time or tokens</td><td>Was it a big run?</td><td>GPU-hours, tokens, epochs; small honest numbers beat vague large ones</td></tr>
+</table>
+
+<h2 id="rewrite">9. Rewriting a bullet so that it survives the three layers</h2>
+<p>A bullet that survives questioning has the shape <strong>outcome (with unit and baseline) ← method (named, singular) ← scale (numbers an engineer can check)</strong>. Templates, with placeholders for your real numbers:</p>
+<ul>
+<li>"Raised TAT-QA dev F1 from <em>X</em> to <em>Y</em> (+<em>Δ</em> points) by post-training gpt-oss-20b (3.6 B active): SFT on <em>N</em> teacher-distilled derivations filtered by exact match, then DPO on <em>M</em> pairs mined from incorrect traces; LoRA rank <em>r</em> chosen from a {8…128} sweep; trained data-parallel on 8×A100-80GB with DeepSpeed, served with vLLM (TP=2 for p50 latency of <em>t</em> ms on 8k-token contexts)."</li>
+<li>"Built the post-training data loop: a fixed-settings vLLM harness benchmarking five open models, an LLM judge with a materiality rubric calibrated to <em>κ</em> = <em>k</em> against two domain reviewers, and <em>P</em> synthetic preference pairs of which <em>Q</em>% were human-reviewed; <em>R</em> loop rounds cut the scale-error rate from <em>a</em>% to <em>b</em>%."</li>
+<li>"Ranked target accounts with Personalized PageRank over a news co-mention graph (<em>n</em> entities, <em>e</em> edges, weekly rebuild) seeded from CRM relationships; top-50 leads converted at <em>c</em>% vs <em>c₀</em>% for the prior list over two quarters (<em>k</em>× lift, interleaved test)."</li>
+<li>"Normalised <em>F</em> source fields onto a <em>C</em>-field canonical schema with retrieve-then-select: bi-encoder top-<em>k</em> (recall@<em>k</em> = <em>s</em>%) feeding an SFT'd selector, then DPO on retriever hard negatives and unit/period distractors; top-1 accuracy <em>u</em> → <em>v</em>%."</li>
+<li>"Implemented RLHF for <em>task</em>: LoRA reward model (<em>p</em> pairs, <em>acc</em>% held-out), clipped PPO with GAE (λ = 0.95) and a per-token KL penalty to the SFT reference, all four models on 8×A100 via a shared frozen base; <em>metric</em> improved <em>x</em> → <em>y</em> with sequence KL under <em>z</em> nats."</li>
+<li>"Cut median record review time from <em>t₀</em> to <em>t₁</em> minutes (−<em>%</em>) over <em>n</em> records with an orchestrator/worker agent system: section-level RAG (recall <em>s</em>%), tools and record stores exposed as MCP servers, citation-entailment checks holding unsupported claims under <em>h</em>%, and nightly golden-set drift monitoring."</li>
+</ul>
+<div class="card">
+<h3>Bullet stress-tester</h3>
+<p class="caption">Paste a bullet (yours, not the ones above). The checks are heuristics, not judgement: they flag the patterns interviewers probe. Nothing leaves your browser.</p>
+<textarea id="btIn" placeholder="e.g. Improved accuracy by 12% using fine-tuning and RAG on 4 GPUs."></textarea>
+<div class="controls"><button class="btn" id="btGo">Check</button></div>
+<div id="btOut"></div>
+</div>
+
+<h2 id="reading">10. Reading list</h2>
+<ul>
+<li>TAT-QA: Zhu et al., <a href="https://aclanthology.org/2021.acl-long.254/">"TAT-QA: A Question Answering Benchmark on a Hybrid of Tabular and Textual Content in Finance"</a> (ACL 2021); dataset and evaluator at <a href="https://github.com/NExTplusplus/TAT-QA">NExTplusplus/TAT-QA</a>.</li>
+<li>gpt-oss: <a href="https://github.com/openai/gpt-oss">openai/gpt-oss</a> (model card, harmony format, MXFP4 notes); vLLM's <a href="https://github.com/vllm-project/vllm">serving recipe</a>.</li>
+<li>LoRA: Hu et al., <a href="https://arxiv.org/abs/2106.09685">"LoRA: Low-Rank Adaptation of Large Language Models"</a>; rsLoRA: Kalajdzievski, <a href="https://arxiv.org/abs/2312.03732">"A Rank Stabilization Scaling Factor for Fine-Tuning with LoRA"</a>.</li>
+<li>ZeRO: Rajbhandari et al., <a href="https://arxiv.org/abs/1910.02054">"ZeRO: Memory Optimizations Toward Training Trillion Parameter Models"</a>; <a href="https://github.com/deepspeedai/DeepSpeed">DeepSpeed</a>.</li>
+<li>Activation memory: Korthikanti et al., <a href="https://arxiv.org/abs/2205.05198">"Reducing Activation Recomputation in Large Transformer Models"</a>.</li>
+<li>PPO: Schulman et al., <a href="https://arxiv.org/abs/1707.06347">"Proximal Policy Optimization Algorithms"</a>; GAE: Schulman et al., <a href="https://arxiv.org/abs/1506.02438">"High-Dimensional Continuous Control Using Generalized Advantage Estimation"</a>; RLHF: Ouyang et al., <a href="https://arxiv.org/abs/2203.02155">"Training language models to follow instructions with human feedback"</a>.</li>
+<li>DPO: Rafailov et al., <a href="https://arxiv.org/abs/2305.18290">"Direct Preference Optimization"</a>; GRPO: Shao et al., <a href="https://arxiv.org/abs/2402.03300">"DeepSeekMath"</a>; the RLHF Book: <a href="https://rlhfbook.com/">rlhfbook.com</a>.</li>
+<li>LLM-as-judge: Zheng et al., <a href="https://arxiv.org/abs/2306.05685">"Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena"</a>.</li>
+<li>PageRank: Page, Brin, Motwani, Winograd, <a href="http://ilpubs.stanford.edu:8090/422/">"The PageRank Citation Ranking"</a> (1999); Personalized PageRank in Haveliwala, <a href="https://dl.acm.org/doi/10.1145/511446.511513">"Topic-Sensitive PageRank"</a> (WWW 2002); <a href="https://networkx.org/documentation/stable/reference/algorithms/link_analysis.html">networkx.pagerank</a> (the <code>personalization</code> argument).</li>
+<li>Hard negatives for retrieval: Karpukhin et al., <a href="https://arxiv.org/abs/2004.04906">"Dense Passage Retrieval for Open-Domain Question Answering"</a>.</li>
+<li>Model Context Protocol: <a href="https://modelcontextprotocol.io/">specification</a> and <a href="https://github.com/modelcontextprotocol">reference servers</a>.</li>
+<li>Companion chapters: <a href="customization.html">Customization &amp; Evals</a>, <a href="model-playbooks.html">Model Playbooks</a>, <a href="rl-systems.html">RL Systems</a>, <a href="robot-learning.html#llm">RL basics</a>, <a href="agents.html">Agents</a>, <a href="interview-journey.html">The Interview Journey</a>, and the <a href="flashcards.html">Résumé Defense deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="interview-journey.html">← Interview Journey</a><a href="notes.html">Notes →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+function watchTheme(fn){new MutationObserver(fn).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});}
+function rr(c,x,y,w,h,r){c.beginPath();c.moveTo(x+r,y);c.arcTo(x+w,y,x+w,y+h,r);c.arcTo(x+w,y+h,x,y+h,r);c.arcTo(x,y+h,x,y,r);c.arcTo(x,y,x+w,y,r);c.closePath();}
+
+// ---------- 1.6 memory calculator ----------
+(function(){
+const ids=['mP','mN','mG','mS','mB','mD','mL'];const out=document.getElementById('memOut');
+function v(id){return parseFloat(document.getElementById(id).value)||0}
+function fmt(x){return x>=1000?(x/1000).toFixed(2)+' TB':x.toFixed(1)+' GB'}
+function calc(){
+  const P=v('mP')*1e9,N=v('mN'),G=v('mG'),S=v('mS'),B=v('mB'),D=v('mD'),L=v('mL');
+  const full=P*16/1e9, lora=P*2/1e9;
+  const actNo=34*S*B*D*L/1e9, actCk=2*S*B*D*L/1e9;
+  const z3=full/N, z2=P*2/1e9+(P*14/1e9)/N, z1=P*4/1e9+(P*12/1e9)/N;
+  function fit(gb){return gb<=G?'<span class="pill g">fits</span>':'<span class="pill w">does not fit</span>'}
+  out.innerHTML='<table class="cmp"><tr><th>Scenario</th><th>Per-GPU states</th><th>+ activations (no ckpt)</th><th>+ activations (ckpt)</th><th>Fits '+G+' GB?</th></tr>'+
+  '<tr><td>Full FT, no sharding</td><td>'+fmt(full)+'</td><td>'+fmt(full+actNo)+'</td><td>'+fmt(full+actCk)+'</td><td>'+fit(full+actCk)+'</td></tr>'+
+  '<tr><td>Full FT, ZeRO-1 (optimizer sharded)</td><td>'+fmt(z1)+'</td><td>'+fmt(z1+actNo)+'</td><td>'+fmt(z1+actCk)+'</td><td>'+fit(z1+actCk)+'</td></tr>'+
+  '<tr><td>Full FT, ZeRO-2 (+ gradients)</td><td>'+fmt(z2)+'</td><td>'+fmt(z2+actNo)+'</td><td>'+fmt(z2+actCk)+'</td><td>'+fit(z2+actCk)+'</td></tr>'+
+  '<tr><td>Full FT, ZeRO-3 (+ parameters)</td><td>'+fmt(z3)+'</td><td>'+fmt(z3+actNo)+'</td><td>'+fmt(z3+actCk)+'</td><td>'+fit(z3+actCk)+'</td></tr>'+
+  '<tr><td>LoRA, frozen BF16 base replicated (DDP / ZeRO-2)</td><td>'+fmt(lora)+' + adapters</td><td>'+fmt(lora+actNo)+'</td><td>'+fmt(lora+actCk)+'</td><td>'+fit(lora+actCk)+'</td></tr>'+
+  '<tr><td>LoRA, base sharded with ZeRO-3</td><td>'+fmt(lora/N)+' + adapters</td><td>'+fmt(lora/N+actNo)+'</td><td>'+fmt(lora/N+actCk)+'</td><td>'+fit(lora/N+actCk)+'</td></tr></table>'+
+  '<p class="caption">Total full-FT state across the cluster: '+fmt(full)+' over '+N+' GPUs = '+fmt(G*N)+' available. The LoRA rows show why sharding is optional at 80 GB and mandatory at 40 GB for a '+v('mP')+' B model.</p>';
+}
+ids.forEach(i=>document.getElementById(i).oninput=calc);calc();
+})();
+
+// ---------- 3.1 PageRank power iteration ----------
+(function(){
+const cv=document.getElementById('prViz'),ctx=cv.getContext('2d');
+const out=document.getElementById('prOut');
+const NODES=[
+ {n:'Wire Service',x:450,y:60,seed:false},{n:'Fund A',x:150,y:150,seed:true},{n:'Holdco B',x:300,y:120,seed:false},
+ {n:'Retailer C',x:600,y:120,seed:false},{n:'Bank D',x:760,y:160,seed:true},{n:'Logistics E',x:200,y:300,seed:false},
+ {n:'Software F',x:400,y:260,seed:false},{n:'Energy G',x:620,y:300,seed:false},{n:'Sponsor H',x:780,y:330,seed:true},
+ {n:'Supplier I',x:470,y:380,seed:false}];
+// undirected news co-mention edges (grey) and CRM edges (green)
+const E=[[0,2,'n'],[0,3,'n'],[0,6,'n'],[0,7,'n'],[0,1,'n'],[0,4,'n'],[1,2,'c'],[1,5,'c'],[2,6,'n'],[3,7,'n'],[3,4,'n'],[4,8,'c'],[5,6,'n'],[6,9,'n'],[7,8,'n'],[7,9,'n'],[8,9,'c'],[2,3,'n'],[5,9,'n']];
+const n=NODES.length;const adj=Array.from({length:n},()=>[]);E.forEach(([a,b])=>{adj[a].push(b);adj[b].push(a);});
+let p,it,hist;
+function vvec(){const pers=document.getElementById('prPers').checked;const v=new Array(n).fill(0);if(pers){const s=NODES.filter(x=>x.seed).length;NODES.forEach((x,i)=>{if(x.seed)v[i]=1/s});}else v.fill(1/n);return v;}
+function reset(){p=vvec();it=0;hist=[];draw();out.textContent='Iteration 0 · p = v (teleport distribution).';}
+function step(){const d=parseFloat(document.getElementById('prD').value);const v=vvec();const q=new Array(n).fill(0);
+  for(let i=0;i<n;i++){const deg=adj[i].length;if(deg===0){for(let j=0;j<n;j++)q[j]+=p[i]*v[j];}else adj[i].forEach(j=>q[j]+=p[i]/deg);}
+  const np=q.map((x,i)=>(1-d)*v[i]+d*x);const delta=np.reduce((s,x,i)=>s+Math.abs(x-p[i]),0);p=np;it++;hist.push(delta);draw();
+  const top=[...p.keys()].sort((a,b)=>p[b]-p[a]).slice(0,3).map(i=>NODES[i].n+' '+p[i].toFixed(3)).join(' · ');
+  out.textContent='Iteration '+it+' · L1 change '+delta.toExponential(2)+' · top-3: '+top;return delta;}
+function run(){let k=0;(function loop(){const dl=step();if(dl>1e-6&&k++<200)setTimeout(loop,60);})();}
+function draw(){const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),acc=css('--accent'),acc2=css('--accent2');
+  E.forEach(([a,b,t])=>{ctx.strokeStyle=t==='c'?acc2:dim;ctx.globalAlpha=t==='c'?0.9:0.35;ctx.lineWidth=t==='c'?2.5:1.2;ctx.beginPath();ctx.moveTo(NODES[a].x,NODES[a].y);ctx.lineTo(NODES[b].x,NODES[b].y);ctx.stroke();});ctx.globalAlpha=1;
+  const mx=Math.max(...p);NODES.forEach((nd,i)=>{const r=8+40*(p[i]/mx);ctx.beginPath();ctx.arc(nd.x,nd.y,r,0,Math.PI*2);ctx.fillStyle=nd.seed?acc2:acc;ctx.globalAlpha=0.75;ctx.fill();ctx.globalAlpha=1;ctx.strokeStyle=txt;ctx.lineWidth=1;ctx.stroke();
+    ctx.fillStyle=txt;ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(nd.n,nd.x,nd.y-r-6);ctx.font='11px monospace';ctx.fillText(p[i].toFixed(3),nd.x,nd.y+4);});
+  // convergence strip
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('L1 change per iteration (log scale)',20,H-54);
+  hist.slice(-40).forEach((h,k)=>{const bar=Math.max(2,40*Math.min(1,Math.max(0,(Math.log10(h)+7)/7)));ctx.fillStyle=acc;ctx.fillRect(20+k*8,H-10-bar,6,bar);});
+}
+document.getElementById('prD').oninput=e=>{document.getElementById('prDv').textContent=parseFloat(e.target.value).toFixed(2);};
+document.getElementById('prPers').onchange=reset;document.getElementById('prStep').onclick=step;document.getElementById('prRun').onclick=run;document.getElementById('prReset').onclick=reset;
+reset();watchTheme(draw);
+})();
+
+// ---------- 5.2 GAE ----------
+(function(){
+const cv=document.getElementById('gaeViz'),ctx=cv.getContext('2d');const T=12;let kl,V,R=1.2;
+function sample(){kl=Array.from({length:T},()=>Math.random()*0.8);V=[];let v=0.9;for(let t=0;t<T;t++){v+=(Math.random()-0.5)*0.3;V.push(v);}R=0.6+Math.random()*1.4;draw();}
+function draw(){const lam=parseFloat(document.getElementById('gL').value),gam=parseFloat(document.getElementById('gG').value),beta=parseFloat(document.getElementById('gB').value);
+  document.getElementById('gLv').textContent=lam.toFixed(2);document.getElementById('gGv').textContent=gam.toFixed(2);document.getElementById('gBv').textContent=beta.toFixed(2);
+  const r=kl.map((k,t)=>-beta*k+(t===T-1?R:0));
+  const delta=[];for(let t=0;t<T;t++){const vn=t+1<T?V[t+1]:0;delta.push(r[t]+gam*vn-V[t]);}
+  const A=new Array(T).fill(0);let acc=0;for(let t=T-1;t>=0;t--){acc=delta[t]+gam*lam*acc;A[t]=acc;}
+  const W=cv.width,H=cv.height;ctx.clearRect(0,0,W,H);const dim=css('--text-dim'),txt=css('--text'),ac=css('--accent'),ac2=css('--accent2'),wn=css('--warn');
+  const rows=[['reward r_t (final RM score − β·KL)',r,ac],['value V(s_t)',V,ac2],['advantage Â_t (GAE)',A,wn]];
+  const rowH=100,base0=30;const cw=(W-120)/T;
+  rows.forEach(([label,arr,col],ri)=>{const y0=base0+ri*rowH+rowH/2;const mx=Math.max(0.5,...arr.map(Math.abs));
+    ctx.strokeStyle=dim;ctx.globalAlpha=.5;ctx.beginPath();ctx.moveTo(100,y0);ctx.lineTo(W-10,y0);ctx.stroke();ctx.globalAlpha=1;
+    ctx.fillStyle=txt;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText(label,10,base0+ri*rowH+12);
+    arr.forEach((val,t)=>{const h=(val/mx)*(rowH/2-14);ctx.fillStyle=col;ctx.globalAlpha=.8;ctx.fillRect(100+t*cw+4,h>=0?y0-h:y0,cw-8,Math.abs(h));ctx.globalAlpha=1;
+      ctx.fillStyle=txt;ctx.font='10px monospace';ctx.textAlign='center';ctx.fillText(val.toFixed(2),100+t*cw+cw/2,h>=0?y0+12:y0-h-4);});
+  });
+  ctx.fillStyle=dim;ctx.font='11px sans-serif';ctx.textAlign='left';ctx.fillText('token t →  (λ='+lam.toFixed(2)+', γ='+gam.toFixed(2)+', β='+beta.toFixed(2)+'); sequence KL = '+kl.reduce((a,b)=>a+b,0).toFixed(2)+' nats',100,H-8);
+}
+['gL','gG','gB'].forEach(i=>document.getElementById(i).oninput=draw);document.getElementById('gRe').onclick=sample;sample();watchTheme(draw);
+})();
+
+// ---------- 9. bullet stress-tester ----------
+(function(){
+const out=document.getElementById('btOut');
+document.getElementById('btGo').onclick=()=>{
+  const s=document.getElementById('btIn').value.trim();if(!s){out.innerHTML='';return;}
+  const checks=[];
+  const pct=/(\d+(\.\d+)?)\s*%/.test(s), pts=/(points?|pp\b|F1|EM|accuracy|precision|recall|latency|ms\b|p50|p95|minutes?|hours?)/i.test(s);
+  checks.push([pct&&!pts?0:1,pct?(pts?'Percent has a unit or metric nearby.':'A "%" with no metric or unit: points or relative? of what metric?'):'No percentage; fine if an absolute number carries the result.']);
+  const base=/(from|vs\.?|versus|baseline|compared|over the|up from|down from|→)/i.test(s);
+  checks.push([base?1:0,base?'A baseline or comparison is named.':'No baseline: "improved X" invites "from what?"']);
+  const mult=/(\d+(\.\d+)?)\s*[x×]/i.test(s);if(mult)checks.push([base?1:0,base?'Multiplier has a comparison.':'A "N×" claim needs the old rate, the window and the test design.']);
+  const slash=/\b\w+\/\w+\b/.test(s.replace(/https?:\/\/\S+/g,''))&&/(PPO\/DPO|SFT\/RL|RAG\/fine|LoRA\/QLoRA|[A-Z]{2,}\/[A-Z]{2,})/.test(s);
+  checks.push([slash?0:1,slash?'Two techniques joined by a slash: say which produced the result.':'No hedged "A/B" technique pairs.']);
+  const tools=(s.match(/\b(vLLM|DeepSpeed|LoRA|QLoRA|PPO|DPO|GRPO|RAG|MCP|SFT|RLHF|FSDP|Megatron|TensorRT|SGLang|LangChain|Kubernetes|Spark)\b/gi)||[]);
+  const uniq=[...new Set(tools.map(t=>t.toLowerCase()))];
+  checks.push([uniq.length<=4?1:0,uniq.length+' named tools/techniques'+(uniq.length>4?': more than four reads as a list; keep the ones that explain the number.':'.')]);
+  const outcome=/(cut|raised|reduced|increased|improved|lifted|grew|accelerat|faster|lower|higher)/i.test(s);
+  checks.push([outcome?1:0,outcome?'Leads with an outcome verb.':'No outcome verb: start with what changed, then how.']);
+  const gpu=/\d+\s*[x×]\s*(A100|H100|H200|B200|L40|A10|T4|Trainium|TPU)/i.test(s);
+  if(gpu)checks.push([/(hours?|tokens|epochs?|days?)/i.test(s)?1:0,/(hours?|tokens|epochs?|days?)/i.test(s)?'GPU count comes with time or tokens.':'A GPU count without GPU-hours, tokens or epochs: "how big a run?" is coming.']);
+  const nums=(s.match(/\d+(\.\d+)?/g)||[]).length;checks.push([nums>=2?1:0,nums+' numbers'+(nums<2?': an outcome and a scale number usually need two.':'.')]);
+  const len=s.split(/\s+/).length;checks.push([len<=45?1:0,len+' words'+(len>45?': over ~45 words, split into outcome and method.':'.')]);
+  const score=checks.reduce((a,c)=>a+c[0],0);
+  out.innerHTML='<p><strong>'+score+' / '+checks.length+'</strong> checks pass.</p>'+checks.map(c=>'<div class="check"><span class="'+(c[0]?'ok':'no')+'">'+(c[0]?'✔':'✘')+'</span><span>'+c[1]+'</span></div>').join('');
+};
+})();
+</script>
+</body>
+</html>
