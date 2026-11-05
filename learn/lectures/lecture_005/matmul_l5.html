@@ -1,0 +1,361 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>matmul_l5</title><link rel="stylesheet" href="../../learn.css"><style>.nb pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.nb .cell{margin:14px 0}.nb .in{border-left:3px solid var(--accent);padding-left:10px}.nb .out{border-left:3px solid var(--accent2);padding-left:10px;margin-top:6px}
+.nb img{max-width:100%;border-radius:8px}.nb table{border-collapse:collapse}.nb td,.nb th{border:1px solid var(--border);padding:4px 8px}.crumb{font-size:.85rem;color:var(--text-dim)}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}</style></head><body><nav class="topnav"><a class="home" href="../../index.html">Learn</a><div class="links"><a href="../../lectures.html" class="here">GPU MODE Lectures</a><a href="../../index.html">All chapters</a><a href="../../notes.html">Notes library</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main>
+<div class="crumb"><a href="../../lectures.html">GPU MODE Lectures</a> › lecture_005/matmul_l5.ipynb</div><h1>matmul_l5</h1>
+<article class="nb"><div class="cell md"><h2>Setup</h2></div><div class="cell"><div class="in"><pre><code>import os,math,sys,torch,re,numpy as np
+from types import SimpleNamespace as ns
+from collections import namedtuple</code></pre></div></div><div class="cell"><div class="in"><pre><code>dim3 = namedtuple(&#x27;dim3&#x27;, [&#x27;x&#x27;,&#x27;y&#x27;,&#x27;z&#x27;], defaults=(1,1))</code></pre></div></div><div class="cell"><div class="in"><pre><code>d = dim3(2,3)
+d</code></pre></div><div class="out"><pre>dim3(x=2, y=3, z=1)</pre></div></div><div class="cell"><div class="in"><pre><code>d.x,d.y</code></pre></div><div class="out"><pre>(2, 3)</pre></div></div><div class="cell"><div class="in"><pre><code>np.set_printoptions(precision=2, linewidth=140)
+torch.set_printoptions(precision=2, linewidth=140, sci_mode=False)</code></pre></div></div><div class="cell"><div class="in"><pre><code>sys.path.insert(0, &#x27;..&#x27;)</code></pre></div></div><div class="cell"><div class="in"><pre><code>from utils import show_img,load_cuda,cuda_begin,cdiv</code></pre></div></div><div class="cell"><div class="in"><pre><code>%load_ext wurlitzer</code></pre></div></div><div class="cell"><div class="in"><pre><code># os.environ[&#x27;CUDA_LAUNCH_BLOCKING&#x27;]=&#x27;1&#x27;
+torch.manual_seed(42);</code></pre></div></div><div class="cell"><div class="in"><pre><code>m1 = torch.rand(5120, 256)
+m1s = m1[:4]
+m2 = torch.rand(256,5120)
+m2s = m2[:,:4]</code></pre></div></div><div class="cell md"><h2>Reminder</h2></div><div class="cell md"><h3>2d Python kernel</h3></div><div class="cell"><div class="in"><pre><code>def blk_kernel2d(f, blocks, threads, *args):
+    for i0 in range(blocks.y):
+        for i1 in range(blocks.x):
+            for j0 in range(threads.y):
+                for j1 in range(threads.x): f(dim3(i1,i0), dim3(j1,j0), threads, *args)</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_bk(blockIdx, threadIdx, blockDim, m, n, out, h, w, k):
+    r = blockIdx.y*blockDim.y + threadIdx.y
+    c = blockIdx.x*blockDim.x + threadIdx.x
+    
+    if (r&gt;=h or c&gt;=w): return
+    o = 0.
+    for i in range(k): o += m[r*k+i] * n[i*w+c]
+    out[r*w+c] = o</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_2d(m, n):
+    h,k  = m.shape
+    k2,w = n.shape
+    assert k==k2, &quot;Size mismatch!&quot;
+    output = torch.zeros(h, w, dtype=m.dtype)
+    tpb = dim3(16,16)
+    blocks = dim3(cdiv(w,tpb.x), cdiv(h,tpb.y))
+    blk_kernel2d(matmul_bk, blocks, tpb,
+                 m.flatten(), n.flatten(), output.flatten(), h, w, k)
+    return output</code></pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(matmul_2d(m1s, m2s), m1s@m2s).all()</code></pre></div><div class="out"><pre>tensor(True)</pre></div></div><div class="cell md"><h3>CUDA</h3></div><div class="cell"><div class="in"><pre><code>cuda_src = cuda_begin + r&#x27;&#x27;&#x27;
+__global__ void matmul_k(float* m, float* n, float* out, int h, int w, int k) {
+    int r = blockIdx.y*blockDim.y + threadIdx.y;
+    int c = blockIdx.x*blockDim.x + threadIdx.x;
+
+    if (r&gt;=h || c&gt;=w) return;
+    float o = 0;
+    for (int i = 0; i&lt;k; ++i) o += m[r*k+i] * n[i*w+c];
+    out[r*w+c] = o;
+}
+
+torch::Tensor matmul(torch::Tensor m, torch::Tensor n) {
+    CHECK_INPUT(m); CHECK_INPUT(n);
+    int h = m.size(0);
+    int w = n.size(1);
+    int k = m.size(1);
+    TORCH_CHECK(k==n.size(0), &quot;Size mismatch!&quot;);
+    auto output = torch::zeros({h, w}, m.options());
+
+    dim3 tpb(16,16);
+    dim3 blocks(cdiv(w, tpb.x), cdiv(h, tpb.y));
+    matmul_k&lt;&lt;&lt;blocks, tpb&gt;&gt;&gt;(
+        m.data_ptr&lt;float&gt;(), n.data_ptr&lt;float&gt;(), output.data_ptr&lt;float&gt;(), h, w, k);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return output;
+}
+&#x27;&#x27;&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>fname = &#x27;matmul&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>def get_sig(fname, src):
+    res = re.findall(rf&#x27;^(.+\s+{fname}\(.*?\))\s*{{?\s*$&#x27;, src, re.MULTILINE)
+    return res[0]+&#x27;;&#x27; if res else None</code></pre></div></div><div class="cell"><div class="in"><pre><code>cpp_src = get_sig(fname, cuda_src)
+cpp_src</code></pre></div><div class="out"><pre>&#x27;torch::Tensor matmul(torch::Tensor m, torch::Tensor n);&#x27;</pre></div></div><div class="cell"><div class="in"><pre><code>module = load_cuda(cuda_src, cpp_src, [fname])</code></pre></div></div><div class="cell"><div class="in"><pre><code>m1c,m2c = m1.contiguous().cuda(),m2.contiguous().cuda()</code></pre></div></div><div class="cell"><div class="in"><pre><code>module.matmul(m1c,m2c).shape</code></pre></div><div class="out"><pre>torch.Size([5120, 5120])</pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(module.matmul(m1c,m2c), m1c@m2c).all()</code></pre></div><div class="out"><pre>tensor(True, device=&#x27;cuda:0&#x27;)</pre></div></div><div class="cell"><div class="in"><pre><code>%%timeit -n 10
+module.matmul(m1c,m2c)
+torch.cuda.synchronize()</code></pre></div><div class="out"><pre>6 ms ± 196 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre></div></div><div class="cell md"><p>When I removed the call to the kernel itself, it took around 50 µs (0.05 ms) to run, so that's the overhead of the call on my machine.</p></div><div class="cell md"><h2>Shared mem</h2></div><div class="cell md"><h3>Python</h3></div><div class="cell"><div class="in"><pre><code>a = torch.zeros(5)
+b,c = a[:3],a[3:]</code></pre></div></div><div class="cell"><div class="in"><pre><code>b[1] = 2
+c[0] = 6
+a</code></pre></div><div class="out"><pre>tensor([0., 2., 0., 6., 0.])</pre></div></div><div class="cell"><div class="in"><pre><code>def blk_kernel2d_shar(f, blocks, threads, sh_sz, *args, **kwargs):
+    for i0 in range(blocks.y):
+        for i1 in range(blocks.x):
+            shared = torch.zeros(sh_sz)
+            f(dim3(i1,i0), threads, shared, *args, **kwargs)</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_tiled_bk(blockIdx, blockDim, shared, m, n, out, h, w, k, tw):
+    shar_sz = tw*tw
+    ms,ns = shared[:shar_sz],shared[shar_sz:]
+
+    for ph in range(cdiv(k,tw)):
+        idx = ph*tw
+        # fill shared
+        for tr in range(blockDim.y):
+            for tc in range(blockDim.x):
+                r,c = blockIdx.y*blockDim.y + tr, blockIdx.x*blockDim.x + tc
+                ms[tr*tw+tc] = m[ tc+idx + r*k] if r&lt;h and idx+tc&lt;k else 0.
+                ns[tr*tw+tc] = n[(tr+idx)*w +c] if c&lt;w and idx+tr&lt;k else 0.
+
+        # do dotprods from shared
+        for tr in range(blockDim.y):
+            for tc in range(blockDim.x):
+                r,c = blockIdx.y*blockDim.y + tr, blockIdx.x*blockDim.x + tc
+                for i in range(tw):
+                    if r*w+c&lt;len(out): out[r*w+c] += ms[tr*tw+i] * ns[tw*i+tc]</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_2d(m, n, tw=16):
+    h,k  = m.shape
+    k2,w = n.shape
+    assert k==k2, &quot;Size mismatch!&quot;
+    output = torch.zeros(h, w, dtype=m.dtype)
+    tpb = dim3(tw,tw)
+    blocks = dim3(cdiv(w,tpb.x), cdiv(h,tpb.y))
+    blk_kernel2d_shar(matmul_tiled_bk, blocks, tpb, tw*tw*2,
+                      m.flatten(), n.flatten(), output.flatten(),
+                      h, w, k, tw=tw)
+    return output</code></pre></div></div><div class="cell"><div class="in"><pre><code>m1s.shape, m2.shape</code></pre></div><div class="out"><pre>(torch.Size([4, 256]), torch.Size([256, 5120]))</pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(matmul_2d(m1s, m2s, tw=16), m1s@m2s).all()</code></pre></div><div class="out"><pre>tensor(True)</pre></div></div><div class="cell md"><h3>Python run_threads</h3></div><div class="cell"><div class="in"><pre><code>def run_threads(f, blockDim, *args, **kwargs):
+    for i0 in range(blockDim.y):
+        for i1 in range(blockDim.x): f(i0, i1, *args, **kwargs)</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_tiled_bk(blockIdx, blockDim, shared, m, n, out, h, w, k, tw):
+    shar_sz = tw*tw
+    ms,ns = shared[:shar_sz],shared[shar_sz:]
+
+    def get_rc(tr, tc): return blockIdx.y*blockDim.y + tr, blockIdx.x*blockDim.x + tc
+
+    def fill_shared_tk(tr, tc, ph):
+        r,c = get_rc(tr, tc)
+        ms[tr*tw+tc] = m[ tc + ph*tw + r*k] if r&lt;h and (ph*tw+tc)&lt;k else 0.
+        ns[tr*tw+tc] = n[(tr + ph*tw)*w +c] if c&lt;w and (ph*tw+tr)&lt;k else 0.
+
+    def dotprod_tk(tr, tc):
+        r,c = get_rc(tr, tc)
+        for i in range(tw):
+            if r*w+c&lt;len(out): out[r*w+c] += ms[tr*tw+i] * ns[tw*i+tc]
+
+    for ph in range(int(math.ceil(k/tw))):
+        run_threads(fill_shared_tk, blockDim, ph)
+        run_threads(dotprod_tk, blockDim)</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_2d(m, n, tw=16):
+    h,k  = m.shape
+    k2,w = n.shape
+    assert k==k2, &quot;Size mismatch!&quot;
+    output = torch.zeros(h, w, dtype=m.dtype)
+    tpb = dim3(tw,tw)
+    blocks = dim3(cdiv(w,tpb.x), cdiv(h,tpb.y))
+    blk_kernel2d_shar(matmul_tiled_bk, blocks, tpb, tw*tw*2,
+                      m.flatten(), n.flatten(), output.flatten(),
+                      h, w, k, tw=tw)
+    return output</code></pre></div></div><div class="cell"><div class="in"><pre><code>m1s.shape, m2s.shape</code></pre></div><div class="out"><pre>(torch.Size([4, 256]), torch.Size([256, 4]))</pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(matmul_2d(m1s, m2s, tw=16), m1s@m2s).all()</code></pre></div><div class="out"><pre>tensor(True)</pre></div></div><div class="cell md"><h3>Python threads</h3></div><div class="cell"><div class="in"><pre><code>import threading
+from threading import Barrier, Thread
+from concurrent.futures import ThreadPoolExecutor</code></pre></div></div><div class="cell"><div class="in"><pre><code>def g(x, sb):
+    print(x)
+    sb.wait()
+    print(-x)
+    sb.wait()
+    print(x*10)</code></pre></div></div><div class="cell"><div class="in"><pre><code>num = 3
+sb = Barrier(num)
+with ThreadPoolExecutor(num) as ex: list(ex.map(lambda i: g(i,sb), range(1,num+1)))</code></pre></div><div class="out"><pre>1
+2
+3
+-3
+-1
+-2
+30
+20
+10
+</pre></div></div><div class="cell"><div class="in"><pre><code>def blk_kernel2d_shar(f, blocks, tpb, sh_sz, *args, **kwargs):
+    for i0 in range(blocks.y):
+        for i1 in range(blocks.x):
+            shar = torch.zeros(sh_sz)
+            syncb = Barrier(tpb.y*tpb.x)
+            threads = [Thread(target=f, args=(dim3(i1,i0), dim3(p,o), tpb, shar, syncb, *args), kwargs=kwargs)
+                       for o in range(tpb.y) for p in range(tpb.x)]
+            for tr in threads: tr.start()
+            for tr in threads: tr.join()</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_tiled_bk(blockIdx, threadIdx, blockDim, shared, syncb, m, n, out, h, w, k, tw):
+    tc,tr = threadIdx.x,threadIdx.y
+    r = blockIdx.y*blockDim.y + tr
+    c = blockIdx.x*blockDim.x + tc
+
+    shar_sz = tw*tw
+    ms,ns = shared[:shar_sz],shared[shar_sz:]
+
+    p = 0.
+    for ph in range(cdiv(k,tw)):
+        ms[tr*tw+tc] = m[ tc + ph*tw + r*k] if r&lt;h and (ph*tw+tc)&lt;k else 0.
+        ns[tr*tw+tc] = n[(tr + ph*tw)*w +c] if c&lt;w and (ph*tw+tr)&lt;k else 0.
+        syncb.wait()
+        for i in range(tw): p += ms[tr*tw+i] * ns[tw*i+tc]
+        syncb.wait()
+
+    if (r&lt;h and c&lt;w): out[r*w + c] = p</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_2d(m, n, tw=16):
+    h,k  = m.shape
+    k2,w = n.shape
+    assert k==k2, &quot;Size mismatch!&quot;
+    output = torch.zeros(h, w, dtype=m.dtype)
+    tpb = dim3(tw,tw)
+    blocks = dim3(cdiv(w,tpb.x), cdiv(h,tpb.y))
+    blk_kernel2d_shar(matmul_tiled_bk, blocks, tpb, tw*tw*2,
+                      m.flatten(), n.flatten(), output.flatten(),
+                      h, w, k, tw=tw)
+    return output</code></pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(matmul_2d(m1s, m2s, tw=8), m1s@m2s).all()</code></pre></div><div class="out"><pre>tensor(True)</pre></div></div><div class="cell md"><h3>CUDA dynamic shared</h3></div><div class="cell md"><p>Code auto-generated by ChatGPT 4, using the following prompt:</p>
+<blockquote>
+<p>Convert the following python code to CUDA C, keeping formatting and variable names the same where possible. You can remove <code>blockIdx, threadIdx, blockDim, shared</code> from the argument list, since they're already provided by CUDA. Change <code>syncb.wait()</code> to <code>__syncthreads</code>. Use <code>extern __shared__ float shared[]</code> to create the <code>shared</code> array. Use the C ternary operator to replace the Python equivalent where appropriate. If the Python code uses any non-standard functions, you can assume the same functions are also available to the translated C code with the same name and signature.</p>
+</blockquote>
+<p>The generated code worked first time, although we did some minor cleanups afterwards (e.g. renaming <code>shared</code> to <code>ms</code>).</p></div><div class="cell"><div class="in"><pre><code>cuda_src = cuda_begin + r&#x27;&#x27;&#x27;
+__global__ void matmul_k(float *m, float *n, float *out, int h, int w, int k, int tw) {
+    int tc=threadIdx.x, tr=threadIdx.y;
+    int r=blockIdx.y*blockDim.y+tr, c=blockIdx.x*blockDim.x+tc;
+
+    extern __shared__ float ms[];
+    float *ns = &amp;ms[tw*tw];
+
+    float p = 0.0f;
+    for (int ph = 0; ph &lt; cdiv(k,tw); ++ph) {
+        int idx = ph*tw;
+        ms[tr*tw + tc] = r&lt;h &amp;&amp; idx+tc&lt;k ? m[ tc+idx + r*k ] : 0.0f;
+        ns[tr*tw + tc] = c&lt;w &amp;&amp; idx+tr&lt;k ? n[(tr+idx)*w + c] : 0.0f;
+        __syncthreads();
+        for (int i=0; i&lt;tw; ++i) p += ms[tr*tw + i] * ns[tw*i + tc];
+        __syncthreads();
+    }
+    if (r&lt;h &amp;&amp; c&lt;w) out[r*w + c] = p;
+}
+&#x27;&#x27;&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>cuda_src += r&#x27;&#x27;&#x27;
+torch::Tensor matmul_dyn(torch::Tensor m, torch::Tensor n) {
+    CHECK_INPUT(m); CHECK_INPUT(n);
+    int h=m.size(0), w=n.size(1), k=m.size(1);
+    TORCH_CHECK(k==n.size(0), &quot;Size mismatch!&quot;);
+    auto output = torch::zeros({h, w}, m.options());
+
+    /*
+    // Commented out section demonstrating basic idea of dynamic size calculation
+    cudaDeviceProp devProp;
+    CUDA_ERR(cudaGetDeviceProperties(&amp;devProp, 0));
+    int maxThreads = devProp.maxThreadsPerBlock;
+    size_t requiredSize = static_cast&lt;size_t&gt;(maxThreads) * 2 * sizeof(float);
+    size_t size = min(devProp.sharedMemPerBlock, requiredSize);
+    int TW = std::sqrt(maxThreads);
+    */
+
+    // We just set size fixed for now
+    int TW = 16;
+    size_t size = TW*TW * 2 * sizeof(float);
+    dim3 tpb(TW,TW);
+    dim3 blocks(cdiv(w, tpb.x), cdiv(h, tpb.y));
+    matmul_k&lt;&lt;&lt;blocks,tpb,size&gt;&gt;&gt;(
+        m.data_ptr&lt;float&gt;(), n.data_ptr&lt;float&gt;(), output.data_ptr&lt;float&gt;(), h, w, k, TW);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return output;
+}
+&#x27;&#x27;&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>fname = &#x27;matmul_dyn&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>cpp_src = get_sig(fname, cuda_src)</code></pre></div></div><div class="cell"><div class="in"><pre><code>module = load_cuda(cuda_src, cpp_src, [fname], opt=True)</code></pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(module.matmul_dyn(m1c,m2c), m1c@m2c).all()</code></pre></div><div class="out"><pre>tensor(True, device=&#x27;cuda:0&#x27;)</pre></div></div><div class="cell"><div class="in"><pre><code>%%timeit -n 10
+module.matmul_dyn(m1c,m2c)
+torch.cuda.synchronize()</code></pre></div><div class="out"><pre>6.64 ms ± 319 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre></div></div><div class="cell md"><h3>CUDA static shared</h3></div><div class="cell"><div class="in"><pre><code>cuda_src = cuda_begin + r&#x27;&#x27;&#x27;
+constexpr int tw = 16;
+
+__global__ void matmul_ks(float *m, float *n, float *out, int h, int w, int k) {
+    __shared__ float ms[tw][tw], ns[tw][tw];
+    int tc=threadIdx.x, tr=threadIdx.y;
+    int r=blockIdx.y*blockDim.y+tr, c=blockIdx.x*blockDim.x+tc;
+
+    float p=0.0f;
+    for (int ph=0; ph &lt; cdiv(k,tw); ++ph) {
+        int idx = ph*tw;
+        ms[tr][tc] = r&lt;h &amp;&amp; idx+tc&lt;k ? m[ tc+idx + r*k ] : 0.0f;
+        ns[tr][tc] = c&lt;w &amp;&amp; idx+tr&lt;k ? n[(tr+idx)*w + c] : 0.0f;
+        __syncthreads();
+        for (int i=0; i&lt;tw; ++i) p += ms[tr][i] * ns[i][tc];
+        __syncthreads();
+    }
+    if (r&lt;h &amp;&amp; c&lt;w) out[r*w + c] = p;
+}
+
+torch::Tensor matmul_static(torch::Tensor m, torch::Tensor n) {
+    CHECK_INPUT(m); CHECK_INPUT(n);
+    int h=m.size(0), w=n.size(1), k=m.size(1);
+    TORCH_CHECK(k==n.size(0), &quot;Size mismatch!&quot;);
+    auto output = torch::zeros({h, w}, m.options());
+    dim3 tpb(tw,tw);
+    dim3 blocks(cdiv(w, tpb.x), cdiv(h, tpb.y));
+    matmul_ks&lt;&lt;&lt;blocks,tpb&gt;&gt;&gt;(m.data_ptr&lt;float&gt;(), n.data_ptr&lt;float&gt;(), output.data_ptr&lt;float&gt;(), h, w, k);
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return output;
+}
+&#x27;&#x27;&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>fname = &#x27;matmul_static&#x27;
+cpp_src = get_sig(fname, cuda_src)
+module = load_cuda(cuda_src, cpp_src, [fname])
+torch.isclose(module.matmul_static(m1c,m2c), m1c@m2c).all()</code></pre></div><div class="out"><pre>tensor(True, device=&#x27;cuda:0&#x27;)</pre></div></div><div class="cell"><div class="in"><pre><code>%%timeit -n 10
+module.matmul_static(m1c,m2c)
+torch.cuda.synchronize()</code></pre></div><div class="out"><pre>4.34 ms ± 11.5 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre></div></div><div class="cell md"><h2>Numba</h2></div><div class="cell"><div class="in"><pre><code>from numba import cuda
+from numba.cuda import as_cuda_array as ca</code></pre></div></div><div class="cell"><div class="in"><pre><code>@cuda.jit
+def matmul_k_numba(m, n, out, tw):
+    cbi,cbd,tid = cuda.blockIdx,cuda.blockDim,cuda.threadIdx
+    tc,tr = tid.x,tid.y
+    r,c = cbi.y * cbd.y + tr, cbi.x * cbd.x + tc
+    h,k  = m.shape
+    k2,w = n.shape
+
+    shar = cuda.shared.array(0, dtype=np.float32)
+    ms,ns = shar[:tw*tw],shar[tw*tw:2*tw*tw]
+
+    p = np.float32(0.0)
+    for ph in range(math.ceil(k/tw)):
+        idx = ph*tw
+        ms[tr*tw+tc] = m[r, tc+idx] if r&lt;h and idx+tc&lt;k else 0.
+        ns[tr*tw+tc] = n[tr+idx, c] if c&lt;w and idx+tr&lt;k else 0.
+        cuda.syncthreads()
+        for i in range(tw): p += ms[tr*tw+i] * ns[i*tw+tc]
+        cuda.syncthreads()
+    if r &lt; h and c &lt; w: out[r, c] = p</code></pre></div></div><div class="cell"><div class="in"><pre><code>def matmul_2d_numba(m, n, tw=16):
+    h,k  = m.shape
+    k2,w = n.shape
+    assert k==k2, &quot;Size mismatch!&quot;
+    out = torch.zeros(h, w, dtype=m.dtype, device=m.device)
+    dyn_shared_mem_size = 2 * tw * tw * 4
+    tpb = tw,tw
+    blocks = cdiv(w,tpb[0]), cdiv(h,tpb[1])
+    matmul_k_numba[blocks, tpb, 0, dyn_shared_mem_size](ca(m), ca(n), ca(out), tw) 
+    return out</code></pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(matmul_2d_numba(m1c,m2c), m1c@m2c).all()</code></pre></div><div class="out"><pre>tensor(True, device=&#x27;cuda:0&#x27;)</pre></div></div><div class="cell"><div class="in"><pre><code>%%timeit -n 10
+matmul_2d_numba(m1c,m2c)
+torch.cuda.synchronize()</code></pre></div><div class="out"><pre>16.2 ms ± 68.1 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre></div></div><div class="cell md"><h2>Extra: Optimised Dynamic CUDA with Template</h2></div><div class="cell"><div class="in"><pre><code>cuda_src = cuda_begin + r&#x27;&#x27;&#x27;
+template&lt;int tw&gt;
+__global__ void matmul_k(float *m, float *n, float *out, int h, int w, int k) {
+    int tc=threadIdx.x, tr=threadIdx.y;
+    int r=blockIdx.y*blockDim.y+tr, c=blockIdx.x*blockDim.x+tc;
+    extern __shared__ float ms[];
+    float *ns = &amp;ms[tw*tw];
+
+    float p = 0.0f;
+    for (int ph = 0; ph &lt; cdiv(k,tw); ++ph) {
+        int idx = ph*tw;
+        ms[tr*tw + tc] = r&lt;h &amp;&amp; idx+tc&lt;k ? m[ tc+idx + r*k ] : 0.0f;
+        ns[tr*tw + tc] = c&lt;w &amp;&amp; idx+tr&lt;k ? n[(tr+idx)*w + c] : 0.0f;
+        __syncthreads();
+        for (int i=0; i&lt;tw; ++i) p += ms[tr*tw + i] * ns[tw*i + tc];
+        __syncthreads();
+    }
+    if (r&lt;h &amp;&amp; c&lt;w) out[r*w + c] = p;
+}
+&#x27;&#x27;&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>cuda_src += r&#x27;&#x27;&#x27;
+torch::Tensor matmul_dyn1(torch::Tensor m, torch::Tensor n) {
+    CHECK_INPUT(m); CHECK_INPUT(n);
+    int h=m.size(0), w=n.size(1), k=m.size(1);
+    TORCH_CHECK(k==n.size(0), &quot;Size mismatch!&quot;);
+    auto output = torch::zeros({h, w}, m.options());
+    int TW = 16; // TODO: Calculate this dynamically
+    size_t size = TW*TW*2 * sizeof(float) + 1;
+    dim3 tpb(TW,TW);
+    dim3 blocks(cdiv(w, tpb.x), cdiv(h, tpb.y));
+
+    auto f = [&amp;](auto kf) { kf&lt;&lt;&lt;blocks, tpb, size&gt;&gt;&gt;(
+        m.data_ptr&lt;float&gt;(), n.data_ptr&lt;float&gt;(), output.data_ptr&lt;float&gt;(), h, w, k);
+    };
+    switch(TW) {
+        case 8: f(matmul_k&lt;8&gt;); break;
+        case 16: f(matmul_k&lt;16&gt;); break;
+        case 32: f(matmul_k&lt;32&gt;); break;
+        default: break;
+    }
+    C10_CUDA_KERNEL_LAUNCH_CHECK();
+    return output;
+}
+&#x27;&#x27;&#x27;</code></pre></div></div><div class="cell"><div class="in"><pre><code>%%time
+fname = &#x27;matmul_dyn1&#x27;
+cpp_src = get_sig(fname, cuda_src)
+module = load_cuda(cuda_src, cpp_src, [fname], opt=True)
+func = getattr(module, fname)</code></pre></div><div class="out"><pre>CPU times: user 93.2 ms, sys: 37.3 ms, total: 130 ms
+Wall time: 43.7 s
+</pre></div></div><div class="cell"><div class="in"><pre><code>torch.isclose(func(m1c,m2c), m1c@m2c).all()</code></pre></div><div class="out"><pre>tensor(True, device=&#x27;cuda:0&#x27;)</pre></div></div><div class="cell"><div class="in"><pre><code>%%timeit -n 10
+func(m1c,m2c)
+torch.cuda.synchronize()</code></pre></div><div class="out"><pre>4.35 ms ± 13.6 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+</pre></div></div><div class="cell"><div class="in"><pre><code></code></pre></div></div></article>
+<div class="attrib">Rendered from <a href="https://github.com/gpu-mode/lectures/blob/main/lecture_005/matmul_l5.ipynb">lecture_005/matmul_l5.ipynb</a> in the GPU MODE lectures repository (Apache-2.0); the original notebook is vendored at <code>learn/vendor/gpu-mode-lectures/lecture_005/matmul_l5.ipynb</code>. Outputs are those saved in the notebook.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

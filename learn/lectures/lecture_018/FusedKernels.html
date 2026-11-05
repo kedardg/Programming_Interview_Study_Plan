@@ -1,0 +1,830 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FusedKernels</title><link rel="stylesheet" href="../../learn.css"><style>.nb pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.nb .cell{margin:14px 0}.nb .in{border-left:3px solid var(--accent);padding-left:10px}.nb .out{border-left:3px solid var(--accent2);padding-left:10px;margin-top:6px}
+.nb img{max-width:100%;border-radius:8px}.nb table{border-collapse:collapse}.nb td,.nb th{border:1px solid var(--border);padding:4px 8px}.crumb{font-size:.85rem;color:var(--text-dim)}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}</style></head><body><nav class="topnav"><a class="home" href="../../index.html">Learn</a><div class="links"><a href="../../lectures.html" class="here">GPU MODE Lectures</a><a href="../../index.html">All chapters</a><a href="../../notes.html">Notes library</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main>
+<div class="crumb"><a href="../../lectures.html">GPU MODE Lectures</a> › lecture_018/FusedKernels.ipynb</div><h1>FusedKernels</h1>
+<article class="nb"><div class="cell md"><h1>Fused Kernels</h1></div><div class="cell md"><h2>Abstract</h2>
+<p>With focus on performance to get the most out of hardware, fusing of kernels has been a popular technique. At times, researchers/practitioners will re-write their code in native cuda or cpu kernels to get optimal performance, but projects such as torch.compile aim to make this simpler. Talk will focus on generating fused kernels and how to leverage torch.compile to be able to do that. We will shift a bit from all LLM talk and look into recommendation algorithms. In the process, we will work on creating fused kernels (triton and cuda) with the help of <code>torch.compile</code>. </p>
+<h2>About Me</h2>
+<p>Software Engineer @ Meta building Rec Sys components for modelling lifecycle such as preprocessing, training, eval, inference, etc using Pytorch. </p>
+<p>If you want to get in touch with me:</p>
+<ul>
+<li>Discord (@sk4301)</li>
+<li>Linkedin (https://www.linkedin.com/in/sharma-k/)</li>
+<li>Twitter (@kapil_sh_)</li>
+<li>Github (https://github.com/kapilsh)</li>
+</ul>
+<h2>How is the talk structured</h2>
+<ul>
+<li>Dive into DLRM (open source deep rec sys model)</li>
+<li>Build it from scrarch</li>
+<li>Go through some some profiler traces</li>
+<li>torch.compile</li>
+<li>Writing fused kernels</li>
+<li>Case Study: LoRA</li>
+</ul></div><div class="cell md"><h1>Setup</h1></div><div class="cell md"><h2>Code and other artifacts</h2>
+<ul>
+<li>Lecture code: https://github.com/kapilsh/cuda-mode-lecture</li>
+<li>How to open chrome trace: chrome://tracing</li>
+<li>DLRM Blog Post: https://ai.meta.com/blog/dlrm-an-advanced-open-source-deep-learning-recommendation-model/</li>
+<li>DLRM Paper: https://arxiv.org/pdf/1906.00091</li>
+<li>DLRM github repo: https://github.com/facebookresearch/dlrm</li>
+<li>Criteo Dataset: https://ailab.criteo.com/download-criteo-1tb-click-logs-dataset/</li>
+<li><a href="https://pytorch.org/tutorials/intermediate/tensorboard_profiler_tutorial.html?source=post_page-----2cb7e0fef30e--------------------------------">Pytorch Profiler with Tensorboard</a></li>
+<li><a href="https://pytorch.org/tutorials/recipes/torch_logs.html#beta-using-torch-logs-python-api-with-torch-compile">TORCH_LOGS with torch.compile</a></li>
+<li>LoRA Paper: https://arxiv.org/abs/2106.09685</li>
+<li>LoRA from scratch: https://lightning.ai/lightning-ai/studios/code-lora-from-scratch</li>
+<li>Netron: https://netron.app/</li>
+<li>GPUs go brrr https://horace.io/brrr_intro.html</li>
+</ul></div><div class="cell md"><h2>DLRM (Deep Learning Recommendation Model)</h2>
+<h3>MODEL ARCHITECTURE</h3>
+<ul>
+<li>Takes a bunch of dense and sparse features</li>
+<li>Dense features feed to a dense MLP layer</li>
+<li>Sparse features feed into embedding layers</li>
+<li>Interaction layers between dense NN layers and spares embeddings combine dense and sparse outputs</li>
+<li>Interaction "features" output prediction click/no-click as output from an MLP </li>
+</ul>
+<p><img alt="DLRM Model" src="../../vendor/gpu-mode-lectures/lecture_018/data/dlrm_model.png"></p>
+<h3>System Constrants</h3>
+<p><img alt="System Constraints" src="../../vendor/gpu-mode-lectures/lecture_018/data/66324023_2056206621174067_2937830378620059648_n.gif"></p>
+<ul>
+<li>D Dense Features MLP output</li>
+<li>S Sparse Features</li>
+<li>E Embedding Dimension on average</li>
+</ul>
+<p>Interaction: O((D * S * E) ^ 2)</p>
+<h3>Criteo Dataset</h3>
+<ul>
+<li>Training dataset with 24 days of ad display and click data (positive: clicked and negatives: non-clicked)</li>
+<li>13 features taking integer values (mostly count features)</li>
+<li>26 anonymized categorical features</li>
+<li>Corresponding Kaggle competition: https://www.kaggle.com/c/criteo-display-ad-challenge</li>
+</ul></div><div class="cell md"><h1>Exploring DLRM</h1></div><div class="cell"><div class="in"><pre><code>import json
+import time
+from dataclasses import dataclass
+from typing import Mapping, List, Dict, Union
+
+import click
+import torch
+import torch._dynamo
+from loguru import logger
+from torch import nn, Tensor
+from torch.utils.data import DataLoader
+
+from criteo_dataset import CriteoParquetDataset
+from model import DenseArch, read_metadata, SparseArch, DenseSparseInteractionLayer, PredictionLayer, Parameters, DLRM</code></pre></div></div><div class="cell"><div class="in"><pre><code>file_path = &quot;./data/sample_criteo_data.parquet&quot;
+metadata_path = &quot;./data/sample_criteo_metadata.json&quot;</code></pre></div></div><div class="cell"><div class="in"><pre><code>logger.info(&quot;Reading the parquet file {}...&quot;.format(file_path))
+logger.info(&quot;Reading the metadata file {}...&quot;.format(metadata_path))
+
+dataset = CriteoParquetDataset(file_path)
+data_loader = DataLoader(dataset, batch_size=2, shuffle=False)
+labels, dense, sparse = next(iter(data_loader))
+logger.info(&quot;Labels size: {}&quot;.format(labels.size()))
+logger.info(&quot;Dense size: {}&quot;.format(dense.size()))
+logger.info(&quot;Sparse size: {}&quot;.format(sparse.size()))</code></pre></div><div class="out"><pre>2024-05-12 06:47:32.120 | INFO     | __main__:&lt;module&gt;:1 - Reading the parquet file ./data/sample_criteo_data.parquet...
+2024-05-12 06:47:32.121 | INFO     | __main__:&lt;module&gt;:2 - Reading the metadata file ./data/sample_criteo_metadata.json...
+2024-05-12 06:47:33.233 | INFO     | __main__:&lt;module&gt;:7 - Labels size: torch.Size([2])
+2024-05-12 06:47:33.234 | INFO     | __main__:&lt;module&gt;:8 - Dense size: torch.Size([2, 13])
+2024-05-12 06:47:33.234 | INFO     | __main__:&lt;module&gt;:9 - Sparse size: torch.Size([2, 26])
+</pre></div></div><div class="cell"><div class="in"><pre><code>dense</code></pre></div><div class="out"><pre>tensor([[5.0000e+00, 1.1000e+02, 0.0000e+00, 1.6000e+01, 0.0000e+00, 1.0000e+00,
+         0.0000e+00, 1.4000e+01, 7.0000e+00, 1.0000e+00, 0.0000e+00, 3.0600e+02,
+         0.0000e+00],
+        [3.2000e+01, 3.0000e+00, 5.0000e+00, 0.0000e+00, 1.0000e+00, 0.0000e+00,
+         0.0000e+00, 6.1000e+01, 5.0000e+00, 0.0000e+00, 1.0000e+00, 3.1570e+03,
+         5.0000e+00]])</pre></div></div><div class="cell"><div class="in"><pre><code>sparse</code></pre></div><div class="out"><pre>tensor([[1651969401, 3793706328, 2951365679, 2489089999,  951068488, 1875733963,
+          897624609,  679512323, 1189011366,  771915201,  209470001, 2509774111,
+           12976055, 3192841527, 2316006604, 1289502458, 3523761834, 3088518074,
+         2501034507, 3280875304,  351689309,  632402057, 3619814411, 2091868316,
+          809724924, 3977271069],
+        [3857972621, 2695561126, 1873417685, 3666490401, 1020698403, 1875733963,
+         2870406529, 1128426537,  502653268, 2112471209, 1716706404, 2582335015,
+           12976055, 3192841527, 4089183897, 1289502458, 3523761834, 2716538129,
+         2501034507, 4273985635, 2737978529, 3370249814,  391309800, 1966410890,
+         2568167914, 3075991895]])</pre></div></div><div class="cell"><div class="in"><pre><code>dense_mlp_out_size = 16
+num_dense_features = dense.size()[1]
+dense_arch = DenseArch(dense_feature_count=num_dense_features,
+                       dense_hidden_layers_sizes=[32],
+                       output_size=dense_mlp_out_size)
+dense_out = dense_arch(dense)
+logger.info(&quot;Dense out size: {}&quot;.format(dense_out.size()))
+dense_out</code></pre></div><div class="out"><pre>2024-05-12 06:47:33.257 | INFO     | __main__:&lt;module&gt;:7 - Dense out size: torch.Size([2, 16])
+</pre><pre>tensor([[ -19.3222,   16.1915,  -14.7218,  -48.3280,   -7.9050,   49.6840,
+          -32.6965,   20.7256,  -46.5937,  -18.3307,  -17.1108,   25.4100,
+          -16.2373,  -18.1572,   -2.6305,   19.7319],
+        [-205.2248,  222.4405,  -45.1590, -361.0247,  -57.2848,  468.3490,
+         -252.3489,    6.0886, -417.9690, -245.4523, -240.5372,  289.3233,
+         -145.1369, -100.0480,  -92.8139,  117.6506]],
+       grad_fn=&lt;AddmmBackward0&gt;)</pre></div></div><div class="cell"><div class="in"><pre><code>metadata = read_metadata(metadata_path)
+embedding_size = 16
+embedding_sizes = {fn: embedding_size for fn in metadata.keys()}
+sparse_mlp_out_size = 16
+sparse_arch = SparseArch(metadata=metadata,
+                         embedding_sizes=embedding_sizes)
+# compiled model hangs on running with inputs
+# sparse_arch_optim = torch.compile(sparse_arch)
+sparse_out = sparse_arch(sparse)
+for v in sparse_out:
+    logger.info(&quot;Sparse out size: {}&quot;.format(v.size()))
+sparse_out[0]</code></pre></div><div class="out"><pre>2024-05-12 06:47:35.113 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.113 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.114 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.114 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.114 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.114 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.115 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.115 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.115 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.116 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.116 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.116 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.116 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.117 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.117 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.117 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.118 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.118 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.118 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.119 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.120 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.120 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.120 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.121 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.121 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+2024-05-12 06:47:35.121 | INFO     | __main__:&lt;module&gt;:11 - Sparse out size: torch.Size([2, 16])
+</pre><pre>tensor([[-0.6661,  0.9471,  0.2120, -0.9125,  0.6718, -0.6560, -1.9422,  0.4658,
+         -0.2885, -0.0596,  1.5758, -0.3784,  0.2411, -1.4830, -0.0242,  1.3030],
+        [ 0.4879,  1.3181, -1.8291,  1.3051, -0.3013,  0.0863, -0.5329,  0.4685,
+         -0.7085,  2.1623, -1.8609, -0.9163,  0.2337, -0.6242, -1.0802, -0.6486]],
+       grad_fn=&lt;EmbeddingBackward0&gt;)</pre></div></div><div class="cell"><div class="in"><pre><code>dense_sparse_interaction_layer = DenseSparseInteractionLayer()
+ds_out = dense_sparse_interaction_layer(dense_out, sparse_out)
+logger.info(&quot;Dense sparse interaction out size: {}&quot;.format(ds_out.size()))
+ds_out</code></pre></div><div class="out"><pre>2024-05-12 06:47:35.127 | INFO     | __main__:&lt;module&gt;:3 - Dense sparse interaction out size: torch.Size([2, 186624])
+</pre><pre>tensor([[ 3.7335e+02, -3.1286e+02,  2.8446e+02,  ..., -2.1380e-01,
+          4.0430e-02,  3.9008e-01],
+        [ 4.2117e+04, -4.5650e+04,  9.2678e+03,  ...,  1.3297e-01,
+          2.5754e-01,  3.5446e-02]], grad_fn=&lt;ViewBackward0&gt;)</pre></div></div><div class="cell"><div class="in"><pre><code>prediction_layer = PredictionLayer(dense_out_size=dense_mlp_out_size,
+                                   sparse_out_sizes=[sparse_mlp_out_size] * len(metadata),
+                                   hidden_sizes=[16])
+pred_out = prediction_layer(ds_out)
+logger.info(&quot;Prediction out size: {}&quot;.format(pred_out.size()))
+logger.info(&quot;Prediction out value: {}&quot;.format(pred_out))</code></pre></div><div class="out"><pre>2024-05-12 06:47:35.152 | INFO     | __main__:&lt;module&gt;:5 - Prediction out size: torch.Size([2, 1])
+2024-05-12 06:47:35.153 | INFO     | __main__:&lt;module&gt;:6 - Prediction out value: tensor([[0.4819],
+        [0.0000]], grad_fn=&lt;SigmoidBackward0&gt;)
+</pre></div></div><div class="cell md"><h1>Model Graph</h1></div><div class="cell md"><h2>Model Graph</h2>
+<p><img alt="Model Graph" src="../../vendor/gpu-mode-lectures/lecture_018/data/model_graph.png"></p></div><div class="cell md"><h1>Profiling</h1></div><div class="cell md"><h3>Initial Setup: Simple 2 layered MLP used for each triangle</h3>
+<h3>Baseline</h3>
+<blockquote>
+<p>python model_train.py --config ./model_hyperparameters_small.json</p>
+</blockquote>
+<h3>Initial Distribution - Naive Implementation of index_hash</h3>
+<pre><code>...
+# mapping loaded as is from the metadata - so a python list
+self.mapping = [metadata[f&quot;SPARSE_{i}&quot;][&quot;tokenizer_values&quot;] for i in range(self.num_sparse_features)]
+...
+# in forward
+tokenizers = torch.tensor(tokenizer_values).reshape(1, -1)
+if input_tensor.is_cuda:
+   tokenizers = tokenizers.cuda()
+...
+</code></pre>
+<p><img src="./perf_screenshots/pytorch_profile_initial_index_hash.png" width="800"/>
+<em>Pytorch Profiler trace (initial)</em></p>
+<hr></div><div class="cell md"><h3>Using tensorboard for high level info</h3>
+<blockquote>
+<p>tensorboard --logdir tb_logs --bind_all</p>
+</blockquote>
+<p><img src="./perf_screenshots/summary_initial_index_hash.png" width="800"/>
+<em>Initial distribution of ops - summary from tensorboard</em></p>
+<hr>
+<h3>Tensor.item() takes a lot of running time</h3>
+<ul>
+<li>What's going on - what is _local_scalar_dense and why is item() taking so long?<ul>
+<li>https://discuss.pytorch.org/t/tensor-item-takes-a-lot-of-running-time/16683</li>
+<li>https://discuss.pytorch.org/t/calling-loss-item-is-very-slow/99774 </li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>CUDA_LAUNCH_BLOCKING=1 python model_train.py</p>
+</blockquote>
+<hr></div><div class="cell md"><h3>After passing <code>CUDA_LAUNCH_BLOCKING=1</code></h3>
+<blockquote>
+<p>CUDA_LAUNCH_BLOCKING=1 python model_train.py --config ./model_hyperparameters_small.json</p>
+</blockquote>
+<p><img src="./perf_screenshots/summary_initial_cuda_launch_blocking.png" width="800"/></p>
+<p><em>New distribution of ops after <code>CUDA_LAUNCH_BLOCKING=1</code> - summary from tensorboard</em></p>
+<hr>
+<p>model_hyperparameters_initial.1714869603606159866.pt.trace.json</p>
+<p><img alt="Initial Index Hash Profile" src="../../vendor/gpu-mode-lectures/lecture_018/perf_screenshots/index_hash_profile_1.png">
+<em>Profile initial index hash implementation</em></p></div><div class="cell md"><h3>Improvements</h3>
+<pre><code># in ctor - Put metadata needed for model directly on the gpu
+self.mapping = [torch.tensor(metadata[f&quot;SPARSE_{i}&quot;][&quot;tokenizer_values&quot;], device=device) for i in
+                range(self.num_sparse_features)]
+
+# in forward - dont use reshape if you can avoid
+tokenizers = tokenizer_values.view(1, -1)
+</code></pre>
+<p>Ref Trace: model_hyperparameters_initial.1714870277384855181.pt.trace.json</p>
+<p><img src="./perf_screenshots/improve_index_hash.png" width="800"/></p>
+<p><em>Profile after improvements</em></p>
+<h3>What's next</h3>
+<ul>
+<li>Index hash seems pretty expensive</li>
+<li>Can we improve/simplify the hash function/tokenization</li>
+<li>Let's just calculate the modulus hash based on cardinality<ul>
+<li>Maybe not representative of data if distribution is non uniform across categories (but that's fine for now) </li>
+</ul>
+</li>
+</ul>
+<hr></div><div class="cell md"><h3>Using Modulus Hash</h3>
+<pre><code>def modulus_hash(tensor: torch.Tensor, cardinality: torch.Tensor):
+    return (tensor + 1) % cardinality
+</code></pre>
+<p><img src="./perf_screenshots/optimized_modulus_hash.png" width="800"/></p>
+<p><em>Pytorch Profiler trace for optimized modulus hash</em></p></div><div class="cell md"><h1>torch.compile</h1></div><div class="cell md"><h2>torch.compile DLRM</h2>
+<blockquote>
+<p>TORCH_COMPILE_DEBUG_DIR=/home/ksharma/logs TORCH_LOGS=recompiles,+dynamo,inductor,guards,graph_breaks python model.py</p>
+<p>CUDA_LAUNCH_BLOCKING=1 python model_train.py</p>
+</blockquote>
+<ul>
+<li>GPU utilization goes up</li>
+<li>memory footprint goes down</li>
+</ul>
+<h2>Memory Footprint</h2>
+<h3>Pre <code>torch.compile</code></h3>
+<p><img src="./perf_screenshots/pre_torch_compile_initial.png" width="800"/></p>
+<h3>Post <code>torch.compile</code></h3>
+<p><img src="./perf_screenshots/post_torch_compile_initial.png" width="800"/></p>
+<hr></div><div class="cell md"><h3>Chrome Trace after <code>torch.compile</code></h3>
+<p><img src="./perf_screenshots/pytorch_profile_torch_compile.png" width="800"/></p>
+<p>*Pytorch Profile Trace after <code>torch.compile</code></p></div><div class="cell md"><h3>Let's look deeper into what's going on</h3>
+<p><img src="./perf_screenshots/torch_compile_triton_kernels.png" width="800"/></p>
+<p><em>Custom triton kernel scheduled on the cuda stream</em></p></div><div class="cell md"><h3>Increase complexity</h3>
+<p>Source: https://ai.meta.com/blog/dlrm-an-advanced-open-source-deep-learning-recommendation-model/</p>
+<pre><code class="language-shell">python dlrm_s_pytorch.py --arch-sparse-feature-size=16 --arch-mlp-bot=&quot;13-512-256-64-16&quot; --arch-mlp-top=&quot;512-256-1&quot; --data-generation=dataset --data-set=kaggle --processed-data-file=./input/kaggle_processed.npz --loss-function=bce --round-targets=True --learning-rate=0.1 --mini-batch-size=128 --print-freq=1024 --print-time
+</code></pre>
+<h3>Let's change the model architecture</h3>
+<ul>
+<li>--arch-mlp-bot="13-512-256-64-16"</li>
+<li>--arch-mlp-top="512-256-1"</li>
+</ul></div><div class="cell md"><h3>Eager view</h3>
+<p><img src="./perf_screenshots/full_model_eager_view.png" width="800"/></p>
+<p><em>Full Eager Model - Pytorch Profiler trace</em></p>
+<ul>
+<li>Sparse Arch is now not the biggest piece of the pie</li>
+<li>PredictionLayer is the highest<ul>
+<li>Top MLP and sigmoid</li>
+</ul>
+</li>
+</ul></div><div class="cell md"><h3><code>torch.compile</code> view</h3>
+<p><img src="./perf_screenshots/full_model_torch_compiled.png" width="800"/></p>
+<p><em>Full <code>torch.compile</code> Model - Pytorch Profiler trace</em></p></div><div class="cell md"><h1>torch.compile -&gt; triton code generation</h1>
+<p>How do we see what is going on with the triton kernels</p></div><div class="cell md"><h2>Generate triton code</h2>
+<blockquote>
+<p><code>TORCH_LOGS=output_code CUDA_LAUNCH_BLOCKING=1 python model_train.py --config ./model_hyperparameters_main.json --use_torch_compile</code></p>
+</blockquote>
+<h2>Inspect</h2>
+<ul>
+<li>Prints generated code for you</li>
+<li>Should see <code>... torch._inductor.graph.__output_code: [INFO] Output code written to: ...</code></li>
+<li>Shows source nodes from where the code was generated</li>
+<li>Fused kernels:<ul>
+<li>fused_relu</li>
+<li>fused_cat</li>
+<li>fused_embedding</li>
+<li>fused_sigmoid_squeeze</li>
+</ul>
+</li>
+<li>Reinterpret_tensor: https://github.com/pytorch/pytorch/blob/ca98c2a932132e49559bf777c02798633d585e66/torch/csrc/inductor/inductor_ops.cpp#L54</li>
+</ul></div><div class="cell md"><h2>Write our own</h2>
+<h3>Kernel</h3>
+<pre><code class="language-python">@triton.jit
+def pointwise_add_relu_fusion_512(in_out_ptr0, in_ptr0, XBLOCK : tl.constexpr):
+    # Number of elements in in_out_ptr0 (B X N)
+    xnumel = 65536
+    # This program will process inputs that are offset from the initial data.
+    # For instance, if you had a strided tensor of 65536 i.e. 128 X 512 and XBLOCK = 512
+    # the programs will each access the elements [0:512, 512:1024, ...].
+    # i.e. offsets is a list of pointers:
+    # Question: Can you see how torch.compile is allocating blocks here? 
+    # below we will call this N = 512
+    xoffset = tl.program_id(0) * XBLOCK
+    # block threads
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    # masks to guard against overflow
+    xmask = xindex &lt; xnumel
+    # xindex will have elements from 0:N, N:2N where N = dense @ weights
+    x2 = xindex
+    # bias i.e. 1D tensor with only N elements
+    # mod will give the us the right 
+    x0 = xindex % 512
+    # load the N elements
+    tmp0 = tl.load(in_out_ptr0 + (x2), xmask)
+    # load the 1D tensor
+    tmp1 = tl.load(in_ptr0 + (x0), xmask, eviction_policy='evict_last')
+    # result = bias + dense @ weights
+    tmp2 = tmp0 + tmp1
+    # relu: can also use tl.maximum
+    tmp3 = triton_helpers.maximum(0, tmp2) 
+    # output moved over
+    tl.store(in_out_ptr0 + (x2), tmp3, None)
+</code></pre>
+<h3>Test</h3></div><div class="cell"><div class="in"><pre><code>import triton
+import torch
+import triton.language as tl
+from torch._inductor import triton_helpers
+from torch._inductor.triton_heuristics import grid
+
+@triton.jit
+def pointwise_add_relu_fusion_512(in_out_ptr0, in_ptr0, XBLOCK : tl.constexpr):
+    xnumel = 65536
+    xoffset = tl.program_id(0) * XBLOCK
+    xindex = xoffset + tl.arange(0, XBLOCK)[:]
+    xmask = xindex &lt; xnumel
+    # dense @ weights
+    x2 = xindex
+    # bias
+    x0 = xindex % 512
+    tmp0 = tl.load(in_out_ptr0 + (x2), xmask)
+    tmp1 = tl.load(in_ptr0 + (x0), xmask, eviction_policy=&#x27;evict_last&#x27;)
+    # bias + dense @ weights
+    tmp2 = tmp0 + tmp1
+    tmp3 = triton_helpers.maximum(0, tmp2)
+    tl.store(in_out_ptr0 + (x2), tmp3, None)
+
+
+torch.cuda.set_device(0)  # no-op to ensure context
+X = torch.ones(size=(128, 512), device=&#x27;cuda&#x27;)
+print(X[:3, :3])
+Y = torch.ones(size=(512,), device=&#x27;cuda&#x27;)
+print(Y[:3])
+eager_result = torch.maximum(X + Y, torch.tensor(0., device=&#x27;cuda&#x27;))
+print(eager_result[:3, :3])
+pointwise_add_relu_fusion_512[grid(65536)](X, Y, 512)
+print(X)
+torch.testing.assert_close(X, eager_result, rtol=1e-4, atol=1e-4)</code></pre></div><div class="out"><pre>tensor([[1., 1., 1.],
+        [1., 1., 1.],
+        [1., 1., 1.]], device=&#x27;cuda:0&#x27;)
+tensor([1., 1., 1.], device=&#x27;cuda:0&#x27;)
+tensor([[2., 2., 2.],
+        [2., 2., 2.],
+        [2., 2., 2.]], device=&#x27;cuda:0&#x27;)
+tensor([[2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        ...,
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.]], device=&#x27;cuda:0&#x27;)
+</pre></div></div><div class="cell md"><h2>Cuda Kernel</h2>
+<h3>Ask ChatGPT to generate the kernel for us</h3>
+<p><img alt="Chat GPT Input" src="../../vendor/gpu-mode-lectures/lecture_018/data/chatgpt_input.png"></p>
+<h3>ChatGPT output (without any changes)</h3>
+<pre><code class="language-cpp">#include &lt;cuda_fp16.h&gt;
+
+__global__ void pointwise_add_relu_fusion_512(float* in_out_ptr0, const float* in_ptr0, const int XBLOCK) {
+    const int xnumel = 65536;
+    const int N = 512; // Value of N from the Triton kernel
+    const int tid = threadIdx.x;
+    const int xoffset = blockIdx.x * XBLOCK;
+    const int xindex = xoffset + tid;
+    const bool xmask = xindex &lt; xnumel;
+
+    if (xmask) {
+        int x2 = xindex;
+        int x0 = xindex % N;
+
+        float tmp0 = in_out_ptr0[x2];
+        float tmp1 = in_ptr0[x0];
+        float tmp2 = tmp0 + tmp1;
+        float tmp3 = max(0.0f, tmp2); // ReLU operation
+
+        in_out_ptr0[x2] = tmp3;
+    }
+}
+</code></pre>
+<h3>Let's run the generated CUDA kernel</h3>
+<blockquote>
+<p>NOTE: To run torch native, you can download it as below or add conda environment to $CMAKE_PREFIX_PATH</p>
+</blockquote>
+<pre><code>wget https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.2.1%2Bcu121.zip # Download torch native lib
+</code></pre>
+<h3>Build the cmake project</h3></div><div class="cell"><div class="in"><pre><code>! mkdir -p kernels/cmake-build-debug &amp;&amp; cd kernels/cmake-build-debug &amp;&amp; cmake .. -G Ninja &amp;&amp; ninja</code></pre></div><div class="out"><pre>-- CMake version: 3.22.1
+-- Caffe2: CUDA detected: 12.1
+-- Caffe2: CUDA nvcc is: /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc
+-- Caffe2: CUDA toolkit directory: /home/ksharma/anaconda3/envs/cuda-learn
+-- Caffe2: Header version is: 12.1
+-- /home/ksharma/anaconda3/envs/cuda-learn/lib/libnvrtc.so shorthash is c993a6f1
+-- USE_CUDNN is set to 0. Compiling without cuDNN support
+-- USE_CUSPARSELT is set to 0. Compiling without cuSPARSELt support
+-- Autodetected CUDA architecture(s):  7.5
+-- Added CUDA NVCC flags for: -gencode;arch=compute_75,code=sm_75
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/ksharma/dev/git/cuda-mode-lecture/kernels/cmake-build-debug
+ninja: no work to do.
+</pre></div></div><div class="cell"><div class="in"><pre><code>!./kernels/cmake-build-debug/dlrm_kernels_test</code></pre></div><div class="out"><pre>Tensor x:
+-0.9247 -0.4253 -2.6438  0.1452 -0.1209 -0.5797 -0.6229 -0.3284 -1.0745 -0.3631
+-1.6711  2.2655  0.3117 -0.1842  1.2866  1.1820 -0.1271  1.2169  1.4353  1.0605
+-0.4941 -1.4244 -0.7244 -1.2973  0.0697 -0.0074  1.8969  0.6878 -0.0779 -0.8373
+ 1.3506 -0.2879 -0.5965 -0.3283 -0.9086 -0.8059 -0.7407 -0.0504  0.5435  1.5150
+ 0.0141  0.4532  1.6349  0.7124 -0.1806  1.0252 -1.4622 -0.7554 -0.1836  0.3824
+ 0.3918 -0.0830  0.8971 -1.1123  0.1116  0.4863 -0.5499 -0.3231 -0.5469  0.9049
+ 0.2837  0.1210  0.4730 -1.0823 -0.0334 -0.9734  0.9559 -1.1795 -1.0064  0.1160
+ 0.6852 -0.4124 -0.6738 -0.5404  0.6898 -1.5517  0.3805 -0.0436  0.3597 -0.5043
+[ CUDAFloatType{8,10} ]
+Tensor y:
+ 0.1808
+-0.5523
+ 0.9238
+-0.7350
+ 1.3800
+ 0.8676
+ 0.1297
+-0.9406
+ 0.8109
+ 0.8821
+[ CUDAFloatType{10} ]
+Expected:
+ 0.0000  0.0000  0.0000  0.0000  1.2591  0.2879  0.0000  0.0000  0.0000  0.5189
+ 0.0000  1.7132  1.2355  0.0000  2.6666  2.0496  0.0026  0.2763  2.2462  1.9425
+ 0.0000  0.0000  0.1994  0.0000  1.4497  0.8602  2.0266  0.0000  0.7330  0.0448
+ 1.5315  0.0000  0.3273  0.0000  0.4714  0.0617  0.0000  0.0000  1.3544  2.3971
+ 0.1949  0.0000  2.5587  0.0000  1.1994  1.8929  0.0000  0.0000  0.6273  1.2644
+ 0.5726  0.0000  1.8209  0.0000  1.4916  1.3539  0.0000  0.0000  0.2640  1.7869
+ 0.4645  0.0000  1.3968  0.0000  1.3465  0.0000  1.0856  0.0000  0.0000  0.9980
+ 0.8660  0.0000  0.2500  0.0000  2.0698  0.0000  0.5102  0.0000  1.1706  0.3778
+[ CUDAFloatType{8,10} ]
+Result:
+ 0.0000  0.0000  0.0000  0.0000  1.2591  0.2879  0.0000  0.0000  0.0000  0.5189
+ 0.0000  1.7132  1.2355  0.0000  2.6666  2.0496  0.0026  0.2763  2.2462  1.9425
+ 0.0000  0.0000  0.1994  0.0000  1.4497  0.8602  2.0266  0.0000  0.7330  0.0448
+ 1.5315  0.0000  0.3273  0.0000  0.4714  0.0617  0.0000  0.0000  1.3544  2.3971
+ 0.1949  0.0000  2.5587  0.0000  1.1994  1.8929  0.0000  0.0000  0.6273  1.2644
+ 0.5726  0.0000  1.8209  0.0000  1.4916  1.3539  0.0000  0.0000  0.2640  1.7869
+ 0.4645  0.0000  1.3968  0.0000  1.3465  0.0000  1.0856  0.0000  0.0000  0.9980
+ 0.8660  0.0000  0.2500  0.0000  2.0698  0.0000  0.5102  0.0000  1.1706  0.3778
+[ CUDAFloatType{8,10} ]
+All Match: true
+</pre></div></div><div class="cell md"><h3>(OR) Run it locally with pytorch utils</h3></div><div class="cell"><div class="in"><pre><code>cuda_code_file = &quot;./kernels/src/pointwise_add_relu_fused.cu&quot;
+header_code_file = &quot;./kernels/src/pointwise_add_relu_fused.cuh&quot;
+
+with open(cuda_code_file) as f:
+    cuda_code = &quot;&quot;.join([f for f in f.readlines() if not f.startswith(&quot;#include&quot;)])
+    print(cuda_code)
+
+print(&quot;----&quot;)
+
+with open(header_code_file) as f:
+    header_code = &quot;&quot;.join([f for f in f.readlines() if not f.startswith(&quot;#include&quot;)])
+    print(header_code)</code></pre></div><div class="out"><pre>
+
+__global__ void add_relu_fusion_kernel(float* in_out_ptr0, const float* in_ptr0, const int xnumel ,const int XBLOCK) {
+    const int tid = threadIdx.x;
+    const int xoffset = blockIdx.x * XBLOCK;
+    const int xindex = xoffset + tid;
+    const bool xmask = xindex &lt; xnumel;
+
+    if (xmask) {
+        int x2 = xindex;
+        int x0 = xindex % XBLOCK;
+        float tmp0 = in_out_ptr0[x2];
+        float tmp1 = in_ptr0[x0];
+        float tmp2 = tmp0 + tmp1;
+        float tmp3 = max(0.0f, tmp2); // ReLU operation
+
+        in_out_ptr0[x2] = tmp3;
+    }
+}
+
+torch::Tensor add_relu_fusion(torch::Tensor in_out, const torch::Tensor&amp; in) {
+    auto sizes = in_out.sizes();
+    auto XBLOCK = sizes[1];
+    auto numel = in_out.numel();
+    dim3 threadsPerBlock(XBLOCK);
+    dim3 numBlocks((numel + XBLOCK - 1) / XBLOCK);
+    add_relu_fusion_kernel&lt;&lt;&lt;numBlocks, threadsPerBlock&gt;&gt;&gt;(in_out.data_ptr&lt;float&gt;(), in.data_ptr&lt;float&gt;(), numel, XBLOCK);
+    cudaDeviceSynchronize();
+    return std::move(in_out);
+}
+----
+
+torch::Tensor add_relu_fusion(torch::Tensor in_out, const torch::Tensor&amp; in);
+</pre></div></div><div class="cell"><div class="in"><pre><code>!mkdir ./build</code></pre></div><div class="out"><pre>mkdir: cannot create directory ‘./build’: File exists
+</pre></div></div><div class="cell"><div class="in"><pre><code>import torch
+from torch.utils.cpp_extension import load_inline
+
+cuda_extension = load_inline(
+    name=&#x27;kernel_extension&#x27;,
+    cpp_sources=header_code,
+    cuda_sources=cuda_code,
+    functions=[&quot;add_relu_fusion&quot;],
+    with_cuda=True,
+    verbose=True,
+    extra_cuda_cflags=[&quot;-O2&quot;],
+    build_directory=&#x27;./build&#x27;,
+)</code></pre></div><div class="out"><pre>Detected CUDA files, patching ldflags
+Emitting ninja build file ./build/build.ninja...
+Building extension module kernel_extension...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+</pre><pre>[1/3] c++ -MMD -MF main.o.d -DTORCH_EXTENSION_NAME=kernel_extension -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\&quot;_gcc\&quot; -DPYBIND11_STDLIB=\&quot;_libstdcpp\&quot; -DPYBIND11_BUILD_ABI=\&quot;_cxxabi1011\&quot; -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/main.cpp -o main.o 
+[2/3] /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc --generate-dependencies-with-compile --dependency-output cuda.cuda.o.d -DTORCH_EXTENSION_NAME=kernel_extension -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\&quot;_gcc\&quot; -DPYBIND11_STDLIB=\&quot;_libstdcpp\&quot; -DPYBIND11_BUILD_ABI=\&quot;_cxxabi1011\&quot; -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_75,code=sm_75 --compiler-options &#x27;-fPIC&#x27; -O2 -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/cuda.cu -o cuda.cuda.o 
+[3/3] c++ main.o cuda.cuda.o -shared -L/home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/home/ksharma/anaconda3/envs/cuda-learn/lib -lcudart -o kernel_extension.so
+</pre><pre>Loading extension module kernel_extension...
+</pre></div></div><div class="cell"><div class="in"><pre><code>dir(cuda_extension)</code></pre></div><div class="out"><pre>[&#x27;__doc__&#x27;,
+ &#x27;__file__&#x27;,
+ &#x27;__loader__&#x27;,
+ &#x27;__name__&#x27;,
+ &#x27;__package__&#x27;,
+ &#x27;__spec__&#x27;,
+ &#x27;add_relu_fusion&#x27;]</pre></div></div><div class="cell"><div class="in"><pre><code>torch.cuda.set_device(0)  # no-op to ensure context
+X = torch.ones(size=(128, 512), device=&#x27;cuda&#x27;)
+Y = torch.ones(size=(512,), device=&#x27;cuda&#x27;)
+cuda_extension.add_relu_fusion(X, Y)
+print(X)
+torch.testing.assert_close(X, eager_result, rtol=1e-4, atol=1e-4)</code></pre></div><div class="out"><pre>tensor([[2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        ...,
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.],
+        [2., 2., 2.,  ..., 2., 2., 2.]], device=&#x27;cuda:0&#x27;)
+</pre></div></div><div class="cell md"><h1><code>torch.compile</code> is your triton learning companion</h1></div><div class="cell md"><h2>Example: LoRA Fused Kernels</h2>
+<h3>LoRA (LOW-RANK ADAPTATION)</h3>
+<p><img src="./data/lora.png" width="400"/></p>
+<p>Source: https://arxiv.org/pdf/2106.09685</p>
+<ul>
+<li>Simple low rank reparametization of weight matrices</li>
+<li>Singular value decomposition</li>
+</ul></div><div class="cell md"><h2>Fused Kernels</h2>
+<blockquote>
+<p><code>TORCH_LOGS=output_code CUDA_LAUNCH_BLOCKING=1 python lora_on_simple_mlp.py</code></p>
+</blockquote></div><div class="cell"><div class="in"><pre><code>from lora_on_simple_mlp import *
+from kernels.triton_fused_add_mul_relu import * </code></pre></div></div><div class="cell md"><h3>[TRITON] Fused Mul Add Relu</h3></div><div class="cell"><div class="in"><pre><code>print(triton.__version__)
+in_out_tensor, in_tensor, bias = get_inputs(add_manual_seed=True)
+expected_output = torch.maximum(in_out_tensor + 0.5 * in_tensor + bias, torch.tensor(0., device=&#x27;cuda&#x27;))
+print(&quot;Input&quot;, in_out_tensor)
+print(&quot;Expected Output&quot;, expected_output)</code></pre></div><div class="out"><pre>2.2.0
+Input tensor([[-0.9247, -0.4253, -2.6438,  0.1452, -0.1209, -0.5797, -0.6229, -0.3284],
+        [-1.0745, -0.3631, -1.6711,  2.2655,  0.3117, -0.1842,  1.2866,  1.1820],
+        [-0.1271,  1.2169,  1.4353,  1.0605, -0.4941, -1.4244, -0.7244, -1.2973],
+        [ 0.0697, -0.0074,  1.8969,  0.6878, -0.0779, -0.8373,  1.3506, -0.2879],
+        [-0.5965, -0.3283, -0.9086, -0.8059, -0.7407, -0.0504,  0.5435,  1.5150],
+        [ 0.0141,  0.4532,  1.6349,  0.7124, -0.1806,  1.0252, -1.4622, -0.7554],
+        [-0.1836,  0.3824,  0.3918, -0.0830,  0.8971, -1.1123,  0.1116,  0.4863],
+        [-0.5499, -0.3231, -0.5469,  0.9049,  0.2837,  0.1210,  0.4730, -1.0823]],
+       device=&#x27;cuda:0&#x27;)
+Expected Output tensor([[1.7098e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 6.7049e-01, 0.0000e+00,
+         3.4424e-01, 1.1223e-02],
+        [1.8750e+00, 0.0000e+00, 0.0000e+00, 2.2105e+00, 6.6808e-01, 0.0000e+00,
+         1.8445e+00, 1.9246e+00],
+        [2.2614e+00, 1.3964e+00, 5.1802e-01, 2.0114e+00, 0.0000e+00, 0.0000e+00,
+         2.7715e-01, 0.0000e+00],
+        [2.4750e+00, 0.0000e+00, 1.9079e+00, 5.4869e-01, 3.7923e-01, 0.0000e+00,
+         3.1791e+00, 6.6843e-01],
+        [1.8234e+00, 0.0000e+00, 1.1147e-01, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+         2.4250e+00, 3.2593e+00],
+        [2.2903e+00, 0.0000e+00, 1.1721e+00, 6.9331e-01, 1.0583e+00, 6.7518e-01,
+         0.0000e+00, 2.6185e-01],
+        [1.5804e+00, 0.0000e+00, 9.0740e-01, 1.6670e-01, 5.5230e-02, 0.0000e+00,
+         1.5325e+00, 3.5984e-01],
+        [1.5554e+00, 0.0000e+00, 0.0000e+00, 9.4380e-01, 2.9795e-03, 7.4125e-02,
+         1.6286e+00, 0.0000e+00]], device=&#x27;cuda:0&#x27;)
+</pre></div></div><div class="cell"><div class="in"><pre><code>BLOCK_SIZE = 8
+grid = lambda meta: (triton.cdiv(in_out_tensor.numel(), meta[&#x27;BLOCK_SIZE&#x27;]),)
+fused_add_mul_relu[grid](in_out_tensor, 
+                         bias, 
+                         in_tensor, 
+                         in_out_tensor.numel(), 
+                         BLOCK_SIZE=BLOCK_SIZE)
+print(&quot;Output 1&quot;, in_out_tensor)
+torch.testing.assert_close(in_out_tensor, expected_output, rtol=1e-4, atol=1e-4)</code></pre></div><div class="out"><pre>Output 1 tensor([[1.7098e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 6.7049e-01, 0.0000e+00,
+         3.4424e-01, 1.1223e-02],
+        [1.8750e+00, 0.0000e+00, 0.0000e+00, 2.2105e+00, 6.6808e-01, 0.0000e+00,
+         1.8445e+00, 1.9246e+00],
+        [2.2614e+00, 1.3964e+00, 5.1802e-01, 2.0114e+00, 0.0000e+00, 0.0000e+00,
+         2.7715e-01, 0.0000e+00],
+        [2.4750e+00, 0.0000e+00, 1.9079e+00, 5.4869e-01, 3.7923e-01, 0.0000e+00,
+         3.1791e+00, 6.6843e-01],
+        [1.8234e+00, 0.0000e+00, 1.1147e-01, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+         2.4250e+00, 3.2593e+00],
+        [2.2903e+00, 0.0000e+00, 1.1721e+00, 6.9331e-01, 1.0583e+00, 6.7518e-01,
+         0.0000e+00, 2.6185e-01],
+        [1.5804e+00, 0.0000e+00, 9.0740e-01, 1.6670e-01, 5.5230e-02, 0.0000e+00,
+         1.5325e+00, 3.5984e-01],
+        [1.5554e+00, 0.0000e+00, 0.0000e+00, 9.4380e-01, 2.9795e-03, 7.4125e-02,
+         1.6286e+00, 0.0000e+00]], device=&#x27;cuda:0&#x27;)
+</pre></div></div><div class="cell"><div class="in"><pre><code>in_out_tensor, in_tensor, bias = get_inputs(add_manual_seed=True)
+num_weights = bias.numel()
+fused_add_mul_relu_cleaner[grid](in_out_tensor, 
+                                 bias, 
+                                 in_tensor, 
+                                 num_weights, 
+                                 in_out_tensor.numel(), 
+                                 multiplier=0.5,
+                                 BLOCK_SIZE=BLOCK_SIZE)
+print(&quot;Output 2&quot;, in_out_tensor)
+torch.testing.assert_close(in_out_tensor, expected_output, rtol=1e-4, atol=1e-4)</code></pre></div><div class="out"><pre>Output 2 tensor([[1.7098e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 6.7049e-01, 0.0000e+00,
+         3.4424e-01, 1.1223e-02],
+        [1.8750e+00, 0.0000e+00, 0.0000e+00, 2.2105e+00, 6.6808e-01, 0.0000e+00,
+         1.8445e+00, 1.9246e+00],
+        [2.2614e+00, 1.3964e+00, 5.1802e-01, 2.0114e+00, 0.0000e+00, 0.0000e+00,
+         2.7715e-01, 0.0000e+00],
+        [2.4750e+00, 0.0000e+00, 1.9079e+00, 5.4869e-01, 3.7923e-01, 0.0000e+00,
+         3.1791e+00, 6.6843e-01],
+        [1.8234e+00, 0.0000e+00, 1.1147e-01, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+         2.4250e+00, 3.2593e+00],
+        [2.2903e+00, 0.0000e+00, 1.1721e+00, 6.9331e-01, 1.0583e+00, 6.7518e-01,
+         0.0000e+00, 2.6185e-01],
+        [1.5804e+00, 0.0000e+00, 9.0740e-01, 1.6670e-01, 5.5230e-02, 0.0000e+00,
+         1.5325e+00, 3.5984e-01],
+        [1.5554e+00, 0.0000e+00, 0.0000e+00, 9.4380e-01, 2.9795e-03, 7.4125e-02,
+         1.6286e+00, 0.0000e+00]], device=&#x27;cuda:0&#x27;)
+</pre></div></div><div class="cell md"><h3>[CUDA] Fused Mul Add Relu</h3></div><div class="cell"><div class="in"><pre><code>cuda_code_file = &quot;./kernels/src/fused_kernels_lora_on_mlp.cu&quot;
+header_code_file = &quot;./kernels/src/fused_kernels_lora_on_mlp.cuh&quot;
+
+with open(cuda_code_file) as f:
+    cuda_code = &quot;&quot;.join([f for f in f.readlines() if not f.startswith(&quot;#include&quot;)])
+    print(cuda_code)
+
+print(&quot;----&quot;)
+
+with open(header_code_file) as f:
+    header_code = &quot;&quot;.join([f for f in f.readlines() if not f.startswith(&quot;#include&quot;)])
+    print(header_code)</code></pre></div><div class="out"><pre>
+
+__global__ void fused_add_mul_relu_kernel(float *dense_in_out_ptr,
+                                          const float *scalar_ptr,
+                                          const float *dense_ptr,
+                                          const int num_weights,
+                                          const int xnumel,
+                                          const double multiplier) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    if (index &lt; xnumel) {
+        int scalar_index = index % num_weights;
+        float tmp0 = dense_in_out_ptr[index];
+        float tmp1 = scalar_ptr[scalar_index];
+        float tmp3 = dense_ptr[index];
+        float ma_result = max(0.0f, multiplier * tmp3 + tmp0 + tmp1);
+        dense_in_out_ptr[index] = ma_result;
+    }
+}
+
+torch::Tensor fused_add_mul_relu(torch::Tensor in_out,
+                                 const torch::Tensor &amp;bias,
+                                 const torch::Tensor &amp;in,
+                                 const double multiplier) {
+    auto numel = in_out.numel();
+    auto sizes = in_out.sizes();
+    const int XBLOCK = sizes[0];
+    dim3 threadsPerBlock(sizes[1]);
+    dim3 numBlocks((numel + XBLOCK - 1) / XBLOCK);
+    fused_add_mul_relu_kernel&lt;&lt;&lt;numBlocks, threadsPerBlock&gt;&gt;&gt;(
+            in_out.data_ptr&lt;float&gt;(),
+            bias.data_ptr&lt;float&gt;(),
+            in.data_ptr&lt;float&gt;(),
+            sizes[1],
+            numel,
+            multiplier);
+    cudaDeviceSynchronize();
+    return std::move(in_out);
+}
+----
+
+torch::Tensor fused_add_mul_relu(torch::Tensor in_out,
+                                 const torch::Tensor &amp;bias,
+                                 const torch::Tensor &amp;in,
+                                 const double multiplier);
+</pre></div></div><div class="cell"><div class="in"><pre><code>! ./kernels/cmake-build-debug/fused_kernels_lora_test</code></pre></div><div class="out"><pre>Tensor x:
+-0.9247 -0.4253 -2.6438  0.1452 -0.1209 -0.5797 -0.6229 -0.3284 -1.0745 -0.3631
+-1.6711  2.2655  0.3117 -0.1842  1.2866  1.1820 -0.1271  1.2169  1.4353  1.0605
+-0.4941 -1.4244 -0.7244 -1.2973  0.0697 -0.0074  1.8969  0.6878 -0.0779 -0.8373
+ 1.3506 -0.2879 -0.5965 -0.3283 -0.9086 -0.8059 -0.7407 -0.0504  0.5435  1.5150
+ 0.0141  0.4532  1.6349  0.7124 -0.1806  1.0252 -1.4622 -0.7554 -0.1836  0.3824
+ 0.3918 -0.0830  0.8971 -1.1123  0.1116  0.4863 -0.5499 -0.3231 -0.5469  0.9049
+ 0.2837  0.1210  0.4730 -1.0823 -0.0334 -0.9734  0.9559 -1.1795 -1.0064  0.1160
+ 0.6852 -0.4124 -0.6738 -0.5404  0.6898 -1.5517  0.3805 -0.0436  0.3597 -0.5043
+[ CUDAFloatType{8,10} ]
+Tensor bias:
+ 0.1808
+-0.5523
+ 0.9238
+-0.7350
+ 1.3800
+ 0.8676
+ 0.1297
+-0.9406
+ 0.8109
+ 0.8821
+[ CUDAFloatType{10} ]
+Tensor y:
+ 2.5441 -0.7163 -0.4934  0.1267  0.1014 -0.4035  0.9023  0.8099 -0.6884  0.1372
+ 1.0377  0.0925 -0.3752 -0.0908  2.0639 -1.8164 -0.2719  0.2811 -1.0399  0.7765
+ 0.8814  0.0444 -1.4870  1.1334  1.3268 -1.2616  0.9501 -0.6558  0.9098 -0.6290
+-0.6587  2.0811  1.4151 -0.3091 -0.2055  2.0562 -0.0490 -0.6361 -0.5359 -0.1310
+-0.2945  1.2275  1.0549  0.3576  1.6378 -0.2310  0.7883 -0.0807 -0.3924  1.2673
+ 1.0420 -0.4945 -1.1637  1.5740  0.7116  0.6104  1.2852 -0.6533  1.1171 -1.0067
+ 1.2912  1.6028  0.1332  1.0703 -1.1161 -0.8396 -3.6680  0.8189  0.1255 -0.7691
+ 0.1552 -0.8782 -0.4734  0.9690 -1.9985  0.1030  0.8580  0.7625 -1.2587 -0.8183
+[ CUDAFloatType{8,10} ]
+Expected:
+ 5.1076  0.0000  0.0000  0.0000  1.4922  0.0000  1.5820  0.5938  0.0000  0.8346
+ 0.8966  1.9261  0.3726  0.0000  7.4136  0.0000  0.0000  0.9228  0.0000  3.7285
+ 1.7140  0.0000  0.0000  0.5746  4.5014  0.0000  4.2118  0.0000  2.8254  0.0000
+ 0.0165  3.9464  3.5820  0.0000  0.0000  4.7910  0.0000  0.0000  0.1218  2.0957
+ 0.0000  2.7243  4.9850  0.7998  4.9664  1.3615  0.4806  0.0000  0.0000  4.1793
+ 2.9691  0.0000  0.0000  1.7729  3.1283  2.7577  2.5356  0.0000  2.8334  0.0000
+ 3.4343  3.2553  1.7032  0.6444  0.0000  0.0000  0.0000  0.0000  0.0932  0.0000
+ 1.2229  0.0000  0.0000  0.9534  0.0000  0.0000  2.4837  0.7694  0.0000  0.0000
+[ CUDAFloatType{8,10} ]
+Result:
+ 5.1076  0.0000  0.0000  0.0000  1.4922  0.0000  1.5820  0.5938  0.0000  0.8346
+ 0.8966  1.9261  0.3726  0.0000  7.4136  0.0000  0.0000  0.9228  0.0000  3.7285
+ 1.7140  0.0000  0.0000  0.5746  4.5014  0.0000  4.2118  0.0000  2.8254  0.0000
+ 0.0165  3.9464  3.5820  0.0000  0.0000  4.7910  0.0000  0.0000  0.1218  2.0957
+ 0.0000  2.7243  4.9850  0.7998  4.9664  1.3615  0.4806  0.0000  0.0000  4.1793
+ 2.9691  0.0000  0.0000  1.7729  3.1283  2.7577  2.5356  0.0000  2.8334  0.0000
+ 3.4343  3.2553  1.7032  0.6444  0.0000  0.0000  0.0000  0.0000  0.0932  0.0000
+ 1.2229  0.0000  0.0000  0.9534  0.0000  0.0000  2.4837  0.7694  0.0000  0.0000
+[ CUDAFloatType{8,10} ]
+All Match: true
+</pre></div></div><div class="cell"><div class="in"><pre><code>cuda_extension = load_inline(
+    name=&#x27;kernel_extension&#x27;,
+    cpp_sources=header_code,
+    cuda_sources=cuda_code,
+    functions=[&quot;fused_add_mul_relu&quot;],
+    with_cuda=True,
+    verbose=True,
+    extra_cuda_cflags=[&quot;-O2&quot;],
+    build_directory=&#x27;./build&#x27;,
+)</code></pre></div><div class="out"><pre>The input conditions for extension module kernel_extension have changed. Bumping to version 1 and re-building as kernel_extension_v1...
+Detected CUDA files, patching ldflags
+Emitting ninja build file ./build/build.ninja...
+Building extension module kernel_extension_v1...
+Allowing ninja to set a default number of workers... (overridable by setting the environment variable MAX_JOBS=N)
+</pre><pre>[1/3] c++ -MMD -MF main.o.d -DTORCH_EXTENSION_NAME=kernel_extension_v1 -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\&quot;_gcc\&quot; -DPYBIND11_STDLIB=\&quot;_libstdcpp\&quot; -DPYBIND11_BUILD_ABI=\&quot;_cxxabi1011\&quot; -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -fPIC -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/main.cpp -o main.o 
+[2/3] /home/ksharma/anaconda3/envs/cuda-learn/bin/nvcc --generate-dependencies-with-compile --dependency-output cuda.cuda.o.d -DTORCH_EXTENSION_NAME=kernel_extension_v1 -DTORCH_API_INCLUDE_EXTENSION_H -DPYBIND11_COMPILER_TYPE=\&quot;_gcc\&quot; -DPYBIND11_STDLIB=\&quot;_libstdcpp\&quot; -DPYBIND11_BUILD_ABI=\&quot;_cxxabi1011\&quot; -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/torch/csrc/api/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/TH -isystem /home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/include/THC -isystem /home/ksharma/anaconda3/envs/cuda-learn/include -isystem /home/ksharma/anaconda3/envs/cuda-learn/include/python3.11 -D_GLIBCXX_USE_CXX11_ABI=0 -D__CUDA_NO_HALF_OPERATORS__ -D__CUDA_NO_HALF_CONVERSIONS__ -D__CUDA_NO_BFLOAT16_CONVERSIONS__ -D__CUDA_NO_HALF2_OPERATORS__ --expt-relaxed-constexpr -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_75,code=sm_75 --compiler-options &#x27;-fPIC&#x27; -O2 -std=c++17 -c /home/ksharma/dev/git/cuda-mode-lecture/build/cuda.cu -o cuda.cuda.o 
+[3/3] c++ main.o cuda.cuda.o -shared -L/home/ksharma/anaconda3/envs/cuda-learn/lib/python3.11/site-packages/torch/lib -lc10 -lc10_cuda -ltorch_cpu -ltorch_cuda -ltorch -ltorch_python -L/home/ksharma/anaconda3/envs/cuda-learn/lib -lcudart -o kernel_extension_v1.so
+</pre><pre>Loading extension module kernel_extension_v1...
+</pre></div></div><div class="cell"><div class="in"><pre><code>in_out_tensor, in_tensor, bias = get_inputs(add_manual_seed=True)
+num_weights = bias.numel()
+result = cuda_extension.fused_add_mul_relu(in_out_tensor, bias, in_tensor, 0.5)
+torch.testing.assert_close(result, expected_output, rtol=1e-4, atol=1e-4)</code></pre></div></div><div class="cell md"><h2>Combine the kernels</h2>
+<h3>Fused add mul sigmoid/relu/etc</h3>
+<pre><code>@triton.jit
+def fused_add_mul_activation_kernel(x_ptr, bias_ptr, in_ptr,
+                                    num_weights: tl.constexpr,
+                                    xnumel: tl.constexpr,
+                                    multiplier: tl.constexpr,
+                                    activation: tl.constexpr,
+                                    BLOCK_SIZE: tl.constexpr):
+    xoffset = tl.program_id(0) * BLOCK_SIZE
+    index = xoffset + tl.arange(0, BLOCK_SIZE)[:]
+    mask = index &lt; xnumel
+    bias_index = index % num_weights
+    tmp0 = tl.load(x_ptr + index, mask)
+    tmp1 = tl.load(bias_ptr + bias_index, mask, eviction_policy='evict_last')
+    tmp3 = tl.load(in_ptr + index, mask)
+    activ_input = multiplier * tmp3 + tmp0 + tmp1
+    if activation == &quot;sigmoid&quot;:
+        ma_result = tl.sigmoid(activ_input)
+    elif activation == &quot;relu&quot;:
+        ma_result = tl.maximum(0, activ_input)
+    # elif ...
+
+    tl.store(x_ptr + index, ma_result, mask)
+</code></pre>
+<h3>Let's check the perf of this kernel wrt torch.script, eager torch</h3>
+<h3>Can we write the whole thing as triton/cuda kernel? Let's look MLP without LoRA layers</h3>
+<h4>BLOCKS: May be I could do something like this? INCORRECT VERSION</h4>
+<ul>
+<li>Block b x n</li>
+<li>Block n x w1</li>
+<li>Block 1 x w1</li>
+<li>Block w1 x w2</li>
+<li>Block 1 x w2</li>
+</ul>
+<p><img src="./data/fused_lora_on_mlp.png" width="800"/></p>
+<h4>Pseudo code:</h4>
+<ul>
+<li>Step 1: <code>step1 = tl.dot(block_bn, block_nw1)</code></li>
+<li>Step 2: <code>block_1w1 = index_bn % W1.size()[1]</code></li>
+<li>Step 3: <code>step3 = step1 + block_1w1</code></li>
+<li>Step 4: <code>step4 = Relu(step3)</code></li>
+<li>Step 5: <code>block_w1w2 = ...</code></li>
+<li>Step 6: <code>step6 = tl.dot(step4, block_w1w2)</code></li>
+<li>Step 7: <code>block_1w2 = index_w1w2 % W2.size()[1]</code></li>
+<li>Step 8: <code>step8 = step6 + block_1w2</code></li>
+<li>Step 9: <code>result = sigmoid(step8)</code></li>
+</ul>
+<h4>======================</h4>
+<h4>What's wrong with this?</h4>
+<h4>======================</h4>
+<h3>Can we do this?</h3>
+<p><img src="./data/fused_partial_mlp.png" width="800"/></p></div><div class="cell"><div class="in"><pre><code></code></pre></div></div></article>
+<div class="attrib">Rendered from <a href="https://github.com/gpu-mode/lectures/blob/main/lecture_018/FusedKernels.ipynb">lecture_018/FusedKernels.ipynb</a> in the GPU MODE lectures repository (Apache-2.0); the original notebook is vendored at <code>learn/vendor/gpu-mode-lectures/lecture_018/FusedKernels.ipynb</code>. Outputs are those saved in the notebook.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>
