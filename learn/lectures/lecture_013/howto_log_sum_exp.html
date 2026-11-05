@@ -1,0 +1,162 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>howto_log_sum_exp</title><link rel="stylesheet" href="../../learn.css"><style>.nb pre{background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;overflow-x:auto;font-size:.85rem}
+.nb .cell{margin:14px 0}.nb .in{border-left:3px solid var(--accent);padding-left:10px}.nb .out{border-left:3px solid var(--accent2);padding-left:10px;margin-top:6px}
+.nb img{max-width:100%;border-radius:8px}.nb table{border-collapse:collapse}.nb td,.nb th{border:1px solid var(--border);padding:4px 8px}.crumb{font-size:.85rem;color:var(--text-dim)}
+.attrib{font-size:.8rem;color:var(--text-dim);border-top:1px solid var(--border);margin-top:30px;padding-top:10px}</style></head><body><nav class="topnav"><a class="home" href="../../index.html">Learn</a><div class="links"><a href="../../lectures.html" class="here">GPU MODE Lectures</a><a href="../../index.html">All chapters</a><a href="../../notes.html">Notes library</a></div><div class="spacer"></div><button class="theme-btn" id="themeBtn">◐ theme</button></nav><main>
+<div class="crumb"><a href="../../lectures.html">GPU MODE Lectures</a> › lecture_013/howto_log_sum_exp.ipynb</div><h1>howto_log_sum_exp</h1>
+<article class="nb"><div class="cell md"><h1>How-to Log Sum Exp</h1>
+<p>Using flash-attention intensively you will at some point hear about <code>lse</code> values being returend. <code>lse</code> stands for "log-sum-exp" and can be used to compute softmax (and thereby also attention) in a blockwise and stable fashion. This notebook aims to explain how this works.</p></div><div class="cell md"><p>Let's start by defining a naive softmax function ..</p></div><div class="cell"><div class="in"><pre><code>import torch
+
+def naive_softmax(x: torch.Tensor) -&gt; torch.Tensor:
+    return x.exp() / x.exp().sum()</code></pre></div></div><div class="cell md"><p>.. and verify that its output matches the output of the official <code>torch.softmax()</code> function.</p></div><div class="cell"><div class="in"><pre><code>x = torch.randn(10)  # generate normally distributed random numbers
+a = torch.softmax(x, dim=-1) # reference output
+b = naive_softmax(x) # our naive version
+
+print(&quot;a&quot;, a)
+print(&quot;b&quot;, b)
+print(&quot;allclose&quot;, torch.allclose(a, b, atol=1e-6))</code></pre></div><div class="out"><pre>a tensor([0.0695, 0.0043, 0.0450, 0.0530, 0.0109, 0.0142, 0.0665, 0.6751, 0.0143,
+        0.0472])
+b tensor([0.0695, 0.0043, 0.0450, 0.0530, 0.0109, 0.0142, 0.0665, 0.6751, 0.0143,
+        0.0472])
+allclose True
+</pre></div></div><div class="cell md"><p>Our naive softmax function has a problem with numerical stability when it gets input vectors with larger elements:</p></div><div class="cell"><div class="in"><pre><code>naive_softmax(x * 100)</code></pre></div><div class="out"><pre>tensor([0., 0., 0., 0., 0., 0., 0., nan, 0., 0.])</pre></div></div><div class="cell md"><p>Before we discuss how to fix this let's first try to compute softmax in a blockwise fashion.
+Let's start by generating a random vector and split it into two chunks of equal size and compute softmax on these chunks individually.</p></div><div class="cell"><div class="in"><pre><code>x = torch.randn(10)
+
+x1,x2 = torch.chunk(x, 2)
+s1 = naive_softmax(x1)
+s2 = naive_softmax(x2)
+
+print(&quot;We have:&quot;)
+print(f&quot;s1 = {s1}&quot;)
+print(f&quot;s2 = {s2}&quot;)
+
+target = naive_softmax(x)
+print(&quot;We want:&quot;)
+print(f&quot;target = {target}&quot;)</code></pre></div><div class="out"><pre>We have:
+s1 = tensor([0.7998, 0.0296, 0.1147, 0.0265, 0.0294])
+s2 = tensor([0.1985, 0.3296, 0.0460, 0.1054, 0.3205])
+We want:
+target = tensor([0.4914, 0.0182, 0.0705, 0.0163, 0.0181, 0.0766, 0.1271, 0.0177, 0.0406,
+        0.1236])
+</pre></div></div><div class="cell md"><p>If we look at <code>naive_softmax()</code> we note that its output has been divided by <code>x.exp().sum()</code>. We can call this the "sum exp" value (note the similarity to "log sum exp") and we can use it to "undo" the softmax normalization and thereby compute combine multiple softmax chunks if we have this vaue for each chunk.</p></div><div class="cell"><div class="in"><pre><code>sum_exp_x1 = x1.exp().sum()
+sum_exp_x2 = x2.exp().sum()
+s1_corrected = s1 * sum_exp_x1 / (sum_exp_x1 + sum_exp_x2)
+s2_corrected = s2 * sum_exp_x2 / (sum_exp_x1 + sum_exp_x2)
+
+print(&quot;After correction with help of sum_exp values:&quot;)
+s_combined = torch.cat([s1_corrected, s2_corrected])
+print(&quot;s_combined&quot;, s_combined)
+
+print(&quot;allclose(s_combined, target):&quot;, torch.allclose(s_combined, target))
+</code></pre></div><div class="out"><pre>After correction with help of sum_exp values:
+s_combined tensor([0.4914, 0.0182, 0.0705, 0.0163, 0.0181, 0.0766, 0.1271, 0.0177, 0.0406,
+        0.1236])
+allclose(s_combined, target): True
+</pre></div></div><div class="cell md"><p>... but is this helpful at all? Yes, and it becomes more obivous when we realize that we can return this value from our softmax function and we can do the correction in a blockwise fashion in a loop by accumulating the <code>sum_exp</code> value:</p></div><div class="cell"><div class="in"><pre><code>from typing import Tuple, Sequence
+
+def naive_softmax2(x: torch.Tensor) -&gt; Tuple[torch.Tensor, torch.Tensor]:
+    sum_exp = x.exp().sum()
+    return x.exp() / sum_exp, sum_exp
+
+
+def naive_blockwise_softmax(blocks: Sequence[torch.Tensor]) -&gt; torch.Tensor:
+    total_sum_exp = 0
+    blocks_out = []
+    for block in blocks:
+        block_softmax, block_sum_exp = naive_softmax2(block)
+        blocks_out.append((block_softmax, block_sum_exp))
+        total_sum_exp += block_sum_exp
+
+    out = []
+    for block_softmax, block_sum_exp in blocks_out:
+        out.append(block_softmax * block_sum_exp / total_sum_exp)
+
+    return torch.cat(out)
+
+x_long = torch.randn(20)
+chunks = torch.chunk(x_long, 4)
+a = naive_blockwise_softmax(chunks)
+b = torch.softmax(x_long, dim=-1)
+print(&quot;a&quot;, a)
+print(&quot;b&quot;, b)
+print(&quot;allclose:&quot;, torch.allclose(a, b))
+</code></pre></div><div class="out"><pre>a tensor([0.0608, 0.0217, 0.0446, 0.0180, 0.0289, 0.2553, 0.0101, 0.0150, 0.0699,
+        0.0231, 0.0672, 0.0388, 0.0186, 0.0126, 0.0731, 0.0132, 0.0191, 0.0362,
+        0.1688, 0.0050])
+b tensor([0.0608, 0.0217, 0.0446, 0.0180, 0.0289, 0.2553, 0.0101, 0.0150, 0.0699,
+        0.0231, 0.0672, 0.0388, 0.0186, 0.0126, 0.0731, 0.0132, 0.0191, 0.0362,
+        0.1688, 0.0050])
+allclose: True
+</pre></div></div><div class="cell md"><p>OK, then now let's look at the numerical stability of softmax. First we can observe a interesting property of the softmax function: its output is shift/translation invariant (i.e. <code>f(x+a)=f(x)</code>):</p></div><div class="cell"><div class="in"><pre><code>x = torch.randn(8)
+print(naive_softmax(x))
+print(naive_softmax(x+5))
+print(naive_softmax(x-3))</code></pre></div><div class="out"><pre>tensor([0.0107, 0.0226, 0.0729, 0.0937, 0.0722, 0.2008, 0.1214, 0.4057])
+tensor([0.0107, 0.0226, 0.0729, 0.0937, 0.0722, 0.2008, 0.1214, 0.4057])
+tensor([0.0107, 0.0226, 0.0729, 0.0937, 0.0722, 0.2008, 0.1214, 0.4057])
+</pre></div></div><div class="cell md"><p>This porperty allows us to deal with problematic large inputs simply by subtracting their maximum:</p></div><div class="cell"><div class="in"><pre><code>def stable_softmax(x):
+    m = x.max()
+    return (x-m).exp() / (x-m).exp().sum()</code></pre></div></div><div class="cell md"><p>This "stable" function now can also deal with larger value that were problematic for our naive function:</p></div><div class="cell"><div class="in"><pre><code>large_input = torch.randn(10) * 100
+
+print(&quot;naive: &quot;, naive_softmax(large_input))
+print(&quot;stable: &quot;, stable_softmax(large_input))
+print(&quot;torch: &quot;, torch.softmax(large_input, dim=-1))
+</code></pre></div><div class="out"><pre>naive:  tensor([0., nan, 0., 0., 0., 0., 0., 0., 0., 0.])
+stable:  tensor([4.6243e-44, 1.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+        0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00])
+torch:  tensor([4.6243e-44, 1.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00,
+        0.0000e+00, 0.0000e+00, 0.0000e+00, 0.0000e+00])
+</pre></div></div><div class="cell"><div class="in"><pre><code>def stable_softmax2(x):
+    &quot;&quot;&quot;returns softmax result and log sum exp&quot;&quot;&quot;
+    m = x.max()
+    a = (x - m).exp()
+    b = a.sum()
+    lse = m + torch.log(b)
+    return a / b, lse</code></pre></div></div><div class="cell md"><p>Again we can now use this to combine two softmax block results, but to do it in the same way as before we would need to calculate the exp() values.. which is as we know numerically not stable:</p></div><div class="cell"><div class="in"><pre><code>x = torch.randn(20)
+
+a = torch.softmax(x, dim=-1)
+
+x1, x2 = x.chunk(2)
+
+b1, lse1 = stable_softmax2(x1)
+b2, lse2 = stable_softmax2(x2)
+
+c1 = b1 * torch.exp(lse1) / (torch.exp(lse1) + torch.exp(lse2))
+c2 = b2 * torch.exp(lse2) / (torch.exp(lse1) + torch.exp(lse2))
+
+print(a)
+print(torch.cat([c1, c2]), torch.allclose(a, torch.cat([c1, c2])))
+</code></pre></div><div class="out"><pre>tensor([0.0856, 0.0951, 0.0390, 0.0288, 0.0738, 0.0110, 0.0129, 0.0293, 0.0190,
+        0.1449, 0.0112, 0.0428, 0.0573, 0.0605, 0.0056, 0.0085, 0.1530, 0.0500,
+        0.0044, 0.0677])
+tensor([0.0856, 0.0951, 0.0390, 0.0288, 0.0738, 0.0110, 0.0129, 0.0293, 0.0190,
+        0.1449, 0.0112, 0.0428, 0.0573, 0.0605, 0.0056, 0.0085, 0.1530, 0.0500,
+        0.0044, 0.0677]) True
+</pre></div></div><div class="cell md"><p>But luckily we can rewrite it (<code>a/(a+b) = 1/(1 + b/a)</code>) and replace the exp-division by a sbtration of log-values (<code>exp(a)/exp(b) = exp(a-b)</code>).</p></div><div class="cell"><div class="in"><pre><code>d1 = b1 / (1 + torch.exp(lse2 - lse1))
+d2 = b2 / (1 + torch.exp(lse1 - lse2))
+print(a)
+print(torch.cat([d1, d2]))
+print(&quot;allclose: &quot;, torch.allclose(a, torch.cat([d1, d2])))</code></pre></div><div class="out"><pre>tensor([0.0856, 0.0951, 0.0390, 0.0288, 0.0738, 0.0110, 0.0129, 0.0293, 0.0190,
+        0.1449, 0.0112, 0.0428, 0.0573, 0.0605, 0.0056, 0.0085, 0.1530, 0.0500,
+        0.0044, 0.0677])
+tensor([0.0856, 0.0951, 0.0390, 0.0288, 0.0738, 0.0110, 0.0129, 0.0293, 0.0190,
+        0.1449, 0.0112, 0.0428, 0.0573, 0.0605, 0.0056, 0.0085, 0.1530, 0.0500,
+        0.0044, 0.0677])
+allclose:  True
+</pre></div></div><div class="cell md"><p>With the fresh knowledge about softmax we can now take a look at the <code>update()</code> function that is used in the ring-flash-attention implementation:</p></div><div class="cell"><div class="in"><pre><code>def _update_out_and_lse(
+    out: torch.Tensor,
+    lse: torch.Tensor,
+    block_out: torch.Tensor,
+    block_lse: torch.Tensor,
+) -&gt; Tuple[torch.Tensor, torch.Tensor]:
+    block_out = block_out.to(torch.float32)
+    block_lse = block_lse.transpose(-2, -1).unsqueeze(dim=-1)
+
+    new_lse = lse + torch.log(1 + torch.exp(block_lse - lse))
+    out = torch.exp(lse - new_lse) * out + torch.exp(block_lse - new_lse) * block_out
+
+    lse = new_lse
+    return out, lse</code></pre></div></div></article>
+<div class="attrib">Rendered from <a href="https://github.com/gpu-mode/lectures/blob/main/lecture_013/howto_log_sum_exp.ipynb">lecture_013/howto_log_sum_exp.ipynb</a> in the GPU MODE lectures repository (Apache-2.0); the original notebook is vendored at <code>learn/vendor/gpu-mode-lectures/lecture_013/howto_log_sum_exp.ipynb</code>. Outputs are those saved in the notebook.</div>
+</main><script>(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();</script></body></html>

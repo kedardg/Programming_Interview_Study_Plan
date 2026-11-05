@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Playbooks</title>
+<link rel="stylesheet" href="learn.css">
+<style>
+.bars{display:flex;flex-direction:column;gap:6px;margin:10px 0}
+.bar{display:grid;grid-template-columns:150px 1fr 90px;align-items:center;gap:8px;font-size:.85rem}
+.bar .track{height:14px;background:var(--bg-inset);border-radius:7px;overflow:hidden;border:1px solid var(--border)}
+.bar .fill{height:100%;border-radius:7px}
+.verdict{font-weight:700;padding:6px 10px;border-radius:8px;display:inline-block;margin-top:6px}
+.ok{background:rgba(56,198,160,.18);color:var(--accent2)} .no{background:rgba(229,96,76,.18);color:var(--danger)} .tight{background:rgba(242,166,90,.18);color:var(--warn)}
+.model-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0}
+.model-tabs .btn.secondary.on{border-color:var(--accent);color:var(--accent)}
+pre.formula{white-space:pre-wrap}
+.cmd{font-family:var(--mono);font-size:.85rem;background:var(--bg-inset);border:1px solid var(--border);border-radius:10px;padding:12px 14px;white-space:pre-wrap;word-break:break-all}
+.sub h3{margin-top:1.6em}
+.tag{display:inline-block;font-size:.72rem;padding:1px 8px;border-radius:999px;background:var(--bg-inset);border:1px solid var(--border);color:var(--text-dim);margin-left:6px}
+</style>
+</head>
+<body>
+<nav class="topnav">
+  <a class="home" href="index.html">Learn</a>
+  <div class="links">
+    <a href="math.html">Math</a><a href="interview-math.html">Interview Math</a><a href="deep-learning.html">Deep Learning</a><a href="transformers.html">Transformers</a><a href="ml-coding.html">ML Coding</a><a href="attention.html">Attention</a><a href="architectures.html">Architectures</a><a href="gallery.html">Gallery</a><a href="multimodal.html">Multimodal</a><a href="gpu.html">GPU</a><a href="kernels.html">Kernels</a><a href="quantization.html">Quantization</a><a href="inference.html">Inference</a><a href="parallelism.html">Parallelism</a><a href="training.html">Training</a><a href="customization.html">Customization &amp; Evals</a><a href="rl-systems.html">RL Systems</a><a href="frameworks.html">Frameworks</a><a href="deployment.html">Deployment</a><a href="model-playbooks.html" class="here">Playbooks</a><a href="framework-issues.html">Gotchas</a><a href="robot-learning.html">RL &amp; Robotics</a><a href="hardware.html">Hardware</a><a href="agents.html">Agents</a><a href="system-design.html">System Design</a><a href="coding-patterns.html">Coding Patterns</a><a href="aditya-verma-patterns.html">AV Patterns</a><a href="interview-journey.html">Interview Journey</a><a href="notes.html">Notes</a><a href="lectures.html">Lectures</a><a href="research.html">Research</a><a href="flashcards.html">Flashcards</a>
+  </div>
+  <div class="spacer"></div>
+  <button class="theme-btn" id="themeBtn">◐ theme</button>
+</nav>
+<main>
+<h1>Model Playbooks: gpt-oss-20b, Qwen3-4B and Qwen3.8-27B — every technique, end to end</h1>
+<p class="dim">Three open-weight models, chosen because each stresses a different part of the toolchain: a 16 GB-class mixture-of-experts whose expert weights ship in 4-bit MXFP4 (gpt-oss-20b), a small dense model you can fine-tune every way on one consumer GPU (Qwen3-4B), and a 27B hybrid whose layers are mostly Gated DeltaNet rather than attention (Qwen3.8-27B). For each one this chapter walks the whole loop from the <a href="customization.html#ladder">customization ladder</a> — prompting, SFT (full, LoRA, QLoRA), preference tuning, GRPO/RFT, distillation, continued pre-training — into quantization, <code>vllm serve</code>, load testing, and AWS deployment, with the same subsections for every model so the differences stand out. The numbers come from the <a href="gallery.html">gallery fact sheets</a> (dated), the model cards, and the first-order models of the <a href="training.html#memory">training</a> and <a href="deployment.html#loop">deployment</a> chapters; anything version-sensitive is labeled.</p>
+
+<div class="card audio-card"><h3>🎧 Listen to this chapter (10:29)</h3><audio controls preload="none" src="audio/model-playbooks.mp3" style="width:100%"></audio><p class="caption">Narrated explainer of this chapter: concepts, the papers behind them, and what to open next. <a href="audio/scripts/model-playbooks.txt">Read the transcript</a>.</p></div>
+<h2 id="why">1. Why these three</h2>
+<table class="cmp">
+<tr><th></th><th>gpt-oss-20b</th><th>Qwen3-4B</th><th>Qwen3.8-27B</th></tr>
+<tr><td>Released (gallery)</td><td>OpenAI, 2025-08-04</td><td>Alibaba Cloud, 2025-04-28</td><td>Alibaba Cloud, 2026-08-14</td></tr>
+<tr><td>Parameters</td><td>21B total, 3.6B active (17.1% active)</td><td>4B dense (≈3.6B non-embedding)</td><td>27B dense hybrid</td></tr>
+<tr><td>Architecture</td><td>24-layer sparse MoE, 32 experts, top-4 routing; GQA with alternating sliding-window (banded, 128 tokens) and global layers (12 + 12), learned attention sinks, attention biases; "wider and shallower than Qwen3"</td><td>36 GQA layers, 32 query / 8 KV heads, QK-Norm, pre-norm RMSNorm, SwiGLU, RoPE; 151k vocabulary; tied embeddings</td><td>64 layers in a 3:1 pattern — 48 Gated DeltaNet + 16 gated attention — partial RoPE, one MTP layer; native vision-language (the gallery's figure omits the vision encoder); 248k vocabulary</td></tr>
+<tr><td>Weights as shipped</td><td>Expert (MoE) weights in <strong>MXFP4</strong> (4.25 bits/param, 32-element blocks with a shared E8M0 scale); attention, embeddings and router in BF16 — ≈12.8 GB on disk, runs in 16 GB</td><td>BF16, ≈8 GB</td><td>BF16, ≈54 GB</td></tr>
+<tr><td>Context</td><td>128,000 (RoPE + YaRN)</td><td>32,768 native, 131,072 with YaRN; the 2507 "-Instruct"/"-Thinking" refreshes carry 262,144</td><td>262,144</td></tr>
+<tr><td>KV / state per token, BF16 (gallery)</td><td>48 KiB</td><td>144 KiB</td><td>64 KiB (mostly DeltaNet state; only 16 layers hold a real KV cache)</td></tr>
+<tr><td>Chat format</td><td><strong>Harmony</strong>: system / developer / user / assistant / tool roles and <em>channels</em> (analysis, commentary, final); <code>reasoning_effort</code> low / medium / high set in the system message</td><td>Qwen chat template; <strong>hybrid thinking</strong> (<code>enable_thinking</code>, <code>&lt;think&gt;…&lt;/think&gt;</code>, <code>/think</code> and <code>/no_think</code> soft switches)</td><td>Qwen chat template with thinking; MTP head for self-speculative decoding; vision inputs</td></tr>
+<tr><td>License</td><td>Apache-2.0</td><td>Apache-2.0</td><td>Apache-2.0</td></tr>
+<tr><td>Best for</td><td>Agentic/tool-use workloads at low cost per token (3.6B active), long-context reasoning with effort control, running on one 16 GB GPU</td><td>The teaching model: every technique fits on one GPU; edge/on-device; distillation target</td><td>Long-context and multimodal serving with a small cache; the model that teaches you what hybrid architectures change in training and serving</td></tr>
+</table>
+<p>The gallery lists all three (and gpt-oss-120b: 117B total / 5.1B active, 18 + 18 layers, 72 KiB KV per token — the same recipe scaled up). Qwen3.8-27B postdates most of the tooling discussion below, so its fine-tuning and serving flags are presented as "the Qwen3-Next / Qwen3.5 hybrid lineage's flags, to verify against current docs" — the <a href="framework-issues.html#vllm">gotchas chapter</a> already records hybrid-model issues that apply.</p>
+
+<h2 id="fit">2. Fit calculator: which technique fits which GPU</h2>
+<p>Before any recipe, the memory question. The calculator applies the <a href="training.html#memory">training chapter's anatomy</a> — weights at the technique's precision, gradients, optimizer state, activations (with checkpointing) — plus, for GRPO, the rollout engine's weights and KV for <em>k</em> samples, and special-cases gpt-oss: its MXFP4 experts stay 4-bit for LoRA/QLoRA, but a full fine-tune has to dequantize them to BF16 first (≈42 GB of weights before a single gradient). Verdicts are first-order; real runs add fragmentation, CUDA graphs, and framework overhead (budget 10–20%).</p>
+<div class="card">
+<h3>Interactive: fit calculator</h3>
+<div class="controls">
+  <label class="ctl">Model <select id="fitModel"><option value="gptoss">gpt-oss-20b</option><option value="qwen4b" selected>Qwen3-4B</option><option value="qwen27b">Qwen3.8-27B</option></select></label>
+  <label class="ctl">Technique <select id="fitTech"><option value="full">Full SFT (BF16 + AdamW)</option><option value="lora" selected>LoRA (BF16 base)</option><option value="qlora">QLoRA (4-bit base)</option><option value="dpo">DPO (LoRA policy + BF16 reference)</option><option value="grpo">GRPO / RFT (LoRA + colocated vLLM rollouts)</option><option value="cpt">Continued pre-training (full, BF16)</option></select></label>
+  <label class="ctl">GPU <select id="fitGpu"><option value="16" selected>RTX 5080 · 16 GB</option><option value="24">L4 / A10G · 24 GB</option><option value="48">L40S · 48 GB</option><option value="80">A100 / H100 · 80 GB</option><option value="640">8×H100 node · 640 GB (ZeRO-3)</option><option value="1536">Trainium2 trn2.48xl · 16×96 GB (NxD)</option></select></label>
+</div>
+<div class="controls">
+  <label class="ctl">Seq len <input type="range" id="fitSeq" min="9" max="15" value="11"> <span id="fitSeqL"></span></label>
+  <label class="ctl">Micro-batch <input type="range" id="fitBatch" min="1" max="8" value="1"> <span id="fitBatchL"></span></label>
+  <label class="ctl"><input type="checkbox" id="fitCkpt" checked> gradient checkpointing</label>
+  <label class="ctl" id="fitKWrap">GRPO samples k <input type="range" id="fitK" min="2" max="16" value="8"> <span id="fitKL"></span></label>
+</div>
+<div class="bars" id="fitBars"></div>
+<div><span class="verdict" id="fitVerdict"></span></div>
+<p class="caption" id="fitNote"></p>
+</div>
+
+<h2 id="playbooks">3. The playbooks</h2>
+<p>Each playbook has the same twelve subsections (a–l), so you can read one model straight through or compare a subsection across all three. Every config is runnable in shape; version-pinned flags are marked <span class="tag">verify</span>.</p>
+<div class="model-tabs">
+  <button class="btn secondary on" data-pb="gptoss">gpt-oss-20b</button>
+  <button class="btn secondary" data-pb="qwen4b">Qwen3-4B</button>
+  <button class="btn secondary" data-pb="qwen27b">Qwen3.8-27B</button>
+  <button class="btn secondary" data-pb="all">Show all</button>
+</div>
+
+<!-- ============================ gpt-oss-20b ============================ -->
+<section class="sub" id="pb-gptoss">
+<h2 id="gptoss">3.1 gpt-oss-20b</h2>
+
+<h3>a) Format gotchas: Harmony and reasoning effort</h3>
+<p>gpt-oss was trained on the <strong>harmony</strong> response format and will not behave without it. A conversation is a sequence of messages with roles <code>system</code>, <code>developer</code>, <code>user</code>, <code>assistant</code> and <code>tool</code>, and assistant messages carry a <em>channel</em>: <code>analysis</code> (the chain of thought, never meant for end users), <code>commentary</code> (tool calls and preambles), and <code>final</code> (the visible answer). The system message sets <code>Reasoning: low | medium | high</code>, which is the whole "reasoning effort" API — a longer analysis channel before the final channel, i.e. more tokens and more latency per request, exactly the <a href="architectures.html#paradigms">System 2 budget trade</a>. Two consequences for fine-tuning and serving:</p>
+<ul>
+<li><strong>Training data must be rendered with the harmony template</strong> (the Hugging Face chat template does this; the <code>openai-harmony</code> library is the reference renderer). If you fine-tune on plain "user/assistant" strings without channels, you train the model to skip the analysis channel and break the serving parser. Keep the analysis channel in the loss only if you have reasoning traces you trust; otherwise mask it and train on <code>final</code> (and <code>commentary</code> for tool calls).</li>
+<li><strong>Serving must parse harmony</strong>: vLLM's <code>--reasoning-parser openai_gptoss</code> splits analysis from final, and <code>--tool-call-parser openai</code> turns commentary tool calls into OpenAI-style <code>tool_calls</code>. The <a href="framework-issues.html#vllm">gotchas chapter</a> lists the recurring failures — "unexpected tokens in message header", "expected 2 output messages, got 7" — which are almost always a template mismatch between what was trained and what the server renders.</li>
+</ul>
+<p>Tokenizer/template parity rule for all three models: render one training example with the exact tokenizer and template the server will use, decode it, and diff it against what <code>vllm serve</code> sends the model for the same chat. Do it before every training run; it is the most common silent failure in the <a href="framework-issues.html#cross">cross-cutting gotchas</a>.</p>
+
+<h3>b) SFT: LoRA on 4-bit experts, or full fine-tune after dequantizing</h3>
+<p>The decisive fact: the MoE expert weights are MXFP4 and account for most of the 21B parameters. For LoRA/QLoRA you <em>keep them quantized and frozen</em> and attach adapters; for a full fine-tune the whole model must be dequantized to BF16 (≈42 GB of weights, then gradients and optimizer state on top — the calculator above puts that at an 8×H100 job with ZeRO-3). Two LoRA target choices exist, and they matter:</p>
+<ul>
+<li><strong>Attention-only LoRA</strong> (q/k/v/o projections in all 24 layers): small, stable, enough for format/style/tool-call fine-tunes. Adapters train on top of the 4-bit experts untouched.</li>
+<li><strong>Expert LoRA</strong>: PEFT's <code>target_parameters</code> path attaches low-rank updates to the fused expert tensors (<code>mlp.experts.gate_up_proj</code>, <code>mlp.experts.down_proj</code>) — needed when the behaviour you want lives in the experts (domain knowledge, new languages). It is heavier (the adapter is per-expert) and the dequantization kernel for training on MXFP4 matters: with <code>Mxfp4Config(dequantize=True)</code> the experts are upcast to BF16 at load (≈42 GB — no longer a 16 GB job); keeping them MXFP4 during training requires the Triton MXFP4 kernels and a Hopper/Blackwell GPU. On the 5080, attention-only LoRA with the experts left in MXFP4 is the realistic path. <span class="tag">verify</span></li>
+</ul>
+<pre class="formula"># Axolotl — gpt-oss-20b LoRA on attention, experts frozen in MXFP4 (illustrative)
+base_model: openai/gpt-oss-20b
+chat_template: tokenizer_default          # the harmony template shipped with the tokenizer
+datasets:
+  - path: ./sft.jsonl                     # {"messages":[{"role":"system",...},{"role":"user",...},{"role":"assistant","content":...,"thinking":...}]}
+    type: chat_template
+    field_messages: messages
+    roles_to_train: ["assistant"]
+    train_on_eos: turn
+adapter: lora
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+sequence_len: 4096
+sample_packing: true
+flash_attention: true                     # sinks need FA3 on Hopper; Blackwell consumer falls back (see gotchas)
+gradient_checkpointing: true
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+lr_scheduler: cosine
+warmup_ratio: 0.03
+num_epochs: 2
+bf16: true
+optimizer: adamw_torch_fused
+logging_steps: 10
+output_dir: ./out/gptoss-lora</pre>
+<pre class="formula"># TRL — the same run as code (illustrative; pin transformers/peft/trl versions)
+from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
+from peft import LoraConfig, get_peft_model
+from trl import SFTTrainer, SFTConfig
+from datasets import load_dataset
+
+tok = AutoTokenizer.from_pretrained("openai/gpt-oss-20b")
+model = AutoModelForCausalLM.from_pretrained(
+    "openai/gpt-oss-20b", torch_dtype="auto", device_map="auto",
+    quantization_config=Mxfp4Config(dequantize=False),   # keep experts 4-bit; dequantize=True needs ~42 GB
+    attn_implementation="kernels-community/vllm-flash-attn3",  # Hopper; else "eager"/sdpa
+)
+peft_cfg = LoraConfig(r=16, lora_alpha=32, lora_dropout=0.05,
+                      target_modules=["q_proj","k_proj","v_proj","o_proj"],
+                      # expert LoRA instead/also: target_parameters=["mlp.experts.gate_up_proj","mlp.experts.down_proj"]
+                      task_type="CAUSAL_LM")
+model = get_peft_model(model, peft_cfg); model.print_trainable_parameters()
+
+ds = load_dataset("json", data_files="sft.jsonl")["train"]   # messages with harmony roles/channels
+cfg = SFTConfig(output_dir="out/gptoss-lora", per_device_train_batch_size=1, gradient_accumulation_steps=16,
+                learning_rate=1e-4, lr_scheduler_type="cosine", warmup_ratio=0.03, num_train_epochs=2,
+                max_length=4096, packing=True, bf16=True, gradient_checkpointing=True, logging_steps=10,
+                assistant_only_loss=True)                    # mask everything but assistant turns
+SFTTrainer(model=model, args=cfg, train_dataset=ds, processing_class=tok).train()</pre>
+<p>Budget: ~2k–20k examples; 1–2 epochs; LR 1e-4 for LoRA (3e-5 for full); on one 80 GB GPU attention-LoRA at 4k tokens runs a few thousand examples per hour; on the 5080, micro-batch 1 with checkpointing and sequence 2–4k. Packing is fine (block-diagonal masks, see <a href="training.html#axolotl">sample packing</a>); keep the harmony special tokens intact when packing.</p>
+
+<h3>c) Preference tuning: DPO / ORPO</h3>
+<pre class="formula"># Axolotl DPO over the SFT adapter (illustrative)
+base_model: openai/gpt-oss-20b
+lora_model_dir: ./out/gptoss-lora        # start from the SFT adapter
+rl: dpo
+rl_beta: 0.1
+datasets:
+  - path: ./prefs.jsonl                  # {"prompt":[...messages...], "chosen":"...", "rejected":"..."} rendered with harmony
+    type: chat_template.default
+adapter: lora
+lora_r: 16
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+sequence_len: 4096
+learning_rate: 5.0e-6
+num_epochs: 1
+gradient_checkpointing: true
+bf16: true</pre>
+<p>DPO needs a frozen reference; with a LoRA policy the reference is the base with adapters disabled, so no second copy of the 12.8 GB weights — which is why DPO fits where full SFT does not. ORPO folds the preference term into SFT (no reference) and is the cheaper first try. Keep the analysis channel out of the preference loss unless the preferences are <em>about</em> the reasoning.</p>
+
+<h3>d) RL: GRPO / RFT</h3>
+<p>The <a href="rl-systems.html#rft">multi-turn RFT recipe</a> applies unchanged — rejection-sampled SFT warm start, then GRPO with verifiers — with two gpt-oss-specific constraints. First, the rollout engine must serve gpt-oss correctly: vLLM does (MXFP4 kernels on Hopper/Blackwell, harmony parsing), so verl/TRL rollouts through vLLM work in principle, but the <a href="framework-issues.html#verl">gotchas chapter</a> records that verl's Megatron-Bridge backend did not train gpt-oss at the time of writing (issues 3794, 5224) — use the FSDP backend with a LoRA policy. Second, weight sync: the trainer holds BF16 adapters while the engine serves MXFP4 experts; syncing LoRA weights into vLLM (rather than merged weights) is the path that avoids re-quantizing experts every step. The reasoning channel is part of the sampled trajectory: mask the tool outputs, keep the model's own analysis and final tokens in the loss, and set <code>Reasoning: low</code> during rollouts unless the task needs long chains (rollout length dominates step time).</p>
+<pre class="formula"># TRL GRPOTrainer with vLLM rollouts (illustrative shape)
+from trl import GRPOTrainer, GRPOConfig
+cfg = GRPOConfig(output_dir="out/gptoss-grpo", use_vllm=True, vllm_mode="colocate",
+                 num_generations=8, max_completion_length=1024, per_device_train_batch_size=8,
+                 learning_rate=1e-6, beta=0.0, bf16=True, gradient_checkpointing=True)
+trainer = GRPOTrainer(model=model_with_lora, reward_funcs=[code_reward, format_reward],
+                      args=cfg, train_dataset=prompts, processing_class=tok)
+trainer.train()</pre>
+
+<h3>e) Distillation</h3>
+<p>gpt-oss-120b → gpt-oss-20b is the natural pair: same harmony format, same recipe, 5.1B vs 3.6B active. Sequence-level distillation (SFT the 20B on 120B outputs at <code>Reasoning: high</code>, keeping the analysis channel) transfers reasoning style cheaply; <a href="customization.html#distillation">on-policy distillation</a> (student samples, teacher scores per token) needs both models' logprobs — the 120B teacher is itself a one-80 GB-GPU model in MXFP4, so a 2-GPU job. Decide with the eval bar, not by default.</p>
+
+<h3>f) Continued pre-training</h3>
+<p>CPT means full fine-tuning on raw domain text, which for gpt-oss means dequantized experts and the full memory bill; after CPT you re-quantize experts to MXFP4 for serving and must re-check parity (MXFP4 is a lossy format; the model was <em>trained</em> for it, your CPT weights were not). For most domain-knowledge goals, expert-LoRA with a replay mixture is the pragmatic alternative (see the <a href="customization.html#cpt">CPT section</a>).</p>
+
+<h3>g) Merge / export</h3>
+<p>Attention-only LoRA merges cleanly into the BF16 attention weights, leaving MXFP4 experts untouched — export is a normal <code>merge_and_unload()</code> plus the original expert tensors. Expert LoRA has no clean merge: dequantize experts → add the low-rank update → re-quantize to MXFP4 → verify parity, or serve the adapter unmerged (vLLM multi-LoRA on MoE experts is version-dependent — <span class="tag">verify</span>). When in doubt, serve unmerged.</p>
+
+<h3>h) Quantization for serving</h3>
+<p>Do not re-quantize the experts: they are already MXFP4 and AWQ/GPTQ calibration on top would be lossy for nothing. What you can still do is FP8 for the attention and dense parts on Hopper/Blackwell (small gain, since the experts dominate bytes) and KV-cache FP8 (<code>--kv-cache-dtype fp8</code>) to double the sequence budget — worth it at 128K contexts. On Ampere and older, vLLM dequantizes MXFP4 to BF16 at load (≈42 GB weights; not a 24 GB-GPU model there) — this is the single most common "it ran on H100 but not on A10G" surprise.</p>
+
+<h3>i) Serving</h3>
+<div class="cmd">vllm serve openai/gpt-oss-20b \
+  --max-model-len 32768 --max-num-seqs 64 --gpu-memory-utilization 0.90 \
+  --reasoning-parser openai_gptoss --tool-call-parser openai --enable-auto-tool-choice \
+  --enable-prefix-caching --kv-cache-dtype fp8       # fp8 KV optional; omit on consumer Blackwell if unsupported
+
+# SGLang equivalent
+python -m sglang.launch_server --model-path openai/gpt-oss-20b --reasoning-parser gpt-oss --tool-call-parser gpt-oss
+
+# set effort per request through the system prompt (or the API's reasoning_effort field where exposed)
+curl localhost:8000/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"openai/gpt-oss-20b",
+ "messages":[{"role":"system","content":"Reasoning: low"},{"role":"user","content":"Summarise the ticket."}],"max_tokens":300}'</div>
+<p>Concurrency math at 48 KiB per token: on the 5080, 16 GB × 0.9 − 12.8 GB weights ≈ 1.6 GB for KV ≈ 34k cached tokens — e.g. 8 sequences at 4k, or 1 at 32k; FP8 KV doubles it. On an 80 GB GPU ≈ 59 GB of KV ≈ 1.26M tokens: hundreds of concurrent 4k sequences, where the MoE's 3.6B active parameters make decode cheap per token but the all-expert weight read (≈10 GB) is paid once per step regardless of batch — batch aggressively. Multi-LoRA serving (<code>--enable-lora --max-loras 4</code>) works for attention adapters; expert adapters are the <span class="tag">verify</span> case.</p>
+
+<h3>j) Load-test targets</h3>
+<p>First-order floors from the <a href="deployment.html#loadtest">deployment model</a>: decode reads ≈ 10 GB of expert weights + ≈ 2.3 GB BF16 dense weights per step, so TPOT floor ≈ 12.3 GB ÷ bandwidth: ≈ 13 ms on the 5080 (960 GB/s), ≈ 4 ms on H100 (3.35 TB/s); real TPOT at batch 1 is 1.5–2× the floor. TTFT for a 2k-token prompt: tens of ms on H100, 100–300 ms on the 5080. Measure first: TTFT p95 under an open-loop sweep (<code>vllm bench serve --request-rate</code>), then TPOT vs batch, then the effect of <code>Reasoning: high</code> — it multiplies output tokens by 3–10×, which is a product decision, not a serving one.</p>
+
+<h3>k) AWS deployment</h3>
+<p>Instance: <strong>g6e</strong> (L40S 48 GB) is the sweet spot for one replica with room for KV; <strong>g6</strong> (L4 24 GB) works for low concurrency; <strong>p5</strong> (H100) when you want 100+ concurrent sequences per replica or FP8 KV at 128K. EKS pod: one GPU per pod, <code>readinessProbe</code> on <code>/health</code>, 60–120 s startup (MXFP4 load + CUDA graphs), KEDA on <code>vllm:num_requests_waiting</code>. Trainium: gpt-oss is an MoE with MXFP4 experts and attention sinks; NeuronX Distributed Inference's MoE support covers Mixtral/DeepSeek-style experts, but MXFP4 expert weights would need dequantization to a Neuron dtype (BF16/FP8) and sinks need a custom attention kernel — treat it as a <a href="hardware.html#migration">migration-playbook</a> candidate with a parity gate, not a drop-in. <span class="tag">verify</span></p>
+
+<h3>l) Known issues (from the Gotchas chapter)</h3>
+<ul>
+<li><a href="framework-issues.html#vllm">vLLM</a>: harmony header errors and "expected 2 output messages, got 7" (template/parser mismatch); FA3 not detected on consumer Blackwell (RTX 5090) — sinks need FA3, so the 5080 may take the slower attention backend; MXFP4 kernels dequantize on pre-Hopper GPUs.</li>
+<li><a href="framework-issues.html#verl">verl</a>: gpt-oss not training on the Megatron-Bridge backend; use FSDP + LoRA.</li>
+<li><a href="framework-issues.html#cross">Cross-cutting</a>: chat-template parity between training and serving is where gpt-oss fine-tunes most often silently fail.</li>
+</ul>
+</section>
+
+<!-- ============================ Qwen3-4B ============================ -->
+<section class="sub" id="pb-qwen4b" style="display:none">
+<h2 id="qwen4b">3.2 Qwen3-4B</h2>
+
+<h3>a) Format gotchas: hybrid thinking</h3>
+<p>Qwen3 is one model with two modes. With <code>enable_thinking=True</code> (the default) it emits <code>&lt;think&gt;…&lt;/think&gt;</code> before the answer; with <code>enable_thinking=False</code> the template inserts an empty think block and the model answers directly; <code>/think</code> and <code>/no_think</code> in a user turn switch per message. Three rules from the Qwen docs and the <a href="framework-issues.html#vllm">gotchas</a>: sample thinking mode at temperature 0.6 / top-p 0.95 / top-k 20 (greedy loops); in multi-turn data strip historical <code>&lt;think&gt;</code> blocks from previous assistant turns (the template does this); and for fine-tuning decide explicitly whether your targets contain thinking — a dataset without it, trained with thinking enabled in the template, teaches the model to emit empty think blocks (fine for a non-reasoning assistant, wrong for a reasoning one). The 2507 refresh split the line into <code>Qwen3-4B-Instruct-2507</code> (non-thinking, 262k context) and <code>Qwen3-4B-Thinking-2507</code>; pick the base that matches the data you have.</p>
+
+<h3>b) SFT: everything fits on one GPU</h3>
+<p>4B parameters is the size where the whole ladder runs on a 16–24 GB card: full fine-tune needs ≈ 16 bytes/param ≈ 64 GB (so an 80 GB GPU or 2–4 GPUs with ZeRO/FSDP), LoRA on the 8 GB BF16 base fits 16 GB at 4k tokens with checkpointing, QLoRA (NF4 base ≈ 2.5 GB) leaves most of a 16 GB card for activations and long sequences. Targets: all linear projections (<code>q,k,v,o,gate,up,down</code>) — on a dense model there is no reason to restrict LoRA to attention.</p>
+<pre class="formula"># Axolotl — Qwen3-4B QLoRA (fits an RTX 5080 at 4k tokens)
+base_model: Qwen/Qwen3-4B
+chat_template: qwen3
+datasets:
+  - path: ./sft.jsonl
+    type: chat_template
+    field_messages: messages
+    roles_to_train: ["assistant"]
+    train_on_eos: turn
+adapter: qlora
+load_in_4bit: true
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target_linear: true                   # q,k,v,o,gate,up,down
+sequence_len: 4096
+sample_packing: true
+flash_attention: true
+gradient_checkpointing: true
+micro_batch_size: 2
+gradient_accumulation_steps: 8
+learning_rate: 2.0e-4
+lr_scheduler: cosine
+warmup_ratio: 0.03
+num_epochs: 3
+bf16: true
+optimizer: paged_adamw_8bit
+output_dir: ./out/qwen3-4b-qlora</pre>
+<pre class="formula"># TRL — full fine-tune on an 80 GB GPU (or LoRA by adding peft_config)
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from trl import SFTTrainer, SFTConfig
+tok = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-4B", torch_dtype="bfloat16", attn_implementation="flash_attention_2")
+cfg = SFTConfig(output_dir="out/qwen3-4b-full", per_device_train_batch_size=4, gradient_accumulation_steps=4,
+                learning_rate=2e-5, num_train_epochs=2, max_length=8192, packing=True, bf16=True,
+                gradient_checkpointing=True, assistant_only_loss=True, warmup_ratio=0.03, lr_scheduler_type="cosine")
+SFTTrainer(model=model, args=cfg, train_dataset=ds, processing_class=tok).train()</pre>
+<p>Hyperparameters that hold for Qwen3 dense: LoRA r 16–64, α = 2r, LR 1e-4–2e-4 (QLoRA) / 1e-5–3e-5 (full), 2–3 epochs on 5k–50k examples, sequence 4k–8k with packing. Time: QLoRA on the 5080 ≈ 1–2k examples/hour at 4k tokens; full FT on one H100 ≈ 10k examples/hour.</p>
+
+<h3>c) Preference tuning</h3>
+<p>DPO with a LoRA policy (reference = adapters off) fits the 5080 in QLoRA form; β 0.05–0.1, LR 5e-6 (full) / 5e-5 (LoRA), one epoch over 5–20k pairs. ORPO when you have no SFT stage to spare. For a thinking model, decide whether preferences are judged on the final answer only — then mask the think block from the loss so you are not accidentally preference-tuning the reasoning length.</p>
+
+<h3>d) RL: GRPO / RFT — the model to learn RL on</h3>
+<p>Qwen3-4B is small enough to run the whole <a href="rl-systems.html#machine">trainer–rollout machine</a> on one 24–48 GB GPU in colocated mode (vLLM holding ≈ 8 GB BF16 weights plus KV, the trainer holding a LoRA policy and its optimizer), and big enough that GRPO on verifiable math/code rewards visibly moves pass@1. Rollout engines support it everywhere (vLLM, SGLang; verl, TRL, slime/Miles). Recipe: filter prompts by solve rate, k = 8, 512–1k completion tokens for math, thinking enabled in rollouts (that is what you are training), KL β 0 or tiny, LR 1e-6 — then the <a href="rl-systems.html#rft">multi-turn RFT recipe</a> for agent tasks. The <a href="framework-issues.html#miles">gotchas</a> record a slime example hanging on weight update for exactly this model — read it before your first run.</p>
+
+<h3>e) Distillation</h3>
+<p>Qwen3-4B is the classic <em>student</em>: Qwen's own release used strong-to-weak distillation from Qwen3-32B / 235B into the small models. Reproduce at your scale with sequence-level distillation (SFT on teacher outputs with thinking) and, if logprobs are available, on-policy distillation — the <a href="customization.html#distillation">distillation section</a> has the losses. For a cost target this usually beats RL on the 4B directly.</p>
+
+<h3>f) Continued pre-training</h3>
+<p>A 4B full CPT run is a 64 GB-memory job per data-parallel rank (so FSDP across 2–4 GPUs or one 80 GB card), with 10–20% replay of general data and a low LR (1e-5). The <a href="customization.html#cpt">6ND arithmetic</a>: 4B × 2B domain tokens ≈ 4.8e19 FLOPs ≈ 17 H100-hours at 40% MFU — cheap enough to try before deciding on a bigger model.</p>
+
+<h3>g) Merge / export</h3>
+<p><code>axolotl merge-lora</code> (or PEFT <code>merge_and_unload</code>) → safetensors; QLoRA adapters merge into the BF16 base (re-load the base in BF16 first, never merge into the NF4 weights); export GGUF via <code>axolotl export</code> for llama.cpp on CPU/edge; keep the adapter unmerged when you plan multi-LoRA serving.</p>
+
+<h3>h) Quantization for serving</h3>
+<pre class="formula"># llm-compressor — W4A16 (AWQ) and FP8 for the merged model
+from llmcompressor import oneshot
+from llmcompressor.modifiers.awq import AWQModifier
+oneshot(model="out/qwen3-4b-merged", dataset="open_platypus", num_calibration_samples=256, max_seq_length=2048,
+        recipe=[AWQModifier(targets="Linear", scheme="W4A16", ignore=["lm_head"])], output_dir="out/qwen3-4b-awq")
+# FP8 (dynamic activations), Hopper/Blackwell:
+from llmcompressor.modifiers.quantization import QuantizationModifier
+oneshot(model="out/qwen3-4b-merged", recipe=[QuantizationModifier(targets="Linear", scheme="FP8_DYNAMIC", ignore=["lm_head"])],
+        output_dir="out/qwen3-4b-fp8")</pre>
+<p>Checks after quantizing (<a href="customization.html#evals">eval section</a>): held-out task score within noise, perplexity delta &lt; 2–3%, and a thinking-mode sanity run — 4-bit models sometimes loop in long think blocks. W4A16 takes the 8 GB base to ≈ 2.5 GB and roughly halves TPOT on bandwidth-bound decode; FP8 halves weights with near-zero accuracy cost on Hopper.</p>
+
+<h3>i) Serving</h3>
+<div class="cmd">vllm serve Qwen/Qwen3-4B \
+  --max-model-len 32768 --max-num-seqs 128 --gpu-memory-utilization 0.90 \
+  --reasoning-parser qwen3 --tool-call-parser hermes --enable-auto-tool-choice \
+  --enable-prefix-caching --enable-chunked-prefill
+
+# W4A16 build:    vllm serve out/qwen3-4b-awq --quantization awq ...   (or compressed-tensors, auto-detected)
+# multi-adapter:  --enable-lora --lora-modules support=out/qwen3-4b-lora-support legal=out/qwen3-4b-lora-legal --max-loras 4
+# disable thinking per request:  "chat_template_kwargs": {"enable_thinking": false}
+# SGLang:  python -m sglang.launch_server --model-path Qwen/Qwen3-4B --reasoning-parser qwen3 --tool-call-parser qwen25</div>
+<p>Concurrency math at 144 KiB per token — the highest of the three, because 36 layers × 8 KV heads × 128 dims is a lot of cache for a 4B model: on the 5080 with BF16 weights ≈ 6.4 GB for KV ≈ 45k tokens (≈ 11 sequences at 4k); with W4A16 weights ≈ 12 GB for KV ≈ 85k tokens; FP8 KV doubles either. On 80 GB ≈ 500k tokens. This is why a small dense model can be <em>more</em> cache-bound than gpt-oss-20b, and why GQA/MLA matter even at 4B (<a href="inference.html#kv-cache">KV-cache section</a>).</p>
+
+<h3>j) Load-test targets</h3>
+<p>Floors: BF16 8 GB ÷ 960 GB/s ≈ 8.3 ms TPOT on the 5080, W4A16 ≈ 2.6 ms, H100 BF16 ≈ 2.4 ms; TTFT for 2k prompt ≈ 30–80 ms on H100, 150–400 ms on the 5080. Thinking mode is the variable to control: at 1–3k thinking tokens per answer, p95 end-to-end latency is dominated by reasoning length, so load-test both modes and report them separately.</p>
+
+<h3>k) AWS deployment</h3>
+<p>g6 (L4 24 GB) is enough for a replica; g6e for long contexts; scale with replicas, not TP (a 4B model does not need it). EKS: 1 GPU/pod, 20–40 s startup, HPA/KEDA on waiting requests. Trainium: Qwen3 dense is a standard GQA transformer — NxD Inference's Llama/Qwen2-style path applies; the <a href="hardware.html#migration">migration playbook</a> parity harness is the gate, and the <a href="framework-issues.html#neuron">gotchas</a> list a Qwen2.5-14B Neuron issue to read first.</p>
+
+<h3>l) Known issues</h3>
+<ul>
+<li><a href="framework-issues.html#vllm">vLLM</a>: the Qwen3 usage-guide thread (parsers, thinking); "thinking cannot be disabled" and tool calls emitted inside the think block being lost.</li>
+<li><a href="framework-issues.html#miles">Miles/slime</a>: the qwen3-4b example hanging on <code>update_weights</code>.</li>
+<li><a href="framework-issues.html#axolotl">Axolotl</a>: Qwen3-MoE issues (dense 4B is unaffected, but the family thread is worth reading).</li>
+</ul>
+</section>
+
+<!-- ============================ Qwen3.8-27B ============================ -->
+<section class="sub" id="pb-qwen27b" style="display:none">
+<h2 id="qwen27b">3.3 Qwen3.8-27B</h2>
+
+<h3>a) Format gotchas: a hybrid with thinking, vision and an MTP head</h3>
+<p>The gallery fact sheet: 64 layers in a 3:1 pattern — 48 Gated DeltaNet layers and 16 gated-attention layers — partial RoPE, one MTP layer, 262,144-token context, 248k vocabulary, native vision-language, Apache-2.0, released 2026-08-14. The chat side is Qwen's thinking template (same <code>enable_thinking</code> mechanics as Qwen3-4B, same sampling rules) plus image inputs; the <a href="framework-issues.html#sglang">gotchas</a> record a thinking-plus-tool-parser loop on the sibling Qwen3.8-Flash-Next and tool-call leakage with hybrid models when prefix caching and MTP are combined — so the parity diff of training template vs served template, and a tool-call round-trip test, are mandatory before load testing.</p>
+
+<h3>b) SFT: what changes when 48 of 64 layers are DeltaNet</h3>
+<p>Three things differ from a dense transformer. <strong>Memory</strong>: 27B BF16 ≈ 54 GB, so LoRA needs an 80 GB GPU (54 GB weights + activations), QLoRA (≈ 14 GB NF4) fits 24 GB comfortably and the 5080 only at short sequences; full fine-tune ≈ 430 GB → an 8×H100 FSDP job. <strong>Targets</strong>: the DeltaNet layers have their own projections (q/k/v/gate/output and the short-conv) and the 16 attention layers have gated attention; <code>lora_target_linear: true</code> catches all of them, but explicitly listing <code>q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj</code> would <em>miss</em> DeltaNet-specific module names — check <code>model.named_modules()</code> for the hybrid block's names before trusting a target list. <strong>Kernels</strong>: training the DeltaNet layers needs the chunked linear-attention kernels (the <code>fla</code> / flash-linear-attention path that Qwen3-Next introduced); without them training falls back to slow reference code or fails to load — the Axolotl/PEFT support status for this family is what the <a href="framework-issues.html#axolotl">gotchas chapter</a> tracks. <span class="tag">verify</span></p>
+<pre class="formula"># Axolotl — Qwen3.8-27B QLoRA on a 24–48 GB GPU (illustrative; hybrid-layer support is version-dependent)
+base_model: Qwen/Qwen3.8-27B
+chat_template: qwen3
+datasets:
+  - path: ./sft.jsonl
+    type: chat_template
+    field_messages: messages
+    roles_to_train: ["assistant"]
+adapter: qlora
+load_in_4bit: true
+lora_r: 32
+lora_alpha: 64
+lora_target_linear: true                 # includes DeltaNet projections; verify with model.named_modules()
+lora_modules_to_save: []                 # do not retrain embeddings (248k vocab)
+sequence_len: 8192
+sample_packing: true
+flash_attention: true                    # for the 16 attention layers; DeltaNet layers use the fla kernels
+gradient_checkpointing: true
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+num_epochs: 2
+bf16: true
+optimizer: paged_adamw_8bit
+output_dir: ./out/qwen38-27b-qlora</pre>
+<p>Budget: QLoRA on L40S/A100 ≈ 300–600 examples/hour at 8k tokens; LoRA on H100 ≈ 2× that. Long-context fine-tunes are where this model earns its cache advantage — 64 KiB per token of state versus 144 KiB for the 4B dense model — but training activations at 32k+ tokens need sequence parallelism (<a href="training.html#systems">training systems</a>).</p>
+
+<h3>c) Preference tuning</h3>
+<p>Same DPO/ORPO configs as Qwen3-4B with the memory of a 27B: LoRA policy + adapters-off reference on one 80 GB GPU, or QLoRA on 48 GB. β 0.1, LR 5e-5 (LoRA), one epoch.</p>
+
+<h3>d) RL: GRPO / RFT on a hybrid</h3>
+<p>The constraint is the rollout engine. vLLM and SGLang serve the Qwen3-Next/3.5/3.8 hybrid family (DeltaNet state cache + KV for the attention layers; MTP speculative decoding), so GRPO rollouts run — but weight sync from a trainer to an engine holding hybrid state, prefix caching over DeltaNet state, and MTP during rollouts are each a <a href="framework-issues.html#vllm">recorded issue class</a> ("hybrid models + prefix caching + MTP: tool-call leakage, wrong needle results"). Practical settings: disable prefix caching and MTP in the rollout engine for RL, LoRA policy with the FSDP backend in verl, k = 8, completion length by task; the memory bill is 54 GB (engine, BF16) + 54 GB (trainer base) + KV + optimizer — a 2×H100 colocated job or disaggregated pools (<a href="rl-systems.html#machine">topologies</a>). Expect rollout to dominate even more than usual: 262k-token contexts invite long trajectories.</p>
+
+<h3>e) Distillation</h3>
+<p>Qwen3.8-27B is a <em>teacher</em> for Qwen3-4B (sequence-level or on-policy, as above) and a <em>student</em> of larger Qwen3.x models. Distillation across architectures (hybrid → dense or the reverse) works at the sequence level trivially and at the logit level fine (shared tokenizer family — check the vocabularies: 248k vs 151k means logit-level KD needs a vocabulary mapping or a shared tokenizer).</p>
+
+<h3>f) Continued pre-training</h3>
+<p>Full CPT on 27B is an 8×H100 FSDP job per <a href="customization.html#cpt">6ND</a> (27B × 10B tokens ≈ 1.6e21 FLOPs ≈ 570 H100-hours at 40% MFU); the hybrid's training throughput at long sequences is better than a dense 27B (linear-time DeltaNet layers), which is the point of the architecture.</p>
+
+<h3>g) Merge / export</h3>
+<p>Standard PEFT merge into BF16; for the MTP head keep its weights alongside (speculation needs them at serving time); GGUF export for hybrids depends on llama.cpp's support for the DeltaNet block — <span class="tag">verify</span>.</p>
+
+<h3>h) Quantization for serving</h3>
+<p>W4A16 (AWQ/GPTQ) and FP8 apply to the linear projections of both layer types; llm-compressor's modifiers target <code>Linear</code> modules, so the DeltaNet projections are covered, but the short-conv and gating paths stay in BF16 and the <em>recurrent state</em> is never quantized (the hybrid's cache is small anyway). Calibrate with long sequences (the state statistics differ from short-prompt calibration) and run the needle-in-a-haystack check after quantizing — the gotchas chapter records wrong needle results in hybrid + caching combinations, and a quantized state path can add to that. 27B W4A16 ≈ 14–15 GB: fits the 5080 for inference.</p>
+
+<h3>i) Serving</h3>
+<div class="cmd">vllm serve Qwen/Qwen3.8-27B \
+  --max-model-len 131072 --max-num-seqs 64 --gpu-memory-utilization 0.90 \
+  --reasoning-parser qwen3 --tool-call-parser hermes --enable-auto-tool-choice \
+  --speculative-config '{"method":"mtp","num_speculative_tokens":2}'   # the Qwen3-Next lineage's MTP path — verify the method name for 3.8
+  # prefix caching over hybrid state: enable only after the tool-call/needle regression tests pass (see gotchas)
+
+# W4A16 on a 16–24 GB GPU:   vllm serve out/qwen38-27b-awq --max-model-len 32768 --max-num-seqs 16
+# SGLang:  python -m sglang.launch_server --model-path Qwen/Qwen3.8-27B --reasoning-parser qwen3 --speculative-algorithm NEXTN</div>
+<p>Concurrency math at 64 KiB per token: the hybrid's per-token cost is lower than the 4B dense model's (16 attention layers' KV plus fixed DeltaNet states), so on an 80 GB GPU with BF16 weights (54 GB) the remaining ≈ 18 GB holds ≈ 290k tokens — a few 128k-context sequences or ~70 at 4k; W4A16 on 24 GB leaves ≈ 7 GB ≈ 110k tokens. MTP speculation gives 1.5–2× decode speedup when acceptance is high (chat, code) and little on hard reasoning.</p>
+
+<h3>j) Load-test targets</h3>
+<p>Floors: BF16 54 GB ÷ 3.35 TB/s ≈ 16 ms TPOT on H100 (so TP = 2 for interactive use, ≈ 8 ms); W4A16 ≈ 14 GB ÷ 960 GB/s ≈ 15 ms on the 5080. TTFT scales with prompt length almost linearly for the DeltaNet layers (no n² term), which is this model's advantage at 100k+ prompts — load-test with a long-prompt distribution, not the default 1k.</p>
+
+<h3>k) AWS deployment</h3>
+<p>p5 (H100 80 GB) with TP = 1 for throughput or TP = 2 for latency; g6e (L40S 48 GB) with W4A16; for 262k contexts, p5 with FP8 KV. EKS pod sizing follows the concurrency math above; startup 2–4 min (54 GB load + CUDA graph capture for hybrids). Trainium: the NKI Library's experimental catalog contains Gated DeltaNet and linear-scan kernels (<a href="hardware.html#nki">hardware chapter</a>), so the building blocks exist, but end-to-end Qwen3.8 serving on Neuron (hybrid state cache, MTP, vision) is a port, not a flag — run the <a href="hardware.html#migration">migration playbook</a> with the needle and tool-call tests as parity gates. <span class="tag">verify</span></p>
+
+<h3>l) Known issues</h3>
+<ul>
+<li><a href="framework-issues.html#vllm">vLLM</a>: hybrid models + prefix caching + MTP — tool-call leakage, wrong needle results, MTP crash; Qwen3.5 tool calls lost with XML tool_call; DeltaNet hybrids are young — state that is not a plain KV block interacts badly with prefix reuse.</li>
+<li><a href="framework-issues.html#sglang">SGLang</a>: thinking + tool parser loops on token 0 (Qwen3.8-Flash-Next); HiCache consistency with PP.</li>
+<li><a href="framework-issues.html#axolotl">Axolotl</a> / <a href="framework-issues.html#trl">TRL</a>: hybrid-layer fine-tuning support is the thing to check in the issue tracker before you start.</li>
+</ul>
+</section>
+
+<h2 id="picker">4. Technique picker</h2>
+<p>The <a href="customization.html#ladder">customization ladder</a> applied to these three models: pick the goal, the data you have, the GPU budget and the model, and read the chain with its reasoning. It climbs only as high as the goal demands.</p>
+<div class="card">
+<h3>Interactive: which technique chain?</h3>
+<div class="controls">
+  <label class="ctl">Goal <select id="pkGoal"><option value="format">Format / style / tool-call shape</option><option value="knowledge">Domain knowledge</option><option value="reasoning">Reasoning on verifiable tasks</option><option value="agent">Agent tool use (multi-turn)</option><option value="cost">Same quality, lower cost</option></select></label>
+  <label class="ctl">Labeled data <select id="pkData"><option value="0">none (prompts only)</option><option value="1">hundreds</option><option value="2">thousands</option><option value="3">100k+ / raw corpus</option></select></label>
+  <label class="ctl">GPU budget <select id="pkGpu"><option value="16">one 16 GB</option><option value="48">one 24–48 GB</option><option value="80">one 80 GB</option><option value="640">8×H100</option></select></label>
+  <label class="ctl">Model <select id="pkModel"><option value="gptoss">gpt-oss-20b</option><option value="qwen4b">Qwen3-4B</option><option value="qwen27b">Qwen3.8-27B</option></select></label>
+</div>
+<div id="pkOut" class="formula" style="min-height:90px"></div>
+</div>
+
+<h2 id="builder">5. vLLM command builder</h2>
+<div class="card">
+<h3>Interactive: build the serve command</h3>
+<div class="controls">
+  <label class="ctl">Model <select id="cbModel"><option value="gptoss">gpt-oss-20b</option><option value="qwen4b" selected>Qwen3-4B</option><option value="qwen27b">Qwen3.8-27B</option></select></label>
+  <label class="ctl">Weights <select id="cbQuant"><option value="bf16">BF16 (as shipped)</option><option value="fp8">FP8 (llm-compressor)</option><option value="w4">W4A16 (AWQ/GPTQ)</option></select></label>
+  <label class="ctl">GPU <select id="cbGpu"><option value="16" selected>RTX 5080 · 16 GB</option><option value="24">L4 / A10G · 24 GB</option><option value="48">L40S · 48 GB</option><option value="80">H100 · 80 GB</option></select></label>
+  <label class="ctl">TP <select id="cbTp"><option>1</option><option>2</option><option>4</option></select></label>
+</div>
+<div class="controls">
+  <label class="ctl">Context <input type="range" id="cbCtx" min="12" max="18" value="15"> <span id="cbCtxL"></span></label>
+  <label class="ctl">max-num-seqs <input type="range" id="cbSeqs" min="1" max="256" value="32"> <span id="cbSeqsL"></span></label>
+  <label class="ctl"><input type="checkbox" id="cbLora"> multi-LoRA</label>
+  <label class="ctl"><input type="checkbox" id="cbFp8kv"> FP8 KV cache</label>
+  <label class="ctl"><input type="checkbox" id="cbSpec"> speculative (MTP where available)</label>
+</div>
+<div class="cmd" id="cbOut"></div>
+<p class="caption" id="cbNote"></p>
+</div>
+
+<h2 id="differs">6. What differs, side by side</h2>
+<table class="cmp">
+<tr><th></th><th>gpt-oss-20b</th><th>Qwen3-4B</th><th>Qwen3.8-27B</th></tr>
+<tr><td>Chat format</td><td>Harmony roles + channels; reasoning effort in the system message</td><td>Qwen template; <code>enable_thinking</code>, <code>/think</code> switches</td><td>Qwen template with thinking + images</td></tr>
+<tr><td>Attention / state</td><td>GQA, alternating banded (128) / global layers, learned sinks</td><td>GQA + QK-Norm, full attention every layer</td><td>48 Gated DeltaNet (fixed state) + 16 gated attention (KV)</td></tr>
+<tr><td>Weights as shipped</td><td>MXFP4 experts + BF16 dense (12.8 GB)</td><td>BF16 (8 GB)</td><td>BF16 (54 GB)</td></tr>
+<tr><td>Quantization path</td><td>Don't touch experts; FP8 dense parts; FP8 KV</td><td>AWQ/GPTQ W4A16 or FP8 via llm-compressor</td><td>W4A16/FP8 on projections; state stays BF16; calibrate long</td></tr>
+<tr><td>LoRA targets</td><td>Attention projections (cheap) or expert tensors via <code>target_parameters</code> (heavy)</td><td>All linear layers</td><td>All linear incl. DeltaNet projections — check module names</td></tr>
+<tr><td>Full fine-tune memory</td><td>≈ 340 GB (dequantized) → 8×H100</td><td>≈ 64 GB → one 80 GB GPU</td><td>≈ 430 GB → 8×H100</td></tr>
+<tr><td>Rollout-engine support (GRPO)</td><td>vLLM yes (Hopper/Blackwell kernels); verl Megatron backend had issues</td><td>Everywhere</td><td>vLLM/SGLang hybrid path; disable prefix caching + MTP in rollouts</td></tr>
+<tr><td>Serving parsers</td><td><code>openai_gptoss</code> + tool parser <code>openai</code></td><td><code>qwen3</code> + <code>hermes</code></td><td><code>qwen3</code> + <code>hermes</code>; MTP speculative config</td></tr>
+<tr><td>Memory per token (BF16)</td><td>48 KiB</td><td>144 KiB</td><td>64 KiB</td></tr>
+<tr><td>Best GPU class</td><td>L40S / H100 (sinks want FA3); 16 GB works at low concurrency</td><td>L4 / 5080 — scale with replicas</td><td>H100 (BF16, TP 1–2); L40S with W4A16</td></tr>
+<tr><td>Trainium status</td><td>Port: MXFP4 experts + sinks need custom path</td><td>Standard dense path; parity-gate it</td><td>Port: DeltaNet kernels exist in NKI Library; end-to-end to verify</td></tr>
+</table>
+
+<h2 id="plan">7. Hands-on plan on an RTX 5080 (16 GB)</h2>
+<ol>
+<li><strong>Week A — gpt-oss-20b</strong>: serve it (MXFP4 fits; expect the non-FA3 attention path), measure TTFT/TPOT at low/medium/high effort with <code>vllm bench serve</code>; then attention-only LoRA on 1–2k harmony-formatted examples at 2k tokens, micro-batch 1, checkpointing; serve the adapter with <code>--enable-lora</code> and diff outputs. Skip expert LoRA and full FT (not 16 GB jobs).</li>
+<li><strong>Week B — Qwen3-4B, the full ladder</strong>: QLoRA SFT → merge → DPO (QLoRA) → quantize W4A16 and FP8 (if your vLLM build supports FP8 on sm_120) → serve → load test both thinking modes → a small GRPO run on GSM8K-style verifiable rewards with k = 4 and 512 completion tokens (colocated vLLM at <code>gpu-memory-utilization 0.35</code>) — this is the one model on which you can run every technique in this notebook on your own card.</li>
+<li><strong>Week C — Qwen3.8-27B</strong>: inference only: W4A16 at 16–32k context, the needle and tool-call regression tests, MTP on/off, long-prompt load tests to see the hybrid's TTFT advantage. QLoRA at short sequences is possible but tight; everything else — LoRA, DPO, GRPO, CPT — is a rented H100 (one for LoRA/DPO, two for GRPO, eight for full fine-tunes).</li>
+</ol>
+
+<h2 id="reading">8. Where to go deeper</h2>
+<ul>
+<li><a href="https://cdn.openai.com/pdf/419b6906-9da6-406c-a19d-1bb078ac7637/oai_gpt-oss_model_card.pdf">gpt-oss model card</a> — architecture, MXFP4, harmony, reasoning effort; the <a href="https://cookbook.openai.com/topic/gpt-oss">OpenAI cookbook gpt-oss guides</a> (harmony, fine-tuning with transformers/PEFT, vLLM) and <a href="https://github.com/openai/harmony">openai/harmony</a>.</li>
+<li><a href="https://arxiv.org/pdf/2505.09388">Qwen3 technical report</a>; <a href="https://qwen.readthedocs.io/en/latest/">Qwen docs</a> (thinking modes, vLLM/SGLang deployment, fine-tuning); the gallery cards for <a href="gallery.html">Qwen3 4B, Qwen3.8 27B, GPT-OSS 20B</a> and the Qwen3.8-27B <a href="https://huggingface.co/Qwen/Qwen3.8-27B/blob/main/config.json">config.json</a>.</li>
+<li><a href="https://docs.vllm.ai/">vLLM docs</a>: gpt-oss recipe, Qwen3 reasoning parser, speculative decoding, LoRA; <a href="https://docs.sglang.ai/">SGLang docs</a>.</li>
+<li><a href="https://docs.axolotl.ai/">Axolotl</a> and <a href="https://huggingface.co/docs/trl">TRL</a> docs (gpt-oss and Qwen3 recipes); <a href="https://github.com/unslothai/unsloth">Unsloth</a> gpt-oss notebooks; <a href="https://github.com/vllm-project/llm-compressor">llm-compressor</a>.</li>
+<li>This notebook: <a href="deployment.html">Deployment</a>, <a href="customization.html">Customization &amp; Evals</a>, <a href="rl-systems.html">RL Systems</a>, <a href="framework-issues.html">Gotchas</a>, and the <a href="flashcards.html">Model Playbooks deck</a>.</li>
+</ul>
+
+<div class="footer-nav"><a href="deployment.html">← Deployment</a><a href="framework-issues.html">Gotchas →</a></div>
+</main>
+<script>
+(function(){const b=document.getElementById('themeBtn');function cur(){try{return localStorage.getItem('learn-theme')||'dark'}catch(e){return 'dark'}}
+function apply(t){document.documentElement.dataset.theme=t;try{localStorage.setItem('learn-theme',t)}catch(e){}}
+apply(cur());b.onclick=()=>apply(document.documentElement.dataset.theme==='light'?'dark':'light');})();
+function css(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim()}
+const $=id=>document.getElementById(id);
+const GB=1e9;
+// first-order model specs (hidden sizes for Qwen3.8 are estimates)
+const MODELS={
+ gptoss:{name:'gpt-oss-20b',total:20.9e9,active:3.6e9,layers:24,hidden:2880,kvTok:48*1024,moe:true,
+   shippedBytes:12.8*GB, bf16Bytes:20.9e9*2, nf4Bytes:12.8*GB /* experts already 4-bit */},
+ qwen4b:{name:'Qwen3-4B',total:4.0e9,active:4.0e9,layers:36,hidden:2560,kvTok:144*1024,moe:false,
+   shippedBytes:8.0*GB, bf16Bytes:8.0*GB, nf4Bytes:2.5*GB},
+ qwen27b:{name:'Qwen3.8-27B',total:27e9,active:27e9,layers:64,hidden:5120,kvTok:64*1024,moe:false,
+   shippedBytes:54*GB, bf16Bytes:54*GB, nf4Bytes:14.5*GB}};
+function fmtGB(b){return (b/GB).toFixed(b/GB>=100?0:1)+' GB'}
+
+// ---------- fit calculator ----------
+(function(){
+const ids=['fitModel','fitTech','fitGpu','fitSeq','fitBatch','fitCkpt','fitK'];
+function calc(){
+  const m=MODELS[$('fitModel').value],t=$('fitTech').value,gpu=parseFloat($('fitGpu').value)*GB;
+  const S=Math.pow(2,parseInt($('fitSeq').value)),B=parseInt($('fitBatch').value),ck=$('fitCkpt').checked,k=parseInt($('fitK').value);
+  $('fitSeqL').textContent=S>=1024?(S/1024)+'K':S;$('fitBatchL').textContent=B;$('fitKL').textContent=k;
+  $('fitKWrap').style.display=t==='grpo'?'inline-flex':'none';
+  const parts=[];let note='';
+  const act=(precBytes)=>{ // activations ≈ 34·D per token per layer (BF16, flash attention), checkpointing keeps 2·D per layer + one layer full
+    const full=34*m.hidden*m.layers*S*B, cp=2*m.hidden*m.layers*S*B+34*m.hidden*S*B;
+    return ck?cp:full;};
+  if(t==='full'||t==='cpt'){
+    const W=m.bf16Bytes; parts.push(['weights BF16'+(m.moe?' (experts dequantized)':''),W,'#5b8cff']);
+    parts.push(['gradients BF16',W,'#f2a65a']);parts.push(['Adam m,v FP32',m.total*8,'#e5604c']);parts.push(['FP32 master',m.total*4,'#b07cff']);
+    parts.push(['activations',act(2),'#38c6a0']);
+    if(m.moe)note='gpt-oss full fine-tune: MXFP4 experts must be dequantized to BF16 first (≈42 GB of weights). ';
+  } else if(t==='lora'||t==='dpo'){
+    parts.push(['base weights BF16'+(m.moe?' + MXFP4 experts':''),m.moe?m.shippedBytes:m.bf16Bytes,'#5b8cff']);
+    const ad=0.01*(m.moe?m.active:m.total)*2; parts.push(['LoRA adapters + grads + Adam',ad*1+ad*1+ad*6,'#f2a65a']);
+    parts.push(['activations',act(2),'#38c6a0']);
+    if(t==='dpo')parts.push(['reference logits cache (adapters off)',0.5*GB,'#b07cff']);
+    if(m.moe)note='Experts stay MXFP4 and frozen; attention-only LoRA. Expert LoRA with dequantize=True needs ≈42 GB. ';
+  } else if(t==='qlora'){
+    parts.push(['base weights 4-bit',m.nf4Bytes,'#5b8cff']);const ad=0.01*(m.moe?m.active:m.total)*2;parts.push(['adapters + grads + Adam',ad*8,'#f2a65a']);parts.push(['activations',act(2),'#38c6a0']);
+    parts.push(['dequant workspace',1*GB,'#b07cff']);
+    if(m.moe)note='gpt-oss experts are already 4-bit; QLoRA ≈ LoRA here. ';
+  } else if(t==='grpo'){
+    parts.push(['trainer: base weights'+(m.moe?' (MXFP4 experts)':' BF16'),m.moe?m.shippedBytes:m.bf16Bytes,'#5b8cff']);
+    const ad=0.01*(m.moe?m.active:m.total)*2;parts.push(['LoRA adapters + grads + Adam',ad*8,'#f2a65a']);
+    parts.push(['trainer activations (k samples)',act(2)*Math.max(1,k/4),'#38c6a0']);
+    parts.push(['rollout engine weights',m.shippedBytes,'#4cc3e5']);
+    parts.push(['rollout KV for k × seq',k*S*m.kvTok*B,'#e5a0c3']);
+    parts.push(['CUDA graphs / engine overhead',1.5*GB,'#b07cff']);
+    note='Colocated trainer + vLLM on the same GPU(s); disaggregated pools split the two halves. ';
+  }
+  const total=parts.reduce((a,p)=>a+p[1],0);
+  const max=Math.max(total,gpu);
+  $('fitBars').innerHTML=parts.map(p=>`<div class="bar"><span>${p[0]}</span><div class="track"><div class="fill" style="width:${Math.min(100,100*p[1]/max).toFixed(1)}%;background:${p[2]}"></div></div><span>${fmtGB(p[1])}</span></div>`).join('')+
+   `<div class="bar"><span><strong>total vs GPU</strong></span><div class="track"><div class="fill" style="width:${Math.min(100,100*total/max).toFixed(1)}%;background:${total<=gpu*0.85?'var(--accent2)':total<=gpu?'var(--warn)':'var(--danger)'}"></div></div><span><strong>${fmtGB(total)} / ${fmtGB(gpu)}</strong></span></div>`;
+  const v=$('fitVerdict');
+  if(total<=gpu*0.85){v.className='verdict ok';v.textContent='Fits with headroom ('+Math.round(100*total/gpu)+'% of memory).';}
+  else if(total<=gpu){v.className='verdict tight';v.textContent='Tight ('+Math.round(100*total/gpu)+'%): shorten sequences, micro-batch 1, or 8-bit optimizer.';}
+  else {v.className='verdict no';v.textContent='Does not fit: needs '+fmtGB(total)+'. '+(gpu<80*GB?'Use QLoRA/LoRA, a bigger GPU, or ZeRO-3 across GPUs.':'Shard with FSDP/ZeRO-3 or move to the 8×H100 node.');}
+  $('fitNote').textContent=note+'First-order: add 10–20% for fragmentation, CUDA graphs and framework overhead. Formulas from the Training chapter (16 bytes/param for BF16 + AdamW full fine-tunes; activations ≈ 34·D per token per layer, ≈ 2·D with checkpointing).';
+}
+ids.forEach(id=>$(id).addEventListener('input',calc));calc();
+})();
+
+// ---------- playbook tabs ----------
+(function(){
+const tabs=document.querySelectorAll('.model-tabs button');
+tabs.forEach(b=>b.onclick=()=>{tabs.forEach(x=>x.classList.remove('on'));b.classList.add('on');const v=b.dataset.pb;
+ ['gptoss','qwen4b','qwen27b'].forEach(k=>$('pb-'+k).style.display=(v==='all'||v===k)?'':'none');});
+})();
+
+// ---------- technique picker ----------
+(function(){
+const ids=['pkGoal','pkData','pkGpu','pkModel'];
+function pick(){
+  const g=$('pkGoal').value,d=parseInt($('pkData').value),gpu=parseInt($('pkGpu').value),m=$('pkModel').value;
+  const M=MODELS[m];const out=[];
+  const canFull=(m==='qwen4b'&&gpu>=80)||gpu>=640;
+  const canLora=(m==='qwen4b')||(m==='gptoss'&&gpu>=16)||(m==='qwen27b'&&gpu>=80);
+  const canQlora=(m==='qwen4b')||(m==='gptoss')||(m==='qwen27b'&&gpu>=24);
+  const sft=canFull?'full SFT':canLora?'LoRA SFT':canQlora?'QLoRA SFT':'QLoRA SFT (short sequences; tight)';
+  if(g==='format'){
+    if(d===0)out.push('1. Prompting + few-shot with the model\'s own template'+(m==='gptoss'?' (harmony, Reasoning: low)':' (thinking off)')+' — measure first; format gaps often close here.');
+    out.push((d===0?'2':'1')+'. '+sft+' on '+(d<=1?'a few hundred curated examples (plus synthetic ones via rejection sampling)':'your examples')+', assistant-only loss, 1–2 epochs.');
+    out.push('3. Serve with constrained decoding for the schema (JSON/tool calls) — it fixes the last few percent without more training.');
+  } else if(g==='knowledge'){
+    out.push('1. RAG first — knowledge gaps are usually retrieval gaps; fine-tuning does not add facts reliably.');
+    if(d>=3)out.push('2. Continued pre-training on the corpus with 10–20% replay'+(canFull?' (full, BF16)':m==='gptoss'?' — gpt-oss CPT needs dequantized experts: 8×H100; otherwise expert-LoRA with replay':' — needs an 8×H100 node for '+M.name+'; otherwise LoRA with replay')+', then '+sft+' for format.');
+    else out.push('2. '+sft+' with replay on domain Q&A (synthesize from the corpus with a strong model + verifier), evaluate for forgetting.');
+    out.push('3. Distill a larger model\'s domain answers if a teacher exists (sequence-level KD) — often beats CPT at this data size.');
+  } else if(g==='reasoning'){
+    out.push('1. Rejection-sampling fine-tune (RFT-1): sample k, keep verifier-passing, '+sft+'.');
+    out.push('2. GRPO with verifiable rewards'+(m==='qwen4b'?' (colocated vLLM on one GPU)':m==='gptoss'?' (vLLM rollouts; FSDP + LoRA trainer; Reasoning: low in rollouts)':' (2×H100 colocated or disaggregated; disable prefix caching + MTP in rollouts)')+', prompts filtered by solve rate.');
+    out.push('3. Distill from '+(m==='gptoss'?'gpt-oss-120b':m==='qwen4b'?'Qwen3-32B / Qwen3.8-27B':'a larger Qwen3.x')+' as the cheaper alternative if a teacher exists.');
+  } else if(g==='agent'){
+    out.push('1. Tool schemas + '+(m==='gptoss'?'harmony commentary channel':'hermes tool parser')+' and an eval harness with a sandbox — measure before training.');
+    out.push('2. '+sft+' on successful multi-turn trajectories (rejection-sampled), loss masked to model tokens only.');
+    out.push('3. Multi-turn GRPO/RFT with terminal + process rewards (RL Systems §5)'+(gpu<48?' — needs a rented 48–80 GB GPU for '+M.name:'')+'.');
+  } else {
+    out.push('1. Quantize for serving: '+(m==='gptoss'?'keep MXFP4 experts, FP8 KV':'W4A16 (AWQ) or FP8')+' and re-check evals — the cheapest 2–4× on decode cost.');
+    out.push('2. Distill into a smaller model '+(m==='qwen27b'?'(Qwen3-4B student)':m==='gptoss'?'(gpt-oss-20b is already the small one; distill into Qwen3-4B for the easy tiers)':'(Qwen3-0.6B/1.7B for the easy tiers)')+' and route by difficulty.');
+    out.push('3. Serving-side: prefix caching, '+(m==='qwen27b'?'MTP speculation':'speculative decoding')+', multi-LoRA instead of per-task replicas; load-test goodput, not throughput.');
+  }
+  $('pkOut').textContent=M.name+' · '+out.map((s,i)=>s.replace(/^\d+\./,(i+1)+'.')).join('\n');
+}
+ids.forEach(id=>$(id).addEventListener('input',pick));pick();
+})();
+
+// ---------- vLLM command builder ----------
+(function(){
+const ids=['cbModel','cbQuant','cbGpu','cbTp','cbCtx','cbSeqs','cbLora','cbFp8kv','cbSpec'];
+const HF={gptoss:'openai/gpt-oss-20b',qwen4b:'Qwen/Qwen3-4B',qwen27b:'Qwen/Qwen3.8-27B'};
+function build(){
+  const m=$('cbModel').value,M=MODELS[m],q=$('cbQuant').value,gpu=parseFloat($('cbGpu').value)*GB,tp=parseInt($('cbTp').value);
+  const ctx=Math.pow(2,parseInt($('cbCtx').value)),seqs=parseInt($('cbSeqs').value);
+  $('cbCtxL').textContent=ctx>=1024?(ctx/1024)+'K':ctx;$('cbSeqsL').textContent=seqs;
+  let path=HF[m],wBytes=M.shippedBytes,flags=[];
+  if(m==='gptoss'){ if(q!=='bf16')flags.push('# gpt-oss: experts stay MXFP4; FP8 applies to dense parts only (small gain)'); }
+  else if(q==='fp8'){path='out/'+m+'-fp8';wBytes=M.bf16Bytes/2;}
+  else if(q==='w4'){path='out/'+m+'-awq';wBytes=M.bf16Bytes/4+0.3*GB;flags.push('--quantization awq');}
+  const parsers=m==='gptoss'?'--reasoning-parser openai_gptoss --tool-call-parser openai --enable-auto-tool-choice':'--reasoning-parser qwen3 --tool-call-parser hermes --enable-auto-tool-choice';
+  const kvTok=M.kvTok*($('cbFp8kv').checked?0.5:1);
+  const avail=gpu*tp*0.9-wBytes-1.5*GB;const needKV=seqs*ctx*kvTok;
+  const cmd=['vllm serve '+path,'--tensor-parallel-size '+tp,'--max-model-len '+ctx,'--max-num-seqs '+seqs,'--gpu-memory-utilization 0.90',parsers,'--enable-prefix-caching --enable-chunked-prefill']
+   .concat(flags).concat($('cbFp8kv').checked?['--kv-cache-dtype fp8']:[])
+   .concat($('cbLora').checked?['--enable-lora --max-loras 4 --max-lora-rank 64 --lora-modules adapter1=./out/'+m+'-lora']:[])
+   .concat($('cbSpec').checked?[m==='qwen27b'?"--speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":2}'   # verify method name":m==='gptoss'?"--speculative-config '{\"method\":\"ngram\",\"num_speculative_tokens\":3,\"prompt_lookup_max\":4}'":"--speculative-config '{\"method\":\"ngram\",\"num_speculative_tokens\":3,\"prompt_lookup_max\":4}'   # or an EAGLE head if available"]:[]);
+  $('cbOut').textContent=cmd.join(' \\\n  ');
+  let note='Memory sanity: weights ≈ '+fmtGB(wBytes)+' + overhead 1.5 GB on '+fmtGB(gpu*tp)+' × 0.90 → '+(avail>0?fmtGB(avail)+' for KV ≈ '+Math.round(avail/kvTok/1000)+'k tokens; ':'weights do not fit — ')+'the request mix needs up to '+fmtGB(needKV)+' at max-num-seqs × max-model-len ('+(needKV<=avail?'fits; vLLM will admit all':'exceeds — vLLM will queue or preempt; lower max-num-seqs or context')+').';
+  if(m==='gptoss'&&gpu<24*GB)note+=' On a 16 GB consumer Blackwell, expect the non-FA3 attention path (sinks) and MXFP4 Triton kernels — check the startup log.';
+  if(m==='qwen27b')note+=' Hybrid: run the needle and tool-call regression tests before enabling prefix caching in production.';
+  if(m!=='gptoss'&&q==='fp8'&&gpu<=24*GB)note+=' FP8 compute needs Hopper/Ada/Blackwell; on consumer sm_120 verify kernel support.';
+  $('cbNote').textContent=note;
+}
+ids.forEach(id=>$(id).addEventListener('input',build));build();
+})();
+</script>
+</body>
+</html>
